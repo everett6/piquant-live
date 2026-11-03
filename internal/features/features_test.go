@@ -88,6 +88,9 @@ func TestImbalanceAndMicroprice(t *testing.T) {
 	if f[0] != 0 || f[1] != 0 || f[15] != 0 {
 		t.Fatalf("imbalance = %v %v %v", f[0], f[1], f[15])
 	}
+	if f[16] != 0 {
+		t.Fatalf("quantum_bias = %v, want 0 for neutral evidence", f[16])
+	}
 	// microprice with equal sizes is the mid: deviation 0; spread 0.1 on 100.05.
 	if !near(float64(f[3]), 0, 1e-6) {
 		t.Fatalf("micro_dev = %v", f[3])
@@ -109,6 +112,23 @@ func TestMicropriceDeviationSign(t *testing.T) {
 	}
 	if !near(float64(f[0]), 7.0/11.0, 1e-5) {
 		t.Fatalf("imb_l1 = %v", f[0])
+	}
+	if f[16] <= 0 {
+		t.Fatalf("quantum_bias = %v, want positive for bullish evidence", f[16])
+	}
+}
+
+func TestQuantumBiasTwoStateScore(t *testing.T) {
+	bullish := quantumBias(1, 0.5, 5, 10)
+	bearish := quantumBias(-1, -0.5, -5, -10)
+	if bullish <= 0 || bearish >= 0 {
+		t.Fatalf("quantum_bias bullish/bearish = %v/%v, want opposite signs", bullish, bearish)
+	}
+	if !near(float64(bullish), -float64(bearish), 1e-6) {
+		t.Fatalf("quantum_bias is not symmetric: bullish=%v bearish=%v", bullish, bearish)
+	}
+	if bullish > 1 || bearish < -1 {
+		t.Fatalf("quantum_bias outside [-1, 1]: %v/%v", bullish, bearish)
 	}
 }
 

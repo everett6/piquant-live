@@ -33,10 +33,11 @@ var Names = []string{
 	"trade_imb_5s", // (buy - sell) traded base units over 5 s, base units
 	"trade_cnt_1s", // number of trades in the last second
 	"queue_ratio",  // best bid qty / (best bid qty + best ask qty)
+	"quantum_bias", // bounded two-state probability-amplitude-inspired score
 }
 
 // NCore is the number of features produced by each Extract call.
-const NCore = 16
+const NCore = 17
 
 func init() {
 	if len(Names) != NCore {
@@ -400,6 +401,7 @@ func (e *Engine) Extract(book *orderbook.Book, dst []float32) int {
 	dst[13] = e.emit[13]
 	dst[14] = e.emit[14]
 	dst[15] = e.emit[15]
+	dst[16] = e.emit[16]
 	return NCore
 }
 
@@ -439,6 +441,21 @@ func (e *Engine) compute(book *orderbook.Book, t int64) {
 	out[13] = float32(e.trade5 / q)
 	out[14] = float32(e.tradeCount1)
 	out[15] = imbalance(bq, aq)
+	out[16] = quantumBias(out[15], out[3], out[5], out[11])
+}
+
+// quantumBias maps bounded bullish and bearish evidence to a two-state
+// amplitude-inspired expectation. It is a classical heuristic, not a quantum
+// computation or a calibrated trading signal.
+func quantumBias(queue, micro, ofi, ret float32) float32 {
+	evidence := 0.35*float64(queue) +
+		0.25*float64(2*micro) +
+		0.20*math.Tanh(float64(ofi)) +
+		0.20*math.Tanh(float64(ret)/10)
+	pLong := 1 / (1 + math.Exp(-2*evidence))
+	longAmplitude := math.Sqrt(pLong)
+	shortAmplitude := math.Sqrt(1 - pLong)
+	return float32(longAmplitude*longAmplitude - shortAmplitude*shortAmplitude)
 }
 
 // levelWeight is the multi-level OFI decay for an update that lands at rank
