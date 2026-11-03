@@ -18,7 +18,7 @@ type Kind uint8
 const (
 	KindUnknown Kind = iota
 	KindTrade
-	KindDepth   // incremental depth update
+	KindDepth // incremental depth update
 	KindSnapshot
 	KindHeartbeat
 )
