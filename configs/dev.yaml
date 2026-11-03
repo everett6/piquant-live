@@ -1,0 +1,66 @@
+# Development profile: x86_64 PC, synthetic feed, everything on at safe sizes.
+engine:
+  mode: dev
+  name: piquant-dev
+  gomaxprocs: 0          # runtime default on the dev host
+  gomemlimit_mib: 1024
+  gc_percent: -1         # GOGC=off; the hot path allocates nothing
+  realtime_priority: 0   # never request SCHED_FIFO on the PC
+  lock_threads: false
+  watchdog: false
+  ring_segments: 64
+  ring_slot_cap: 4096
+  max_tick_events_ps: 200000
+
+feed:
+  kind: synthetic
+  venue: synthetic
+  rate_hz: 200
+  seed: 42
+
+symbols:
+  - name: BTC
+    venue_symbol: BTCUSDT
+    tick_size: 0.1
+    lot_size: 0.00001
+    start_mid: 65000.0
+  - name: ETH
+    venue_symbol: ETHUSDT
+    tick_size: 0.01
+    lot_size: 0.0001
+    start_mid: 3200.0
+
+targets:
+  BTC: [binance:BTCUSDT, coinbase:BTC-USD]
+  ETH: [binance:ETHUSDT, coinbase:ETH-USD]
+
+pins:
+  ingest: -1
+  infer: -1
+  exec: -1
+
+storage:
+  enabled: true
+  dir: ./data
+  flush_interval: 1s
+  max_file_mb: 64
+  keep_files: 8
+
+models:
+  enabled: true
+  max_features: 64
+  max_hidden: 32
+  path: ""              # JSON weights; empty = deterministic seeded model
+  buy_threshold: 0.6
+  sell_threshold: 0.6
+
+exec:
+  enabled: true
+  position_limit: 0.05   # BTC units
+  max_order_qty: 0.005
+  taker_fee_bps: 10
+  maker_fee_bps: 7.5
+  slippage_bps: 1
+  daily_loss_limit: 500
+  stale_latency_ms: 2000
+  cooldown_ms: 250

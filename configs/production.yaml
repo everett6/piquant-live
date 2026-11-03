@@ -1,0 +1,73 @@
+# Production profile: Raspberry Pi 5 (BCM2712, 4x Cortex-A76 @ 2.4 GHz, 8 GiB).
+#
+# Requires the boot settings from scripts/setup-rpi-kernel.sh:
+#   isolcpus=2,3 nohz_full=2,3 rcu_nocbs=2,3
+# Core 0/1: OS, network I/O, logs, disk flushes.
+# Core 2: ingest + order book + features.  Core 3: model + execution.
+engine:
+  mode: paper
+  name: piquant-rpi5
+  gomaxprocs: 4
+  gomemlimit_mib: 2048
+  gc_percent: -1
+  realtime_priority: 0   # raise to 10 once the service has CAP_SYS_NICE
+  lock_threads: true
+  watchdog: true
+  watchdog_kick_ms: 500
+  ring_segments: 128
+  ring_slot_cap: 4096
+  max_tick_events_ps: 4000
+
+feed:
+  kind: live
+  venue: binance
+  durations: [100ms]
+  ws_url: ""             # empty = venue default (wss://stream.binance.com:9443)
+
+symbols:
+  - name: BTC
+    venue_symbol: BTCUSDT
+    tick_size: 0.01
+    lot_size: 0.00001
+    start_mid: 0
+  - name: ETH
+    venue_symbol: ETHUSDT
+    tick_size: 0.01
+    lot_size: 0.0001
+    start_mid: 0
+
+targets:
+  BTC: [binance:BTCUSDT]
+  ETH: [binance:ETHUSDT]
+
+pins:
+  ingest: 2
+  infer: 3
+  exec: 3
+  house: 0
+
+storage:
+  enabled: true
+  dir: /mnt/nvme/piquant/events
+  flush_interval: 1s
+  max_file_mb: 64
+  keep_files: 0          # keep everything; rotate to the NAS by hand
+
+models:
+  enabled: true
+  max_features: 64
+  max_hidden: 32
+  path: /mnt/nvme/piquant/models/model.json
+  buy_threshold: 0.6
+  sell_threshold: 0.6
+
+exec:
+  enabled: true
+  position_limit: 0.02
+  max_order_qty: 0.002
+  taker_fee_bps: 10
+  maker_fee_bps: 7.5
+  slippage_bps: 1
+  daily_loss_limit: 100
+  stale_latency_ms: 1500
+  cooldown_ms: 500
