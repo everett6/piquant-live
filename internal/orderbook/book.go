@@ -72,6 +72,7 @@ type Book struct {
 	Venue     uint16
 	Levels    [2]Levels
 	Ready     bool
+	Anchored  bool // a snapshot or depth event established the sequence base
 	LastSeq   uint64
 	Status    Status
 	Gaps      uint64 // sequence violations seen
@@ -130,6 +131,7 @@ func (b *Book) applySnapshot(s *event.SnapshotEvent) {
 	b.Ready = b.Levels[Bids].N > 0 && b.Levels[Asks].N > 0
 	b.LastSeq = s.Sequence
 	b.snapSeq = s.Sequence
+	b.Anchored = true
 	b.Snapshots++
 	if b.Ready {
 		b.Status = StatusLive
@@ -146,6 +148,7 @@ func (b *Book) applyDepth(d *event.DepthEvent) bool {
 	if b.Status == StatusSyncing && d.Sequence <= b.snapSeq {
 		return true // already covered by the snapshot
 	}
+	b.Anchored = true
 	if d.Sequence != b.LastSeq+1 {
 		b.fail(d.Sequence)
 		return false
