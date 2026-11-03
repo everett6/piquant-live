@@ -79,6 +79,7 @@ func near(a, b, eps float64) bool { return math.Abs(a-b) <= eps }
 
 func TestImbalanceAndMicroprice(t *testing.T) {
 	h := newHarness(t)
+	h.feat.compute(h.book, base)
 	f := h.extract()
 	if f == nil {
 		t.Fatal("extract returned nothing")
@@ -99,7 +100,9 @@ func TestImbalanceAndMicroprice(t *testing.T) {
 func TestMicropriceDeviationSign(t *testing.T) {
 	h := newHarness(t)
 	// Heavy bid at the top pushes the microprice toward the ask.
-	h.apply(dep(h.next(), int64(1.1e9), event.SideBuy, lv(100, 9)))
+	tm := int64(1.1e9)
+	h.apply(dep(h.next(), tm, event.SideBuy, lv(100, 9)))
+	h.apply(&event.Envelope{Sequence: h.next(), RecvTime: tm, Kind: event.KindHeartbeat})
 	f := h.extract()
 	if f[3] <= 0 || f[3] >= 0.5 {
 		t.Fatalf("micro_dev = %v, want (0, 0.5)", f[3])
@@ -115,20 +118,17 @@ func TestOFITerm(t *testing.T) {
 	h.apply(dep(h.next(), base+100e6, event.SideBuy, lv(100, 3)))
 	// Ask qty -0.5 at the same price: supply removed from the ask => +0.5.
 	h.apply(dep(h.next(), base+200e6, event.SideSell, lv(100.1, 1.5)))
-	// Ask moves to a deeper price with qty 5: a new price level, +5 supply =>
-	// -5 on the bid side of the imbalance.
+	// Ask size at the second level increases by 2, contributing -2.
 	h.apply(dep(h.next(), base+300e6, event.SideSell, lv(100.2, 5)))
 	f := h.extract()
-	// There is no depth sample before the snapshot (book updates can only be
-	// measured against a known earlier book), so the 1 s OFI is the sum of the
-	// two post-snapshot updates: +0.5 - 5.
-	if f[5] != -4.5 {
-		t.Fatalf("ofi_1s = %v, want -4.5", f[5])
+	// The second ask price already exists in the snapshot, so this is +1 +0.5 -2.
+	if f[5] != -0.5 {
+		t.Fatalf("ofi_1s = %v, want -0.5", f[5])
 	}
 	if math.IsNaN(float64(f[11])) {
 		t.Fatal("nan return")
 	}
-	if f[15] != float32(2.0/7.0) {
+	if f[15] != float32(1.0/3.0) {
 		t.Fatalf("queue ratio = %v", f[15])
 	}
 }
@@ -167,9 +167,13 @@ func TestReturnsAndVolatility(t *testing.T) {
 	signs := map[bool]int{}
 	for i := 1; i <= 12; i++ {
 		tm := base + int64(i)*500e6
-		off := 0.01 * float64(i%2)
-		h.apply(dep(h.next(), tm, event.SideBuy, lv(100+off, 2), lv(99.9, 3)))
-		h.apply(dep(h.next(), tm, event.SideSell, lv(100.1+off, 2), lv(100.2, 3)))
+		off := 0.01 * float64(i%3)
+		oldOff := 0.01 * float64((i-1)%3)
+		oldBid, oldAsk := 100+oldOff, 100.1+oldOff
+		h.apply(dep(h.next(), tm, event.SideBuy,
+			lv(100+off, 2), lv(99.9, 3), lv(oldBid, 0)))
+		h.apply(dep(h.next(), tm, event.SideSell,
+			lv(100.1+off, 2), lv(100.2, 3), lv(oldAsk, 0)))
 	}
 	f := h.extract()
 	if !(f[10] > 0) {
@@ -180,9 +184,13 @@ func TestReturnsAndVolatility(t *testing.T) {
 	}
 	for i := 13; i <= 24; i++ {
 		tm := base + int64(i)*500e6
-		off := 0.01 * float64(i%2)
-		h.apply(dep(h.next(), tm, event.SideBuy, lv(100+off, 2), lv(99.9, 3)))
-		h.apply(dep(h.next(), tm, event.SideSell, lv(100.1+off, 2), lv(100.2, 3)))
+		off := 0.01 * float64(i%3)
+		oldOff := 0.01 * float64((i-1)%3)
+		oldBid, oldAsk := 100+oldOff, 100.1+oldOff
+		h.apply(dep(h.next(), tm, event.SideBuy,
+			lv(100+off, 2), lv(99.9, 3), lv(oldBid, 0)))
+		h.apply(dep(h.next(), tm, event.SideSell,
+			lv(100.1+off, 2), lv(100.2, 3), lv(oldAsk, 0)))
 		r := h.extract()[11]
 		if r != 0 {
 			signs[r > 0]++
@@ -197,13 +205,43 @@ func TestTradeFeatures(t *testing.T) {
 	h := newHarness(t)
 	h.apply(trade(base+100e6, event.SideBuy, 1.5))
 	h.apply(trade(base+200e6, event.SideSell, 0.5))
-	h.apply(trade(base+1.9e9, event.SideSell, 10)) // older than 1 s, inside 5 s
+	h.apply(trade(base+1.9e9, event.SideSell, 10)) // only the newest trade is inside 1 s
 	f := h.extract()
 	if !near(float64(f[13]), 1.5-0.5-10, 1e-6) {
 		t.Fatalf("trade_imb_5s = %v", f[13])
 	}
-	if f[14] != 3 {
-		t.Fatalf("trade_cnt_1s = %v", f[14])
+	if f[14] != 1 {
+		t.Fatalf("trade_cnt_1s = %v, want 1", f[14])
+	}
+}
+
+func TestIncrementalWindowsAcrossRingWrap(t *testing.T) {
+	const n = ringLen + 88
+	depth := newHarness(t)
+	for i := 1; i <= n; i++ {
+		tm := base + int64(i)*10e6
+		depth.apply(dep(depth.next(), tm, event.SideBuy, lv(100, float64(i+2))))
+	}
+	f := depth.extract()
+	if f[5] != 100 || f[6] != 500 || f[7] != ringLen {
+		t.Fatalf("OFI windows after ring wrap = %v %v %v, want 100 500 %d",
+			f[5], f[6], f[7], ringLen)
+	}
+
+	trades := newHarness(t)
+	for i := 1; i <= n; i++ {
+		tm := base + int64(i)*10e6
+		trades.apply(trade(tm, event.SideBuy, 1))
+	}
+	f = trades.extract()
+	if f[13] != 500 || f[14] != 100 {
+		t.Fatalf("trade windows after ring wrap = %v %v, want 500 100", f[13], f[14])
+	}
+
+	trades.apply(&event.Envelope{Sequence: trades.next(), RecvTime: base + 40e9, Kind: event.KindHeartbeat})
+	f = trades.extract()
+	if f[13] != 0 || f[14] != 0 {
+		t.Fatalf("trade windows after expiry = %v %v, want 0 0", f[13], f[14])
 	}
 }
 
@@ -238,11 +276,80 @@ func TestReset(t *testing.T) {
 	}
 }
 
+func TestRollingVolatilityExpires(t *testing.T) {
+	h := newHarness(t)
+	for i := 1; i <= 12; i++ {
+		tm := base + int64(i)*500e6
+		off := 0.01 * float64(i%3)
+		oldOff := 0.01 * float64((i-1)%3)
+		oldBid, oldAsk := 100+oldOff, 100.1+oldOff
+		h.apply(dep(h.next(), tm, event.SideBuy,
+			lv(100+off, 2), lv(99.9, 3), lv(oldBid, 0)))
+		h.apply(dep(h.next(), tm, event.SideSell,
+			lv(100.1+off, 2), lv(100.2, 3), lv(oldAsk, 0)))
+	}
+	if f := h.extract(); f[10] <= 0 {
+		t.Fatalf("volatility = %v (n=%d mean=%g m2=%g), want > 0 before expiry",
+			f[10], h.feat.volN, h.feat.volMean, h.feat.volM2)
+	}
+	h.apply(&event.Envelope{Sequence: h.next(), RecvTime: base + 40e9, Kind: event.KindHeartbeat})
+	if f := h.extract(); f[10] != 0 {
+		t.Fatalf("volatility after expiry = %v, want 0", f[10])
+	}
+}
+
+func TestRollingVolatilityMatchesRetainedWindow(t *testing.T) {
+	h := newHarness(t)
+	for i := 1; i <= 300; i++ {
+		tm := base + int64(i)*200e6
+		level := i % 7
+		off := 0.01 * float64(level)
+		bids := []event.Level{lv(100+off, 2), lv(99.9, 3)}
+		asks := []event.Level{lv(100.1+off, 2), lv(100.2, 3)}
+		for j := 0; j <= 6; j++ {
+			if j != level {
+				bids = append(bids, lv(100+0.01*float64(j), 0))
+				asks = append(asks, lv(100.1+0.01*float64(j), 0))
+			}
+		}
+		h.apply(dep(h.next(), tm, event.SideBuy, bids...))
+		h.apply(dep(h.next(), tm, event.SideSell, asks...))
+	}
+
+	e := h.feat
+	tm := base + 300*200e6
+	values := make([]float64, 0, ringLen)
+	oldest := e.chSeq - uint64(e.nCh)
+	for seq := oldest; seq < e.chSeq; seq++ {
+		i := seq & (ringLen - 1)
+		if e.chHasRet[i] && tm-e.chT[i] < win30s {
+			values = append(values, e.chRet[i])
+		}
+	}
+	if uint64(len(values)) != e.volN || len(values) < 2 {
+		t.Fatalf("retained volatility samples = %d, want %d and at least 2", len(values), e.volN)
+	}
+	var mean float64
+	for _, v := range values {
+		mean += v
+	}
+	mean /= float64(len(values))
+	var m2 float64
+	for _, v := range values {
+		d := v - mean
+		m2 += d * d
+	}
+	want := math.Sqrt(m2 / float64(len(values)-1))
+	if !near(e.volatility(), want, 1e-9) {
+		t.Fatalf("rolling volatility = %g, want %g", e.volatility(), want)
+	}
+}
+
 func BenchmarkExtract(b *testing.B) {
 	h := &harness{book: &orderbook.Book{}, feat: New(1), seq: 1}
 	h.apply(snap(1, 1e9, []event.Level{lv(100, 2), lv(99.9, 3), lv(99.8, 1)}, []event.Level{lv(100.1, 2), lv(100.2, 3)}))
 	dst := make([]float32, NCore)
-	var seq uint64 = 10
+	var seq uint64 = 1
 	var t int64 = 1e9
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -259,7 +366,7 @@ func BenchmarkAdvanceAndExtract(b *testing.B) {
 	h.apply(snap(1, 1e9, []event.Level{lv(100, 2), lv(99.9, 3)}, []event.Level{lv(100.1, 2), lv(100.2, 3)}))
 	e := dep(10, 1e9, event.SideBuy, lv(100, 1))
 	dst := make([]float32, NCore)
-	var seq uint64 = 10
+	var seq uint64 = 1
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

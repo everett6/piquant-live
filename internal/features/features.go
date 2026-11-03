@@ -54,8 +54,8 @@ const (
 // ofiBeta is the multi-level OFI decay across book levels.
 const ofiBeta = 0.3
 
-// ringLen is the power-of-two capacity of every rolling buffer (512 samples
-// is 5+ minutes at typical 50 Hz updates, far more than any window).
+// ringLen bounds per-symbol event history; retained duration depends on feed
+// rate, while each feature window still expires by event time.
 const ringLen = 512
 
 // Engine holds per-symbol streaming state. One goroutine owns one Engine.
@@ -63,19 +63,36 @@ type Engine struct {
 	sym uint16
 
 	// Price-change samples: the time and mid after the update, plus the
-	// OFI terms attributed to that update.
-	chT   [ringLen]int64
-	chMid [ringLen]int64
-	chV   [ringLen]float64
-	chW   [ringLen]float64
-	hCh   int
-	nCh   int
+	// OFI terms and one-second return attributed to that update.
+	chT      [ringLen]int64
+	chMid    [ringLen]int64
+	chV      [ringLen]float64
+	chW      [ringLen]float64
+	chRet    [ringLen]float64
+	chHasRet [ringLen]bool
+	hCh      int
+	nCh      int
+	chSeq    uint64
+
+	chFirst1, chFirst5, chFirst30 uint64
+	ofi1, ofi5, ofi30             float64
+	ml1, ml5                      float64
+	volN                          uint64
+	volMean, volM2                float64
+
+	mid1Seq, mid5Seq     uint64
+	mid1Valid, mid5Valid bool
 
 	// Trade samples.
-	trT [ringLen]int64
-	trV [ringLen]float64
-	hTr int
-	nTr int
+	trT   [ringLen]int64
+	trV   [ringLen]float64
+	hTr   int
+	nTr   int
+	trSeq uint64
+
+	trFirst1, trFirst5 uint64
+	trade5             float64
+	tradeCount1        uint64
 
 	lastRecv int64
 	ready    bool
@@ -99,18 +116,17 @@ func (e *Engine) Reset() {
 // Ready reports whether the last Advance saw a live book.
 func (e *Engine) Ready() bool { return e.ready }
 
-// Advance consumes one envelope and refreshes the cached state. Call it
-// BEFORE applying the envelope to the book: OFI is the per-level size delta
-// of exactly the levels the update touches, measured against the book as it
-// stood before the update.
+// Advance updates rolling state from one envelope. Call it BEFORE applying the
+// envelope to the book: OFI is measured against the pre-update book.
 func (e *Engine) Advance(book *orderbook.Book, env *event.Envelope) bool {
 	e.ready = book.Ready
 	e.lastRecv = env.RecvTime
+	e.expire(env.RecvTime)
 	switch env.Kind {
 	case event.KindSnapshot:
 		// The snapshot replaces the book and is the OFI baseline: the first
 		// depth update is measured against it like any other transition.
-		e.hCh, e.nCh, e.hTr, e.nTr = 0, 0, 0, 0
+		e.resetWindows()
 		e.baseline(book, env.RecvTime)
 	case event.KindDepth:
 		if book.Ready && book.Anchored {
@@ -121,31 +137,30 @@ func (e *Engine) Advance(book *orderbook.Book, env *event.Envelope) bool {
 		if env.Trade.Side == event.SideSell {
 			q = -q
 		}
-		ringPush(&e.trT, &e.hTr, &e.nTr, env.RecvTime)
-		e.trV[(e.hTr+ringLen-1)&(ringLen-1)] = float64(q)
+		e.pushTrade(env.RecvTime, float64(q))
 	}
 	e.compute(book, env.RecvTime)
 	return e.ready
 }
 
+func (e *Engine) resetWindows() {
+	e.hCh, e.nCh, e.chSeq = 0, 0, 0
+	e.chFirst1, e.chFirst5, e.chFirst30 = 0, 0, 0
+	e.ofi1, e.ofi5, e.ofi30, e.ml1, e.ml5 = 0, 0, 0, 0, 0
+	e.volN, e.volMean, e.volM2 = 0, 0, 0
+	e.mid1Seq, e.mid5Seq = 0, 0
+	e.mid1Valid, e.mid5Valid = false, false
+	e.hTr, e.nTr, e.trSeq = 0, 0, 0
+	e.trFirst1, e.trFirst5 = 0, 0
+	e.trade5, e.tradeCount1 = 0, 0
+}
+
 // baseline records the book state right after a snapshot as a sample, so the
 // first post-snapshot update has something to be measured against.
 func (e *Engine) baseline(book *orderbook.Book, t int64) {
-	ringPush(&e.chT, &e.hCh, &e.nCh, t)
-	i := (e.hCh + ringLen - 1) & (ringLen - 1)
 	bp, _ := book.Levels[orderbook.Bids].Best()
 	ap, _ := book.Levels[orderbook.Asks].Best()
-	e.chMid[i] = (bp + ap) / 2
-	e.chV[i] = 0
-	e.chW[i] = 0
-}
-
-func ringPush[T any](buf *[ringLen]T, h *int, n *int, v T) {
-	buf[*h] = v
-	*h = (*h + 1) & (ringLen - 1)
-	if *n < ringLen {
-		*n++
-	}
+	e.pushChange(t, (bp+ap)/2, 0, 0, 0, false)
 }
 
 // update records the flow and the mid caused by one depth update, measured
@@ -190,11 +205,147 @@ func (e *Engine) update(book *orderbook.Book, d *event.DepthEvent, t int64) {
 		world += delta
 		ml += delta * levelWeight(rk)
 	}
-	ringPush(&e.chT, &e.hCh, &e.nCh, t)
-	i := (e.hCh + ringLen - 1) & (ringLen - 1)
-	e.chMid[i] = (bp + ap) / 2
+	mid := (bp + ap) / 2
+	old, ok := e.midAtCursor(t-win1s, &e.mid1Seq, &e.mid1Valid)
+	var ret float64
+	if ok && old > 0 {
+		ret = float64(mid-old) / float64(old) * 1e4
+	}
+	e.pushChange(t, mid, world, ml, ret, ok && old > 0)
+}
+
+func (e *Engine) pushChange(t, mid int64, world, ml, ret float64, hasRet bool) {
+	if e.nCh == ringLen {
+		e.evictChange(e.chSeq - ringLen)
+	} else {
+		e.nCh++
+	}
+	i := e.hCh
+	e.chT[i] = t
+	e.chMid[i] = mid
 	e.chV[i] = world
 	e.chW[i] = ml
+	e.chRet[i] = ret
+	e.chHasRet[i] = hasRet
+	e.hCh = (i + 1) & (ringLen - 1)
+	e.chSeq++
+	e.ofi1 += world
+	e.ofi5 += world
+	e.ofi30 += world
+	e.ml1 += ml
+	e.ml5 += ml
+	if hasRet {
+		e.addVolatility(ret)
+	}
+}
+
+func (e *Engine) pushTrade(t int64, qty float64) {
+	if e.nTr == ringLen {
+		e.evictTrade(e.trSeq - ringLen)
+	} else {
+		e.nTr++
+	}
+	i := e.hTr
+	e.trT[i] = t
+	e.trV[i] = qty
+	e.hTr = (i + 1) & (ringLen - 1)
+	e.trSeq++
+	e.trade5 += qty
+	e.tradeCount1++
+}
+
+func (e *Engine) expire(t int64) {
+	for e.chFirst1 < e.chSeq && t-e.chT[e.chFirst1&(ringLen-1)] >= win1s {
+		e.ofi1 -= e.chV[e.chFirst1&(ringLen-1)]
+		e.ml1 -= e.chW[e.chFirst1&(ringLen-1)]
+		e.chFirst1++
+	}
+	for e.chFirst5 < e.chSeq && t-e.chT[e.chFirst5&(ringLen-1)] >= win5s {
+		e.ofi5 -= e.chV[e.chFirst5&(ringLen-1)]
+		e.ml5 -= e.chW[e.chFirst5&(ringLen-1)]
+		e.chFirst5++
+	}
+	for e.chFirst30 < e.chSeq && t-e.chT[e.chFirst30&(ringLen-1)] >= win30s {
+		i := e.chFirst30 & (ringLen - 1)
+		if e.chHasRet[i] {
+			e.removeVolatility(e.chRet[i])
+			e.chHasRet[i] = false
+		}
+		e.ofi30 -= e.chV[i]
+		e.chFirst30++
+	}
+	for e.trFirst1 < e.trSeq && t-e.trT[e.trFirst1&(ringLen-1)] >= win1s {
+		e.tradeCount1--
+		e.trFirst1++
+	}
+	for e.trFirst5 < e.trSeq && t-e.trT[e.trFirst5&(ringLen-1)] >= win5s {
+		e.trade5 -= e.trV[e.trFirst5&(ringLen-1)]
+		e.trFirst5++
+	}
+}
+
+func (e *Engine) evictChange(seq uint64) {
+	i := seq & (ringLen - 1)
+	if seq >= e.chFirst1 {
+		e.ofi1 -= e.chV[i]
+		e.ml1 -= e.chW[i]
+		e.chFirst1 = seq + 1
+	}
+	if seq >= e.chFirst5 {
+		e.ofi5 -= e.chV[i]
+		e.ml5 -= e.chW[i]
+		e.chFirst5 = seq + 1
+	}
+	if seq >= e.chFirst30 {
+		e.ofi30 -= e.chV[i]
+		e.chFirst30 = seq + 1
+	}
+	if e.chHasRet[i] {
+		e.removeVolatility(e.chRet[i])
+		e.chHasRet[i] = false
+	}
+	if e.mid1Valid && e.mid1Seq > 0 && e.mid1Seq-1 <= seq {
+		e.mid1Valid = false
+		e.mid1Seq = seq + 1
+	}
+	if e.mid5Valid && e.mid5Seq > 0 && e.mid5Seq-1 <= seq {
+		e.mid5Valid = false
+		e.mid5Seq = seq + 1
+	}
+}
+
+func (e *Engine) evictTrade(seq uint64) {
+	i := seq & (ringLen - 1)
+	if seq >= e.trFirst1 {
+		e.tradeCount1--
+		e.trFirst1 = seq + 1
+	}
+	if seq >= e.trFirst5 {
+		e.trade5 -= e.trV[i]
+		e.trFirst5 = seq + 1
+	}
+}
+
+func (e *Engine) addVolatility(v float64) {
+	e.volN++
+	d := v - e.volMean
+	e.volMean += d / float64(e.volN)
+	e.volM2 += d * (v - e.volMean)
+}
+
+func (e *Engine) removeVolatility(v float64) {
+	if e.volN <= 1 {
+		e.volN, e.volMean, e.volM2 = 0, 0, 0
+		return
+	}
+	n := float64(e.volN)
+	mean := (n*e.volMean - v) / (n - 1)
+	e.volM2 -= (v - e.volMean) * (v - mean)
+	e.volN--
+	e.volMean = mean
+	if e.volM2 < 0 {
+		e.volM2 = 0
+	}
 }
 
 // rankAt returns the 0-based rank the level at price occupies (or would
@@ -274,50 +425,19 @@ func (e *Engine) compute(book *orderbook.Book, t int64) {
 		out[3], out[4] = 0, 0
 	}
 
-	var ofi1, ofi5, ofi30, ml1, ml5 float64
-	for i := 0; i < e.nCh; i++ {
-		idx := (e.hCh - 1 - i + ringLen) & (ringLen - 1)
-		age := t - e.chT[idx]
-		if age >= win30s {
-			continue
-		}
-		ofi30 += e.chV[idx]
-		if age >= win5s {
-			continue
-		}
-		ofi5 += e.chV[idx]
-		ml5 += e.chW[idx]
-		if age >= win1s {
-			continue
-		}
-		ofi1 += e.chV[idx]
-		ml1 += e.chW[idx]
-	}
 	q := float64(event.QtyScale)
-	out[5] = float32(ofi1 / q)
-	out[6] = float32(ofi5 / q)
-	out[7] = float32(ofi30 / q)
-	out[8] = float32(ml1 / q)
-	out[9] = float32(ml5 / q)
+	out[5] = float32(e.ofi1 / q)
+	out[6] = float32(e.ofi5 / q)
+	out[7] = float32(e.ofi30 / q)
+	out[8] = float32(e.ml1 / q)
+	out[9] = float32(e.ml5 / q)
 
-	out[10] = float32(e.volatility(t))
+	out[10] = float32(e.volatility())
 	out[11] = float32(e.retBps(t, win1s, mid))
 	out[12] = float32(e.retBps(t, win5s, mid))
 
-	vol, cnt := 0.0, 0.0
-	for i := 0; i < e.nTr; i++ {
-		idx := (e.hTr - 1 - i + ringLen) & (ringLen - 1)
-		age := t - e.trT[idx]
-		if age >= win5s {
-			break
-		}
-		vol += e.trV[idx]
-		if age < win1s {
-			cnt++
-		}
-	}
-	out[13] = float32(vol / q)
-	out[14] = float32(cnt)
+	out[13] = float32(e.trade5 / q)
+	out[14] = float32(e.tradeCount1)
 	out[15] = imbalance(bq, aq)
 }
 
@@ -355,44 +475,39 @@ func microPrice(bp, bq, ap, aq int64) float64 {
 }
 
 func (e *Engine) retBps(t, horizon int64, mid int64) float64 {
-	old, ok := e.midAt(t - horizon)
+	seq, valid := &e.mid1Seq, &e.mid1Valid
+	if horizon == win5s {
+		seq, valid = &e.mid5Seq, &e.mid5Valid
+	}
+	old, ok := e.midAtCursor(t-horizon, seq, valid)
 	if !ok || old <= 0 {
 		return 0
 	}
 	return float64(mid-old) / float64(old) * 1e4
 }
 
-func (e *Engine) midAt(t int64) (int64, bool) {
-	for i := 0; i < e.nCh; i++ {
-		idx := (e.hCh - 1 - i + ringLen) & (ringLen - 1)
-		if e.chT[idx] <= t {
-			return e.chMid[idx], true
-		}
+func (e *Engine) midAtCursor(t int64, seq *uint64, valid *bool) (int64, bool) {
+	oldest := e.chSeq - uint64(e.nCh)
+	if *seq < oldest {
+		*seq = oldest
+		*valid = false
+	} else if *valid && *seq > 0 && e.chT[(*seq-1)&(ringLen-1)] > t {
+		*valid = false
+		*seq = oldest
 	}
-	return 0, false
+	for *seq < e.chSeq && e.chT[*seq&(ringLen-1)] <= t {
+		(*seq)++
+		*valid = true
+	}
+	if !*valid {
+		return 0, false
+	}
+	return e.chMid[(*seq-1)&(ringLen-1)], true
 }
 
-func (e *Engine) volatility(t int64) float64 {
-	var n float64
-	var mean, m2 float64
-	for i := 0; i < e.nCh; i++ {
-		idx := (e.hCh - 1 - i + ringLen) & (ringLen - 1)
-		now := e.chT[idx]
-		if t-now >= win30s {
-			break
-		}
-		old, ok := e.midAt(now - win1s)
-		if !ok || old <= 0 {
-			continue
-		}
-		r := float64(e.chMid[idx]-old) / float64(old) * 1e4
-		n++
-		d := r - mean
-		mean += d / n
-		m2 += d * (r - mean)
-	}
-	if n < 2 {
+func (e *Engine) volatility() float64 {
+	if e.volN < 2 {
 		return 0
 	}
-	return math.Sqrt(m2 / (n - 1))
+	return math.Sqrt(e.volM2 / float64(e.volN-1))
 }
