@@ -5,10 +5,19 @@
 // pinned inference core. They never allocate after construction, never block
 // and never take a lock, so they are safe to use from a goroutine that holds
 // its OS thread.
+//
+// Two primitives live here:
+//
+//   - SPSC, a classic fixed-capacity, power-of-two ring for single-element and
+//     bulk hand-offs between exactly one producer and one consumer.
+//   - Ring (broadcast.go), a segmented multi-consumer log: one producer
+//     publishes a stream once and independent consumers follow it with their
+//     own cursors. The order book, the feature engine and the persistence
+//     writer each read the same ingest stream without copying it.
 package ringbuffer
 
 import (
-	"fmt"
+	"errors"
 	"math/bits"
 	"runtime"
 	"sync/atomic"
@@ -18,6 +27,10 @@ import (
 // the Cortex-A76 used in production (Apple-style 128-byte pairing is not used
 // by either, so 64 is the right isolation granularity).
 const CacheLineSize = 64
+
+// ErrTooManyCursors is returned by Ring.NewCursor when more live cursors are
+// open than the ring supports.
+var ErrTooManyCursors = errors.New("ringbuffer: too many live cursors")
 
 // cursor is a single monotonic counter padded to a full cache line so that the
 // producer cursor and the consumer cursor never share a line.
@@ -53,8 +66,8 @@ type SPSC[T any] struct {
 	dropped count
 }
 
-// New allocates a queue holding exactly size elements. size must be a power of
-// two; it is rounded up otherwise. New allocates once, up front.
+// New allocates a queue holding a power-of-two number of elements, at least
+// size. size <= 0 selects the default of 1024. New allocates once, up front.
 func New[T any](size int) *SPSC[T] {
 	if size <= 0 {
 		size = 1024
@@ -134,8 +147,8 @@ func (r *SPSC[T]) TryPop(dst *T) bool {
 	return true
 }
 
-// TryPushN appends as many elements of vs as fit and returns how many were
-// taken. Elements are copied with copy(), so the slice never escapes.
+// TryPushN appends as many leading elements of vs as fit and returns how many
+// were taken. Elements are copied with copy(), so the slice never escapes.
 func (r *SPSC[T]) TryPushN(vs []T) int {
 	if len(vs) == 0 {
 		return 0
@@ -168,8 +181,11 @@ func (r *SPSC[T]) TryPushN(vs []T) int {
 	return int(n)
 }
 
-// TryPopN fills dst with up to len(dst) elements and returns how many were
-// taken.
+// TryPopN fills dst and returns how many elements were taken: min(queued,
+// len(dst)). The consumer drains the whole ring before publishing its cursor,
+// so when the queued run crosses the ring boundary in the middle of dst, the
+// remainder of dst is zero-filled. The taken elements are still delivered in
+// order, but the remainder is a leftover, not valid data.
 func (r *SPSC[T]) TryPopN(dst []T) int {
 	if len(dst) == 0 {
 		return 0
@@ -233,9 +249,10 @@ func (r *SPSC[T]) Stats() Stats {
 
 // Reset empties the queue and zeroes its counters. It must only be called when
 // neither producer nor consumer is running.
+// Reset on a zero-value queue is a no-op: it is already empty.
 func (r *SPSC[T]) Reset() {
 	if r.buf == nil {
-		panic(fmt.Sprintf("ringbuffer: Reset on uninitialised SPSC (cap %d)", r.Cap()))
+		return
 	}
 	var zero T
 	for i := range r.buf {
