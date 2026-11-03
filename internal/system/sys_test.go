@@ -3,6 +3,7 @@ package system
 import (
 	"errors"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -101,7 +102,116 @@ func TestWatchdogUnsupported(t *testing.T) {
 	if err := (Watchdog{}).Stop(true); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("Stop err = %v, want ErrUnsupported", err)
 	}
-	(Watchdog{}).Run(time.Millisecond) // must not panic or block
+	(Watchdog{}).Beat()                   // must not panic with no device
+	(Watchdog{}).Run(time.Millisecond, 0) // must not panic or block
+	if _, ok := (Watchdog{}).Status(); ok {
+		t.Fatal("Status reported an open watchdog with no device")
+	}
+}
+
+// fakeWatchdog installs a device backed by memory so the liveness gate can be
+// tested without /dev/watchdog. It restores whatever was there before.
+func fakeWatchdog(t *testing.T, maxStale time.Duration) *countWriter {
+	t.Helper()
+	wdMu.Lock()
+	previous := wd
+	w := &watchdogState{f: &countWriter{}, maxStale: maxStale}
+	w.lastBeat.Store(time.Now().UnixNano())
+	wd = w
+	wdMu.Unlock()
+	t.Cleanup(func() {
+		wdMu.Lock()
+		wd = previous
+		wdMu.Unlock()
+	})
+	return w.f.(*countWriter)
+}
+
+type countWriter struct {
+	n   atomic.Int64
+	err error
+}
+
+func (c *countWriter) Write(p []byte) (int, error) {
+	c.n.Add(int64(len(p)))
+	return len(p), c.err
+}
+
+func (c *countWriter) Close() error { return nil }
+
+func TestWatchdogFeedsWhileLoopBeats(t *testing.T) {
+	dev := fakeWatchdog(t, 50*time.Millisecond)
+	for i := 0; i < 5; i++ {
+		(Watchdog{}).Beat()
+		if err := (Watchdog{}).Kick(); err != nil {
+			t.Fatalf("Kick: %v", err)
+		}
+	}
+	if got := dev.n.Load(); got != 5 {
+		t.Fatalf("device writes = %d, want 5", got)
+	}
+	st, ok := (Watchdog{}).Status()
+	if !ok || st.Stale || st.Misses != 0 || st.FeedsAfter != 5 {
+		t.Fatalf("status = %+v ok=%v", st, ok)
+	}
+}
+
+// The point of the gate: a running feeder must not keep a wedged loop alive.
+func TestWatchdogStopsFeedingWhenLoopWedges(t *testing.T) {
+	dev := fakeWatchdog(t, 20*time.Millisecond)
+	(Watchdog{}).Beat()
+	if err := (Watchdog{}).Kick(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond) // loop is now stale: no beat since
+	before := dev.n.Load()
+	for i := 0; i < 3; i++ {
+		if err := (Watchdog{}).Kick(); err != nil {
+			t.Fatalf("Kick: %v", err)
+		}
+	}
+	if after := dev.n.Load(); after != before {
+		t.Fatalf("fed a stale loop: %d -> %d writes", before, after)
+	}
+	st, _ := (Watchdog{}).Status()
+	if !st.Stale || st.Misses == 0 {
+		t.Fatalf("status = %+v, want stale with a miss", st)
+	}
+	// A fresh beat revives feeding.
+	(Watchdog{}).Beat()
+	if err := (Watchdog{}).Kick(); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := (Watchdog{}).Status(); st.Stale {
+		t.Fatalf("status still stale after a beat: %+v", st)
+	}
+}
+
+func TestWatchdogRunStopsFeedingStaleLoop(t *testing.T) {
+	dev := fakeWatchdog(t, 10*time.Millisecond)
+	(Watchdog{}).Run(5*time.Millisecond, 15*time.Millisecond)
+	deadline := time.Now().Add(time.Second)
+	for {
+		(Watchdog{}).Beat()
+		if dev.n.Load() > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("feeder never wrote with a live loop")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Stop beating and let the deadline pass; feeding must cease.
+	time.Sleep(40 * time.Millisecond)
+	settled := dev.n.Load()
+	time.Sleep(60 * time.Millisecond)
+	if got := dev.n.Load(); got != settled {
+		t.Fatalf("feeder kept writing after the loop went stale: %d -> %d", settled, got)
+	}
+	if st, _ := (Watchdog{}).Status(); !st.Stale {
+		t.Fatalf("status = %+v, want stale", st)
+	}
+	(Watchdog{}).Stop(true)
 }
 
 func TestRuntimeInfo(t *testing.T) {

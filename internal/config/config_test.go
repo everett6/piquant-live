@@ -38,8 +38,14 @@ func TestProductionPlacement(t *testing.T) {
 	if c.Engine.Mode != "paper" || c.Feed.Kind != "live" {
 		t.Fatalf("production must be paper/live, got %s/%s", c.Engine.Mode, c.Feed.Kind)
 	}
-	if !strings.HasPrefix(c.Storage.Dir, "/mnt/") {
-		t.Fatalf("storage dir %q is not on the NVMe mount", c.Storage.Dir)
+	if c.Storage.KeepFiles <= 0 {
+		t.Fatalf("production storage retention is unbounded (keep_files=%d)", c.Storage.KeepFiles)
+	}
+	if strings.HasPrefix(c.Storage.Dir, "/mnt/nvme") {
+		t.Fatalf("storage dir %q assumes an NVMe mount; the default profile must run on microSD", c.Storage.Dir)
+	}
+	if c.Engine.GCPercent == -1 {
+		t.Fatal("production must not disable the garbage collector without measured evidence")
 	}
 }
 

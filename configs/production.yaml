@@ -1,6 +1,10 @@
 # Production profile: Raspberry Pi 5 (BCM2712, 4x Cortex-A76 @ 2.4 GHz, 8 GiB).
 #
-# Requires the boot settings from scripts/setup-rpi-kernel.sh:
+# Storage defaults assume a microSD card: relative directories, bounded file
+# retention, no NVMe mount required. Set storage.dir to a USB/PCIe SSD path if
+# one is fitted.
+#
+# CPU isolation (optional, see docs/PLAN.md): boot with
 #   isolcpus=2,3 nohz_full=2,3 rcu_nocbs=2,3
 # Core 0/1: OS, network I/O, logs, disk flushes.
 # Core 2: ingest + order book + features.  Core 3: model + execution.
@@ -9,7 +13,7 @@ engine:
   name: piquant-rpi5
   gomaxprocs: 4
   gomemlimit_mib: 2048
-  gc_percent: -1
+  gc_percent: 100        # Go default; GOMEMLIMIT bounds the heap, GC stays on
   realtime_priority: 0   # raise to 10 once the service has CAP_SYS_NICE
   lock_threads: true
   watchdog: true
@@ -48,16 +52,16 @@ pins:
 
 storage:
   enabled: true
-  dir: /mnt/nvme/piquant/events
+  dir: ./data/events      # microSD works; point this at a USB SSD if you have one
   flush_interval: 1s
   max_file_mb: 64
-  keep_files: 0          # keep everything; rotate to the NAS by hand
+  keep_files: 64         # bounded retention: 64 x 64 MiB ≈ 4 GiB of captures
 
 models:
   enabled: true
   max_features: 64
   max_hidden: 32
-  path: /mnt/nvme/piquant/models/model.json
+  path: ./data/models/model.json
   buy_threshold: 0.6
   sell_threshold: 0.6
 

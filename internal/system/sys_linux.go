@@ -10,8 +10,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -135,8 +133,9 @@ func CurrentCPU() (int, error) {
 		return -1, ErrUnsupported
 	}
 	var cpu uint32
-	// getcpu(2) has the same syscall number (309) on amd64, arm64 and arm.
-	const sysGetCPU = 309
+	// The syscall number is per-arch: 309 on amd64, 168 on arm64 (see
+	// sys_getcpu_amd64.go / sys_getcpu_arm64.go). Using 309 on arm64 would
+	// call sched_setattr(2), which corrupts the calling thread's attributes.
 	_, _, errno := syscall.RawSyscall(sysGetCPU,
 		uintptr(unsafe.Pointer(&cpu)), 0, 0)
 	if errno != 0 {
@@ -218,108 +217,6 @@ var processStart = time.Now()
 
 // WallClock returns the wall clock in Unix nanoseconds.
 func WallClock() int64 { return time.Now().UnixNano() }
-
-// --- hardware watchdog -------------------------------------------------------
-
-var (
-	wdMu sync.Mutex
-	wd   *watchdogState
-)
-
-type watchdogState struct {
-	f        *os.File
-	stop     atomic.Bool
-	loopOn   atomic.Bool
-	timeouts int64
-}
-
-// Watchdog drives /dev/watchdog when present and is a no-op otherwise.
-//
-// Usage on the Pi: Open, then Kick every few hundred milliseconds from the
-// housekeeping loop, or let the built-in feeder run, and close with Stop(false)
-// for a graceful shutdown. Stop(true) writes the magic 'V' byte so the kernel
-// disarms the timer (no reboot). If the process dies without either, the
-// hardware resets the board within the driver's timeout.
-type Watchdog struct{}
-
-// Open opens /dev/watchdog if it exists. It returns ErrUnsupported on a
-// development PC; callers log it as a degraded mode.
-func (Watchdog) Open() error {
-	if !Available(FeatureWatchdog) {
-		return ErrUnsupported
-	}
-	f, err := openWatchdog()
-	if err != nil {
-		return err
-	}
-	wdMu.Lock()
-	wd = &watchdogState{f: f}
-	wdMu.Unlock()
-	return nil
-}
-
-// Kick feeds the watchdog once.
-func (Watchdog) Kick() error {
-	wdMu.Lock()
-	defer wdMu.Unlock()
-	if wd == nil || wd.stop.Load() {
-		return ErrUnsupported
-	}
-	_, err := wd.f.Write([]byte{0})
-	return err
-}
-
-// Run feeds the watchdog every interval until Stop is called.
-func (Watchdog) Run(interval time.Duration) {
-	wdMu.Lock()
-	w := wd
-	wdMu.Unlock()
-	if w == nil {
-		return
-	}
-	if interval <= 0 {
-		interval = 500 * time.Millisecond
-	}
-	if !w.loopOn.CompareAndSwap(false, true) {
-		return
-	}
-	go func() {
-		t := time.NewTicker(interval)
-		defer t.Stop()
-		for range t.C {
-			if w.stop.Load() {
-				return
-			}
-			wdMu.Lock()
-			_, _ = w.f.Write([]byte{0})
-			wdMu.Unlock()
-		}
-	}()
-}
-
-// Stop disarms the watchdog. With disarm=true it writes 'V' so a later exit or
-// crash does not reset the board; with disarm=false it only stops feeding, and
-// the hardware resets the board after the timeout (used to prove the watchdog
-// works during commissioning).
-func (Watchdog) Stop(disarm bool) error {
-	wdMu.Lock()
-	w := wd
-	wd = nil
-	wdMu.Unlock()
-	if w == nil {
-		return ErrUnsupported
-	}
-	w.stop.Store(true)
-	if disarm {
-		_, err := w.f.Write([]byte{'V'})
-		cerr := w.f.Close()
-		if err != nil {
-			return err
-		}
-		return cerr
-	}
-	return w.f.Close()
-}
 
 // ParseCPUSet parses a Linux Cpus_allowed_list such as "2-3" or "0,2,4-6".
 func ParseCPUSet(s string) (CPUSet, error) {

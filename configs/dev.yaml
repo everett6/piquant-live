@@ -4,7 +4,7 @@ engine:
   name: piquant-dev
   gomaxprocs: 0          # runtime default on the dev host
   gomemlimit_mib: 1024
-  gc_percent: -1         # GOGC=off; the hot path allocates nothing
+  gc_percent: 100        # Go default; keep GC on until a benchmark justifies otherwise
   realtime_priority: 0   # never request SCHED_FIFO on the PC
   lock_threads: false
   watchdog: false
