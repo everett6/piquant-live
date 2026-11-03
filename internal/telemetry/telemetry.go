@@ -79,9 +79,9 @@ type Host struct {
 	Load1        float64  `json:"load1"`
 	Load5        float64  `json:"load5"`
 	Load15       float64  `json:"load15"`
-	CPUBusy      float64  `json:"cpu_busy"` // 0..1, NaN before the second sample
+	CPUBusy      Float    `json:"cpu_busy"` // 0..1, null before the second sample
 	UptimeSec    float64  `json:"uptime_seconds"`
-	TempC        float64  `json:"temp_c"`
+	TempC        Float    `json:"temp_c"`
 	TempOK       bool     `json:"temp_ok"`
 	Throttle     Throttle `json:"throttle"`
 	Disks        []Disk   `json:"disks,omitempty"`
@@ -138,8 +138,15 @@ func (c *Collector) now() time.Time {
 	return time.Now()
 }
 
+// path builds an absolute filesystem path. An empty Root means the real root:
+// a relative join would read "proc/meminfo" from the working directory, which
+// silently reports an empty host on the machine that has the data.
 func (c *Collector) path(parts ...string) string {
-	return filepath.Join(append([]string{c.Root}, parts...)...)
+	root := c.Root
+	if root == "" {
+		root = string(filepath.Separator)
+	}
+	return filepath.Join(append([]string{root}, parts...)...)
 }
 
 // Busy returns the fraction of CPU time spent non-idle since the previous
@@ -168,7 +175,7 @@ func (c *Collector) host(now time.Time) Host {
 		OS:     runtime.GOOS,
 		Arch:   runtime.GOARCH,
 		CPUs:   runtime.NumCPU(),
-		TempC:  TempNaN,
+		TempC:  Float(TempNaN),
 		Kernel: readTrim(c.path("proc", "sys", "kernel", "osrelease")),
 	}
 	h.Hostname, _ = os.Hostname()
@@ -191,10 +198,10 @@ func (c *Collector) host(now time.Time) Host {
 		h.UptimeSec = up
 	}
 	if t, ok := c.temperature(); ok {
-		h.TempC, h.TempOK = t, true
+		h.TempC, h.TempOK = Float(t), true
 	}
 	h.Throttle = c.throttle()
-	h.CPUBusy = c.Busy()
+	h.CPUBusy = Float(c.Busy())
 	dirs := c.DataDirs
 	if len(dirs) == 0 {
 		dirs = []string{"."}

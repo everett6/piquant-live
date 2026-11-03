@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
@@ -66,7 +67,7 @@ func TestCollectReadsARealPiLayout(t *testing.T) {
 	if s.Host.UptimeSec != 12345.67 {
 		t.Fatalf("uptime = %v", s.Host.UptimeSec)
 	}
-	if !s.Host.TempOK || s.Host.TempC != 48.5 {
+	if !s.Host.TempOK || s.Host.TempC.Value() != 48.5 {
 		t.Fatalf("temperature = %v (ok=%v), want 48.5", s.Host.TempC, s.Host.TempOK)
 	}
 	// 0x50005 = under-voltage now (bit 0) + under-voltage and throttled
@@ -96,7 +97,7 @@ func TestMissingSensorsAreUnavailableNotZero(t *testing.T) {
 	if s.Host.Role != RoleDev {
 		t.Fatalf("role = %q, want dev", s.Host.Role)
 	}
-	if s.Host.TempOK || !math.IsNaN(s.Host.TempC) {
+	if s.Host.TempOK || !math.IsNaN(s.Host.TempC.Value()) {
 		t.Fatalf("temperature = %v (ok=%v), want NaN/unavailable", s.Host.TempC, s.Host.TempOK)
 	}
 	if s.Host.Throttle.Available {
@@ -215,5 +216,52 @@ func BenchmarkCollect(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		c.Collect()
+	}
+}
+
+// encoding/json fails a whole document on NaN, so a missing sensor must encode
+// as null rather than blanking the dashboard status.
+func TestStatusJSONEncodesUnavailableAsNull(t *testing.T) {
+	root := fixture(t, map[string]string{"proc/meminfo": "MemTotal: 1000 kB\n"})
+	s := New().Collect()
+	s.Host = (&Collector{Root: root}).Collect().Host
+	body, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("a sample with an unavailable sensor did not encode: %v", err)
+	}
+	var back map[string]any
+	if err := json.Unmarshal(body, &back); err != nil {
+		t.Fatal(err)
+	}
+	host := back["host"].(map[string]any)
+	if host["temp_c"] != nil {
+		t.Fatalf("temp_c = %v, want null", host["temp_c"])
+	}
+	if host["cpu_busy"] != nil {
+		t.Fatalf("cpu_busy = %v, want null on the first sample", host["cpu_busy"])
+	}
+	// Round trip: a null reading comes back as NaN, not as zero.
+	var again Sample
+	if err := json.Unmarshal(body, &again); err != nil {
+		t.Fatal(err)
+	}
+	if !math.IsNaN(again.Host.TempC.Value()) {
+		t.Fatalf("round trip turned null into %v", again.Host.TempC.Value())
+	}
+}
+
+// With no fixture root the collector must read the real filesystem, not a
+// relative "proc/..." in the working directory.
+func TestRealRootReadsSystemFiles(t *testing.T) {
+	c := &Collector{}
+	h := c.Collect().Host
+	if h.MemTotal == 0 {
+		t.Fatal("mem_total is 0: the collector did not read /proc/meminfo")
+	}
+	if h.Kernel == "" {
+		t.Fatal("kernel is empty: the collector did not read /proc/sys/kernel/osrelease")
+	}
+	if h.CPUs == 0 {
+		t.Fatal("cpu count is 0")
 	}
 }
