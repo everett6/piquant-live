@@ -2,10 +2,27 @@
 // without allocating. Book-derived quantities stay in fixed point int64 until
 // the last step, where they are normalised to float32.
 //
-// Every window uses event time (the local receive timestamp carried in the
-// envelope), not wall-clock time: replaying a capture produces exactly the same
-// features it produced live, and a stalled feed makes every window go empty
-// instead of silently repeating stale values.
+// # Time, not event count
+//
+// Every window is measured in event time (the receive timestamp carried in the
+// envelope) and is assembled from fixed 50 ms time buckets, so a window always
+// covers the period it claims to. The previous implementation kept the last 512
+// events and summed those, which covered 5 s at 100 events/s but only 46 ms at
+// 22 000 events/s — on the production feed the "30 s" OFI was really the last
+// half-second of flow. Buckets make memory a function of the window length
+// only: 1024 buckets (~51 s of headroom) per symbol, whatever the event rate.
+//
+// A window includes every sample in (t-W, t] except at most those in the one
+// bucket that straddles t-W, which is dropped whole. It therefore never
+// includes a sample older than the window claims; the cost is at most one
+// bucket of quantisation (5% of a 1 s window, 0.17% of a 30 s window).
+//
+// # Consistent state
+//
+// Advance must be called AFTER the envelope has been applied to the book. All
+// features of one vector then describe the same book state: the level features
+// read the book directly, and the OFI terms are measured against the book state
+// captured at the previous event.
 package features
 
 import (
@@ -15,24 +32,24 @@ import (
 	"piquant-live/internal/orderbook"
 )
 
-// Names lists the feature vector layout. Keep in sync with Extract.
+// Names lists the feature vector layout. Keep in sync with NCore.
 var Names = []string{
-	"imb_l1", // (bid_q - ask_q) / (bid_q + ask_q)
-	"imb_l5",
-	"imb_l20",
-	"micro_dev",  // (microprice - mid) / spread, in [-0.5, 0.5]
-	"spread_bps", // spread / mid * 1e4
-	"ofi_1s",     // whole-book OFI over 1 s, base units
-	"ofi_5s",
-	"ofi_30s",
-	"mlofi_1s", // multi-level OFI with decay exp(-0.3*(l-1)), 1 s
-	"mlofi_5s",
-	"vol_30s_bps",  // realised volatility of 1 s mid returns, bps
+	"imb_l1",       // (bid_q - ask_q) / (bid_q + ask_q) over L1, [-1, 1], dimensionless
+	"imb_l5",       // same over the top 5 levels
+	"imb_l20",      // same over the top 20 levels
+	"micro_dev",    // (microprice - mid) / spread, in [-0.5, 0.5]
+	"spread_bps",   // (ask - bid) / mid * 1e4
+	"ofi_1s",       // whole-book OFI over 1 s, base units (signed)
+	"ofi_5s",       // whole-book OFI over 5 s
+	"ofi_30s",      // whole-book OFI over 30 s
+	"mlofi_1s",     // multi-level OFI, decay exp(-0.3*(level-1)), 1 s
+	"mlofi_5s",     // multi-level OFI, same decay, 5 s
+	"vol_30s_bps",  // std-dev of 1 s mid returns over 30 s, bps
 	"ret_1s_bps",   // mid return over 1 s, bps
 	"ret_5s_bps",   // mid return over 5 s, bps
-	"trade_imb_5s", // (buy - sell) traded base units over 5 s, base units
+	"trade_imb_5s", // (buy - sell) traded base units over 5 s
 	"trade_cnt_1s", // number of trades in the last second
-	"queue_ratio",  // best bid qty / (best bid qty + best ask qty)
+	"queue_ratio",  // best bid qty / (best bid qty + best ask qty), [0, 1]
 }
 
 // NCore is the number of features produced by each Extract call.
@@ -44,60 +61,79 @@ func init() {
 	}
 }
 
-// Window lengths in event-time nanoseconds.
 const (
+	// bucketNs is the aggregation width of every window.
+	bucketNs = int64(50e6)
+
+	// Window lengths in event-time nanoseconds.
 	win1s  = int64(1e9)
-	win5s  = int64(5 * 1e9)
-	win30s = int64(30 * 1e9)
+	win5s  = int64(5e9)
+	win30s = int64(30e9)
+
+	// nBuckets is the bucket ring: 51.2 s of buckets, i.e. well past the
+	// longest (30 s) window, so a bucket slot is never reused while any window
+	// still holds it. Power of two for masking.
+	nBuckets = 1024
+	bktMask  = nBuckets - 1
+
+	// maxMidScan bounds the backwards walk that finds the mid at or before a
+	// reference time: 64 buckets = 3.2 s. Beyond that the book was idle across
+	// the whole window and the return is reported as invalid (0) rather than
+	// measured from a stale reference.
+	maxMidScan = 64
 )
 
 // ofiBeta is the multi-level OFI decay across book levels.
 const ofiBeta = 0.3
 
-// ringLen bounds per-symbol event history; retained duration depends on feed
-// rate, while each feature window still expires by event time.
-const ringLen = 512
+// bucket aggregates the windowed quantities of one 100 ms slice of event time.
+type bucket struct {
+	start    int64   // bucket start, ns
+	ofi      float64 // whole-book OFI, base units
+	mlofi    float64 // multi-level OFI, base units
+	trade    float64 // signed traded base units
+	tradeCnt int32   // trade count
+	retN     int32   // number of 1 s return samples
+	retSum   float64 // sum of those samples
+	retSq    float64 // sum of their squares
+	mid      int64   // last mid seen in the bucket
+	midT     int64   // time of that mid
+	hasMid   bool
+}
 
 // Engine holds per-symbol streaming state. One goroutine owns one Engine.
 type Engine struct {
 	sym uint16
 
-	// Price-change samples: the time and mid after the update, plus the
-	// OFI terms and one-second return attributed to that update.
-	chT      [ringLen]int64
-	chMid    [ringLen]int64
-	chV      [ringLen]float64
-	chW      [ringLen]float64
-	chRet    [ringLen]float64
-	chHasRet [ringLen]bool
-	hCh      int
-	nCh      int
-	chSeq    uint64
+	// Book state captured at the previous event, for measuring OFI and level
+	// rank against the pre-update book once the current update is applied.
+	prev    [2]orderbook.Levels
+	prevMid int64
+	prevOK  bool
 
-	chFirst1, chFirst5, chFirst30 uint64
-	ofi1, ofi5, ofi30             float64
-	ml1, ml5                      float64
-	volN                          uint64
-	volMean, volM2                float64
+	b       [nBuckets]bucket
+	headSeq int64 // bucket sequence of the current bucket
+	started bool
 
-	mid1Seq, mid5Seq     uint64
-	mid1Valid, mid5Valid bool
+	// Window cursors: the oldest bucket sequence still included per window.
+	c1, c5, c30 int64
+	ofi1        float64
+	ofi5        float64
+	ofi30       float64
+	ml1         float64
+	ml5         float64
+	tr1         float64
+	tr5         float64
+	cnt1        int64
+	volN        int64
+	volSum      float64
+	volSq       float64
 
-	// Trade samples.
-	trT   [ringLen]int64
-	trV   [ringLen]float64
-	hTr   int
-	nTr   int
-	trSeq uint64
-
-	trFirst1, trFirst5 uint64
-	trade5             float64
-	tradeCount1        uint64
-
-	lastRecv int64
-	ready    bool
-	emitted  bool
-	emit     [NCore]float32
+	lastRecv  int64
+	ready     bool
+	emitted   bool
+	reversals uint64 // events whose timestamp went backwards (data quality)
+	emit      [NCore]float32
 }
 
 // New creates an engine for a symbol.
@@ -106,8 +142,13 @@ func New(sym uint16) *Engine { return &Engine{sym: sym} }
 // Symbol returns the engine's symbol.
 func (e *Engine) Symbol() uint16 { return e.sym }
 
-// Reset clears all state, e.g. after a book resync. Built from a zero value so
-// no carried-over sample spans the gap.
+// TimeReversals reports how many envelopes arrived with a timestamp older than
+// the previous one. Such an event is folded into the current bucket rather
+// than rewinding the windows, and the count is reported so a replay makes the
+// data quality visible.
+func (e *Engine) TimeReversals() uint64 { return e.reversals }
+
+// Reset clears all state, e.g. after a book resync.
 func (e *Engine) Reset() {
 	sym := e.sym
 	*e = Engine{sym: sym}
@@ -116,236 +157,233 @@ func (e *Engine) Reset() {
 // Ready reports whether the last Advance saw a live book.
 func (e *Engine) Ready() bool { return e.ready }
 
-// Advance updates rolling state from one envelope. Call it BEFORE applying the
-// envelope to the book: OFI is measured against the pre-update book.
+// Advance updates rolling state from one envelope. It must be called AFTER the
+// envelope has been applied to the book: the level features and the mid sample
+// then describe the state the update produced, and OFI is measured against the
+// state captured before it.
 func (e *Engine) Advance(book *orderbook.Book, env *event.Envelope) bool {
-	e.ready = book.Ready
-	e.lastRecv = env.RecvTime
-	e.expire(env.RecvTime)
-	switch env.Kind {
-	case event.KindSnapshot:
-		// The snapshot replaces the book and is the OFI baseline: the first
-		// depth update is measured against it like any other transition.
-		e.resetWindows()
-		e.baseline(book, env.RecvTime)
-	case event.KindDepth:
-		if book.Ready && book.Anchored {
-			e.update(book, &env.Depth, env.RecvTime)
-		}
-	case event.KindTrade:
-		q := env.Trade.Qty
-		if env.Trade.Side == event.SideSell {
-			q = -q
-		}
-		e.pushTrade(env.RecvTime, float64(q))
+	t := env.RecvTime
+	if t < e.lastRecv {
+		e.reversals++
+	} else {
+		e.lastRecv = t
 	}
-	e.compute(book, env.RecvTime)
+	e.ready = book.Ready
+	if e.ready && book.Anchored {
+		// Move the bucket ring to t first: expire must see every bucket that
+		// the streams skipped, not just the ones below the previous head.
+		e.bucketFor(t)
+		e.expire(t)
+		switch env.Kind {
+		case event.KindSnapshot:
+			e.resetWindows(t)
+			e.baseline(book, t)
+		case event.KindDepth:
+			e.update(book, &env.Depth, t)
+		case event.KindTrade:
+			e.trade(&env.Trade, t)
+		}
+		e.compute(book, t)
+		switch env.Kind {
+		case event.KindSnapshot, event.KindDepth:
+			e.capturePrev(book)
+		}
+	} else {
+		e.prevOK = false
+	}
 	return e.ready
 }
 
-func (e *Engine) resetWindows() {
-	e.hCh, e.nCh, e.chSeq = 0, 0, 0
-	e.chFirst1, e.chFirst5, e.chFirst30 = 0, 0, 0
-	e.ofi1, e.ofi5, e.ofi30, e.ml1, e.ml5 = 0, 0, 0, 0, 0
-	e.volN, e.volMean, e.volM2 = 0, 0, 0
-	e.mid1Seq, e.mid5Seq = 0, 0
-	e.mid1Valid, e.mid5Valid = false, false
-	e.hTr, e.nTr, e.trSeq = 0, 0, 0
-	e.trFirst1, e.trFirst5 = 0, 0
-	e.trade5, e.tradeCount1 = 0, 0
+// capturePrev stores the book state this event produced, which becomes the
+// reference the next event's OFI is measured against.
+func (e *Engine) capturePrev(book *orderbook.Book) {
+	if !book.Ready || !book.Anchored {
+		e.prevOK = false
+		return
+	}
+	e.prev[orderbook.Bids] = book.Levels[orderbook.Bids]
+	e.prev[orderbook.Asks] = book.Levels[orderbook.Asks]
+	bp, _ := e.prev[orderbook.Bids].Best()
+	ap, _ := e.prev[orderbook.Asks].Best()
+	e.prevMid = (bp + ap) / 2
+	e.prevOK = true
 }
 
-// baseline records the book state right after a snapshot as a sample, so the
-// first post-snapshot update has something to be measured against.
+// bucketFor returns the current bucket, advancing the head (clearing the
+// buckets skipped over) when event time has moved on. A backwards timestamp is
+// folded into the current bucket.
+func (e *Engine) bucketFor(t int64) *bucket {
+	k := t / bucketNs
+	if !e.started {
+		e.resetWindows(t)
+		return &e.b[k&bktMask]
+	}
+	if k <= e.headSeq {
+		return &e.b[e.headSeq&bktMask]
+	}
+	if k-e.headSeq >= nBuckets {
+		// More than the whole retention horizon passed: nothing in any window
+		// survives, so start clean instead of walking the ring.
+		e.resetWindows(t)
+		return &e.b[k&bktMask]
+	}
+	for s := e.headSeq + 1; s <= k; s++ {
+		e.b[s&bktMask] = bucket{start: s * bucketNs}
+	}
+	e.headSeq = k
+	return &e.b[k&bktMask]
+}
+
+// resetWindows forgets every sample and restarts the bucket ring at t.
+func (e *Engine) resetWindows(t int64) {
+	k := t / bucketNs
+	e.b = [nBuckets]bucket{}
+	e.b[k&bktMask] = bucket{start: k * bucketNs}
+	e.headSeq = k
+	e.started = true
+	e.c1, e.c5, e.c30 = k, k, k
+	e.ofi1, e.ofi5, e.ofi30 = 0, 0, 0
+	e.ml1, e.ml5 = 0, 0
+	e.tr1, e.tr5, e.cnt1 = 0, 0, 0
+	e.volN, e.volSum, e.volSq = 0, 0, 0
+}
+
+// expire drops every bucket that has fallen out of a window. Each bucket is
+// retired at most once per window, so expiry is O(1) amortised per event.
+func (e *Engine) expire(t int64) {
+	if !e.started {
+		return
+	}
+	for e.c1 < e.headSeq && e.c1*bucketNs <= t-win1s {
+		b := &e.b[e.c1&bktMask]
+		e.ofi1 -= b.ofi
+		e.ml1 -= b.mlofi
+		e.tr1 -= b.trade
+		e.cnt1 -= int64(b.tradeCnt)
+		e.c1++
+	}
+	for e.c5 < e.headSeq && e.c5*bucketNs <= t-win5s {
+		b := &e.b[e.c5&bktMask]
+		e.ofi5 -= b.ofi
+		e.ml5 -= b.mlofi
+		e.tr5 -= b.trade
+		e.c5++
+	}
+	for e.c30 < e.headSeq && e.c30*bucketNs <= t-win30s {
+		b := &e.b[e.c30&bktMask]
+		e.ofi30 -= b.ofi
+		e.volN -= int64(b.retN)
+		e.volSum -= b.retSum
+		e.volSq -= b.retSq
+		e.c30++
+	}
+}
+
+// baseline records the post-snapshot book as a mid sample, so the first
+// post-snapshot update has something to be measured against.
 func (e *Engine) baseline(book *orderbook.Book, t int64) {
 	bp, _ := book.Levels[orderbook.Bids].Best()
 	ap, _ := book.Levels[orderbook.Asks].Best()
-	e.pushChange(t, (bp+ap)/2, 0, 0, 0, false)
+	b := e.bucketFor(t)
+	b.mid, b.midT, b.hasMid = (bp+ap)/2, t, true
 }
 
-// update records the flow and the mid caused by one depth update, measured
-// against the pre-update book.
+// update records the flow and the mid caused by one depth update.
 //
 // The per-level n-th term (OFI of Cont, Kukanov and Stoikov applied one price
 // level at a time) is the size change at that level: on the bid, a level that
 // did not exist before or was resized at the same price:
 //
-//	e_n = q_n        if P_n > P_{n-1}   (new better bid)
-//	e_n = q_n - q_{n-1}  if P_n == P_{n-1}  (resize at the same price)
-//	e_n = 0          if P_n < P_{n-1}   (deletion below the touch: no impact)
+//	e_n = q_n            if the level is new
+//	e_n = q_n - q_{n-1}  if the level is resized
+//	e_n = 0              if the level is deleted (no impact at the touch)
 //
 // which, because prevQty is 0 for a level that is not in the book, reduces to
 // q_n - q_{n-1} for every touched price. The asks are symmetric.
 func (e *Engine) update(book *orderbook.Book, d *event.DepthEvent, t int64) {
-	bidSide := d.Side == event.SideBuy
-	var side *orderbook.Levels
-	if bidSide {
-		side = &book.Levels[orderbook.Bids]
-	} else {
-		side = &book.Levels[orderbook.Asks]
+	if !e.prevOK {
+		return
 	}
-	// The mid after this update: the touched side already reflects it, the
-	// other side is still the pre-update book.
-	var bp, ap int64
-	if bidSide {
-		bp, _ = side.Best()
-		ap, _ = book.Levels[orderbook.Asks].Best()
-	} else {
-		bp, _ = book.Levels[orderbook.Bids].Best()
-		ap, _ = side.Best()
+	bidSide := d.Side == event.SideBuy
+	prev := &e.prev[orderbook.Bids]
+	if !bidSide {
+		prev = &e.prev[orderbook.Asks]
 	}
 	var world, ml float64
 	for i := 0; i < int(d.NUpdates); i++ {
 		lv := &d.Updates[i]
-		rk := rankAt(side, lv.Price, bidSide)
-		delta := bidTerm(prevQty(side, lv.Price), lv.Qty)
+		rk := rankAt(prev, lv.Price, bidSide)
+		delta := float64(lv.Qty - prevQty(prev, lv.Price))
 		if !bidSide {
 			delta = -delta
 		}
 		world += delta
 		ml += delta * levelWeight(rk)
 	}
-	mid := (bp + ap) / 2
-	old, ok := e.midAtCursor(t-win1s, &e.mid1Seq, &e.mid1Valid)
-	var ret float64
-	if ok && old > 0 {
-		ret = float64(mid-old) / float64(old) * 1e4
-	}
-	e.pushChange(t, mid, world, ml, ret, ok && old > 0)
-}
-
-func (e *Engine) pushChange(t, mid int64, world, ml, ret float64, hasRet bool) {
-	if e.nCh == ringLen {
-		e.evictChange(e.chSeq - ringLen)
-	} else {
-		e.nCh++
-	}
-	i := e.hCh
-	e.chT[i] = t
-	e.chMid[i] = mid
-	e.chV[i] = world
-	e.chW[i] = ml
-	e.chRet[i] = ret
-	e.chHasRet[i] = hasRet
-	e.hCh = (i + 1) & (ringLen - 1)
-	e.chSeq++
+	mid := e.prevMidAfter(book)
+	b := e.bucketFor(t)
+	b.ofi += world
+	b.mlofi += ml
 	e.ofi1 += world
 	e.ofi5 += world
 	e.ofi30 += world
 	e.ml1 += ml
 	e.ml5 += ml
-	if hasRet {
-		e.addVolatility(ret)
+	if old, ok := e.midAt(t - win1s); ok && old > 0 && mid > 0 {
+		ret := float64(mid-old) / float64(old) * 1e4
+		b.retN++
+		b.retSum += ret
+		b.retSq += ret * ret
+		e.volN++
+		e.volSum += ret
+		e.volSq += ret * ret
 	}
 }
 
-func (e *Engine) pushTrade(t int64, qty float64) {
-	if e.nTr == ringLen {
-		e.evictTrade(e.trSeq - ringLen)
-	} else {
-		e.nTr++
+// trade records one print.
+func (e *Engine) trade(tr *event.TradeEvent, t int64) {
+	q := float64(tr.Qty)
+	if tr.Side == event.SideSell {
+		q = -q
 	}
-	i := e.hTr
-	e.trT[i] = t
-	e.trV[i] = qty
-	e.hTr = (i + 1) & (ringLen - 1)
-	e.trSeq++
-	e.trade5 += qty
-	e.tradeCount1++
+	b := e.bucketFor(t)
+	b.trade += q
+	b.tradeCnt++
+	e.tr1 += q
+	e.tr5 += q
+	e.cnt1++
 }
 
-func (e *Engine) expire(t int64) {
-	for e.chFirst1 < e.chSeq && t-e.chT[e.chFirst1&(ringLen-1)] >= win1s {
-		e.ofi1 -= e.chV[e.chFirst1&(ringLen-1)]
-		e.ml1 -= e.chW[e.chFirst1&(ringLen-1)]
-		e.chFirst1++
+// prevMidAfter returns the mid the book has after the current update.
+func (e *Engine) prevMidAfter(book *orderbook.Book) int64 {
+	bp, _ := book.Levels[orderbook.Bids].Best()
+	ap, _ := book.Levels[orderbook.Asks].Best()
+	return (bp + ap) / 2
+}
+
+// midAt returns the most recent mid recorded at or before ref, walking back at
+// most maxMidScan buckets. It reports false when the book was idle across the
+// whole scan, in which case the window has no usable reference.
+func (e *Engine) midAt(ref int64) (int64, bool) {
+	if !e.started {
+		return 0, false
 	}
-	for e.chFirst5 < e.chSeq && t-e.chT[e.chFirst5&(ringLen-1)] >= win5s {
-		e.ofi5 -= e.chV[e.chFirst5&(ringLen-1)]
-		e.ml5 -= e.chW[e.chFirst5&(ringLen-1)]
-		e.chFirst5++
+	s := ref / bucketNs
+	oldest := e.headSeq - int64(nBuckets) + 1
+	if s > e.headSeq {
+		s = e.headSeq
 	}
-	for e.chFirst30 < e.chSeq && t-e.chT[e.chFirst30&(ringLen-1)] >= win30s {
-		i := e.chFirst30 & (ringLen - 1)
-		if e.chHasRet[i] {
-			e.removeVolatility(e.chRet[i])
-			e.chHasRet[i] = false
+	for i := 0; i < maxMidScan && s >= oldest && s >= 0; i++ {
+		b := &e.b[s&bktMask]
+		if b.start != s*bucketNs {
+			break // slot was reused for another bucket sequence
 		}
-		e.ofi30 -= e.chV[i]
-		e.chFirst30++
+		if b.hasMid && b.midT <= ref {
+			return b.mid, true
+		}
+		s--
 	}
-	for e.trFirst1 < e.trSeq && t-e.trT[e.trFirst1&(ringLen-1)] >= win1s {
-		e.tradeCount1--
-		e.trFirst1++
-	}
-	for e.trFirst5 < e.trSeq && t-e.trT[e.trFirst5&(ringLen-1)] >= win5s {
-		e.trade5 -= e.trV[e.trFirst5&(ringLen-1)]
-		e.trFirst5++
-	}
-}
-
-func (e *Engine) evictChange(seq uint64) {
-	i := seq & (ringLen - 1)
-	if seq >= e.chFirst1 {
-		e.ofi1 -= e.chV[i]
-		e.ml1 -= e.chW[i]
-		e.chFirst1 = seq + 1
-	}
-	if seq >= e.chFirst5 {
-		e.ofi5 -= e.chV[i]
-		e.ml5 -= e.chW[i]
-		e.chFirst5 = seq + 1
-	}
-	if seq >= e.chFirst30 {
-		e.ofi30 -= e.chV[i]
-		e.chFirst30 = seq + 1
-	}
-	if e.chHasRet[i] {
-		e.removeVolatility(e.chRet[i])
-		e.chHasRet[i] = false
-	}
-	if e.mid1Valid && e.mid1Seq > 0 && e.mid1Seq-1 <= seq {
-		e.mid1Valid = false
-		e.mid1Seq = seq + 1
-	}
-	if e.mid5Valid && e.mid5Seq > 0 && e.mid5Seq-1 <= seq {
-		e.mid5Valid = false
-		e.mid5Seq = seq + 1
-	}
-}
-
-func (e *Engine) evictTrade(seq uint64) {
-	i := seq & (ringLen - 1)
-	if seq >= e.trFirst1 {
-		e.tradeCount1--
-		e.trFirst1 = seq + 1
-	}
-	if seq >= e.trFirst5 {
-		e.trade5 -= e.trV[i]
-		e.trFirst5 = seq + 1
-	}
-}
-
-func (e *Engine) addVolatility(v float64) {
-	e.volN++
-	d := v - e.volMean
-	e.volMean += d / float64(e.volN)
-	e.volM2 += d * (v - e.volMean)
-}
-
-func (e *Engine) removeVolatility(v float64) {
-	if e.volN <= 1 {
-		e.volN, e.volMean, e.volM2 = 0, 0, 0
-		return
-	}
-	n := float64(e.volN)
-	mean := (n*e.volMean - v) / (n - 1)
-	e.volM2 -= (v - e.volMean) * (v - mean)
-	e.volN--
-	e.volMean = mean
-	if e.volM2 < 0 {
-		e.volM2 = 0
-	}
+	return 0, false
 }
 
 // rankAt returns the 0-based rank the level at price occupies (or would
@@ -383,29 +421,15 @@ func (e *Engine) Extract(book *orderbook.Book, dst []float32) int {
 	asks := &book.Levels[orderbook.Asks]
 	dst[0] = imbalance(bids.Q[0], asks.Q[0])
 	dst[1] = imbalance(book.DepthSum(orderbook.Bids, 5), book.DepthSum(orderbook.Asks, 5))
-	dst[2] = imbalance(book.DepthSum(orderbook.Bids, event.MaxLevels), book.DepthSum(orderbook.Asks, event.MaxLevels))
-	// Copy into the public Part-2 region field by field. (A bulk copy of the
-	// array onto the caller's slice via append has no stable cost guarantee in
-	// the hot path, so the fixed tail is copied explicitly.)
-	dst[3] = e.emit[3]
-	dst[4] = e.emit[4]
-	dst[5] = e.emit[5]
-	dst[6] = e.emit[6]
-	dst[7] = e.emit[7]
-	dst[8] = e.emit[8]
-	dst[9] = e.emit[9]
-	dst[10] = e.emit[10]
-	dst[11] = e.emit[11]
-	dst[12] = e.emit[12]
-	dst[13] = e.emit[13]
-	dst[14] = e.emit[14]
-	dst[15] = e.emit[15]
+	dst[2] = imbalance(book.DepthSum(orderbook.Bids, event.MaxLevels),
+		book.DepthSum(orderbook.Asks, event.MaxLevels))
+	copy(dst[3:NCore], e.emit[3:NCore])
 	return NCore
 }
 
-// compute fills e.emit from the current state at instant t.
+// compute fills e.emit from the current book state and the windows at t.
 func (e *Engine) compute(book *orderbook.Book, t int64) {
-	out := (&e.emit)
+	out := &e.emit
 	e.emitted = true
 	if !book.Ready || !book.Anchored {
 		for i := range out {
@@ -436,9 +460,12 @@ func (e *Engine) compute(book *orderbook.Book, t int64) {
 	out[11] = float32(e.retBps(t, win1s, mid))
 	out[12] = float32(e.retBps(t, win5s, mid))
 
-	out[13] = float32(e.trade5 / q)
-	out[14] = float32(e.tradeCount1)
+	out[13] = float32(e.tr5 / q)
+	out[14] = float32(e.cnt1)
 	out[15] = imbalance(bq, aq)
+
+	b := e.bucketFor(t)
+	b.mid, b.midT, b.hasMid = mid, t, true
 }
 
 // levelWeight is the multi-level OFI decay for an update that lands at rank
@@ -457,8 +484,6 @@ var levelDecay = func() (w [event.MaxLevels]float64) {
 	return w
 }()
 
-func bidTerm(prevQ, q int64) float64 { return float64(q - prevQ) }
-
 func imbalance(b, a int64) float32 {
 	s := b + a
 	if s <= 0 {
@@ -474,40 +499,24 @@ func microPrice(bp, bq, ap, aq int64) float64 {
 	return (float64(ap)*float64(bq) + float64(bp)*float64(aq)) / float64(bq+aq)
 }
 
-func (e *Engine) retBps(t, horizon int64, mid int64) float64 {
-	seq, valid := &e.mid1Seq, &e.mid1Valid
-	if horizon == win5s {
-		seq, valid = &e.mid5Seq, &e.mid5Valid
-	}
-	old, ok := e.midAtCursor(t-horizon, seq, valid)
-	if !ok || old <= 0 {
+func (e *Engine) retBps(t, horizon, mid int64) float64 {
+	old, ok := e.midAt(t - horizon)
+	if !ok || old <= 0 || mid <= 0 {
 		return 0
 	}
 	return float64(mid-old) / float64(old) * 1e4
 }
 
-func (e *Engine) midAtCursor(t int64, seq *uint64, valid *bool) (int64, bool) {
-	oldest := e.chSeq - uint64(e.nCh)
-	if *seq < oldest {
-		*seq = oldest
-		*valid = false
-	} else if *valid && *seq > 0 && e.chT[(*seq-1)&(ringLen-1)] > t {
-		*valid = false
-		*seq = oldest
-	}
-	for *seq < e.chSeq && e.chT[*seq&(ringLen-1)] <= t {
-		(*seq)++
-		*valid = true
-	}
-	if !*valid {
-		return 0, false
-	}
-	return e.chMid[(*seq-1)&(ringLen-1)], true
-}
-
+// volatility returns the sample standard deviation of the 1 s mid returns
+// inside the 30 s window, in bps.
 func (e *Engine) volatility() float64 {
 	if e.volN < 2 {
 		return 0
 	}
-	return math.Sqrt(e.volM2 / float64(e.volN-1))
+	n := float64(e.volN)
+	m2 := e.volSq - e.volSum*e.volSum/n
+	if m2 <= 0 {
+		return 0
+	}
+	return math.Sqrt(m2 / (n - 1))
 }

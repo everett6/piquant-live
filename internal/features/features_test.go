@@ -43,7 +43,7 @@ type harness struct {
 
 // base is an early event time for synthetic harness runs. It must stay well
 // below 1e18: nanosecond timestamps of a few times 1e17 leave float64 without
-// integer precision above 2^53.
+// integer precision above 2^53. base sits on a 100 ms bucket boundary.
 const base = int64(100e6)
 
 func newHarness(t *testing.T) *harness {
@@ -60,11 +60,11 @@ func newHarness(t *testing.T) *harness {
 
 func (h *harness) next() uint64 { h.seq++; return h.seq }
 
-// apply feeds the engine first (it needs the pre-update book for OFI) and
-// then the book.
+// apply feeds the book first and then the engine: features describe the state
+// the event produced, and OFI is measured against the captured pre-update book.
 func (h *harness) apply(e *event.Envelope) {
-	h.feat.Advance(h.book, e)
 	h.book.Apply(e)
+	h.feat.Advance(h.book, e)
 }
 
 func (h *harness) extract() []float32 {
@@ -79,7 +79,6 @@ func near(a, b, eps float64) bool { return math.Abs(a-b) <= eps }
 
 func TestImbalanceAndMicroprice(t *testing.T) {
 	h := newHarness(t)
-	h.feat.compute(h.book, base)
 	f := h.extract()
 	if f == nil {
 		t.Fatal("extract returned nothing")
@@ -102,7 +101,6 @@ func TestMicropriceDeviationSign(t *testing.T) {
 	// Heavy bid at the top pushes the microprice toward the ask.
 	tm := int64(1.1e9)
 	h.apply(dep(h.next(), tm, event.SideBuy, lv(100, 9)))
-	h.apply(&event.Envelope{Sequence: h.next(), RecvTime: tm, Kind: event.KindHeartbeat})
 	f := h.extract()
 	if f[3] <= 0 || f[3] >= 0.5 {
 		t.Fatalf("micro_dev = %v, want (0, 0.5)", f[3])
@@ -133,6 +131,31 @@ func TestOFITerm(t *testing.T) {
 	}
 }
 
+// A window must cover the time it claims at any event rate. The old fixed
+// 512-event ring held 5 s at 100 events/s but only 46 ms at 20 kHz; the bucket
+// windows hold the whole period.
+func TestOFIWindowsCoverTheWindowAtHighRate(t *testing.T) {
+	h := newHarness(t)
+	const n = 5000 // 1 ms apart => 5 s of events
+	for i := 1; i <= n; i++ {
+		h.apply(dep(h.next(), base+int64(i)*1e6, event.SideBuy, lv(100, float64(i+2))))
+	}
+	f := h.extract()
+	// The window may miss the bucket straddling its left edge and nothing else:
+	// at most bucketNs/1ms = 50 samples here.
+	slack := float64(bucketNs / 1e6)
+	if !near(float64(f[6]), n, slack) || float64(f[6]) > n {
+		t.Fatalf("ofi_5s = %v over 5 s of 1 ms updates, want %d less at most %v", f[6], n, slack)
+	}
+	if !near(float64(f[7]), n, slack) {
+		t.Fatalf("ofi_30s = %v, want %d less at most %v", f[7], n, slack)
+	}
+	// The last second of a 1 ms stream holds 1000 updates.
+	if !near(float64(f[5]), 1000, slack) {
+		t.Fatalf("ofi_1s = %v, want 1000 less at most %v", f[5], slack)
+	}
+}
+
 func TestOFIWindowsExpireInEventTime(t *testing.T) {
 	h := newHarness(t)
 	h.apply(dep(h.next(), base+100e6, event.SideBuy, lv(100, 5)))
@@ -148,24 +171,25 @@ func TestOFIWindowsExpireInEventTime(t *testing.T) {
 	if !near(float64(f[6]), 3, 1e-6) {
 		t.Fatalf("ofi_5s = %v", f[6])
 	}
-	// 30 s covers everything up to the 30 s edge; the -0.1 s sample is inside.
-	// Thirty-one seconds later everything has expired.
+	// Thirty seconds later the short windows are empty; the 30 s window still
+	// holds the sample at the base (its bucket start is exactly t-30 s).
 	h.apply(dep(h.next(), base+30e9, event.SideBuy, lv(100, 5)))
 	f = h.extract()
-	if f[5] != 0 || f[6] != 0 || f[7] != 3 {
-		t.Fatalf("ofi windows not expired: %v %v %v", f[5], f[6], f[7])
+	if f[5] != 0 || f[6] != 0 {
+		t.Fatalf("short windows not expired: %v %v", f[5], f[6])
+	}
+	// One more bucket and the base sample leaves the 30 s window too.
+	h.apply(dep(h.next(), base+31e9, event.SideBuy, lv(100, 5)))
+	if f = h.extract(); !near(float64(f[7]), 0, 1e-6) {
+		t.Fatalf("ofi_30s after 31 s = %v, want 0", f[7])
 	}
 }
 
 func TestReturnsAndVolatility(t *testing.T) {
 	h := newHarness(t)
-	// Walk the book up and down by one cent every event, then measure the
-	// volatility of 1 s returns: it must be positive, and the returns must
-	// have both signs.
-	// The bid walks one cent up and down every 0.5 s: alternate moves keep the
-	// book ordered (a walk up must raise both sides).
+	// Walk the book up and down every 0.5 s: the returns must have both signs.
 	signs := map[bool]int{}
-	for i := 1; i <= 12; i++ {
+	for i := 1; i <= 24; i++ {
 		tm := base + int64(i)*500e6
 		off := 0.01 * float64(i%3)
 		oldOff := 0.01 * float64((i-1)%3)
@@ -174,27 +198,13 @@ func TestReturnsAndVolatility(t *testing.T) {
 			lv(100+off, 2), lv(99.9, 3), lv(oldBid, 0)))
 		h.apply(dep(h.next(), tm, event.SideSell,
 			lv(100.1+off, 2), lv(100.2, 3), lv(oldAsk, 0)))
+		if f := h.extract(); f[11] != 0 {
+			signs[f[11] > 0]++
+		}
 	}
 	f := h.extract()
-	if !(f[10] > 0) {
+	if f[10] <= 0 {
 		t.Fatalf("vol = %v, want > 0", f[10])
-	}
-	if f[11] == 0 && math.Abs(float64(f[11])) < 1e-9 {
-		t.Logf("ret_1s = %v (mid unchanged over the last second)", f[11])
-	}
-	for i := 13; i <= 24; i++ {
-		tm := base + int64(i)*500e6
-		off := 0.01 * float64(i%3)
-		oldOff := 0.01 * float64((i-1)%3)
-		oldBid, oldAsk := 100+oldOff, 100.1+oldOff
-		h.apply(dep(h.next(), tm, event.SideBuy,
-			lv(100+off, 2), lv(99.9, 3), lv(oldBid, 0)))
-		h.apply(dep(h.next(), tm, event.SideSell,
-			lv(100.1+off, 2), lv(100.2, 3), lv(oldAsk, 0)))
-		r := h.extract()[11]
-		if r != 0 {
-			signs[r > 0]++
-		}
 	}
 	if signs[true] == 0 || signs[false] == 0 {
 		t.Fatalf("1 s returns never changed sign: %v", signs)
@@ -215,33 +225,50 @@ func TestTradeFeatures(t *testing.T) {
 	}
 }
 
-func TestIncrementalWindowsAcrossRingWrap(t *testing.T) {
-	const n = ringLen + 88
-	depth := newHarness(t)
+func TestWindowsAcrossBucketWrap(t *testing.T) {
+	// 600 buckets = 60 s of events, more than the 512-bucket ring: the ring
+	// wraps and the windows must still be exact.
+	h := newHarness(t)
+	const n = 600
 	for i := 1; i <= n; i++ {
-		tm := base + int64(i)*10e6
-		depth.apply(dep(depth.next(), tm, event.SideBuy, lv(100, float64(i+2))))
+		h.apply(dep(h.next(), base+int64(i)*100e6, event.SideBuy, lv(100, float64(i+2))))
 	}
-	f := depth.extract()
-	if f[5] != 100 || f[6] != 500 || f[7] != ringLen {
-		t.Fatalf("OFI windows after ring wrap = %v %v %v, want 100 500 %d",
-			f[5], f[6], f[7], ringLen)
+	f := h.extract()
+	if !near(float64(f[5]), 10, 1e-3) {
+		t.Fatalf("ofi_1s = %v, want the last 10 one-per-100 ms updates", f[5])
+	}
+	if !near(float64(f[6]), 50, 1e-3) {
+		t.Fatalf("ofi_5s = %v, want 50", f[6])
+	}
+	if !near(float64(f[7]), 300, 1e-3) {
+		t.Fatalf("ofi_30s = %v, want 300", f[7])
 	}
 
-	trades := newHarness(t)
+	tr := newHarness(t)
 	for i := 1; i <= n; i++ {
-		tm := base + int64(i)*10e6
-		trades.apply(trade(tm, event.SideBuy, 1))
+		tr.apply(trade(base+int64(i)*100e6, event.SideBuy, 1))
 	}
-	f = trades.extract()
-	if f[13] != 500 || f[14] != 100 {
-		t.Fatalf("trade windows after ring wrap = %v %v, want 500 100", f[13], f[14])
+	f = tr.extract()
+	if !near(float64(f[13]), 50, 1e-3) || f[14] != 10 {
+		t.Fatalf("trade windows after wrap = %v %v, want 50 10", f[13], f[14])
 	}
+	tr.apply(trade(base+1000e9, event.SideBuy, 1))
+	if f = tr.extract(); f[13] != 1 || f[14] != 1 {
+		t.Fatalf("trade windows after expiry = %v %v, want 1 1", f[13], f[14])
+	}
+}
 
-	trades.apply(&event.Envelope{Sequence: trades.next(), RecvTime: base + 40e9, Kind: event.KindHeartbeat})
-	f = trades.extract()
-	if f[13] != 0 || f[14] != 0 {
-		t.Fatalf("trade windows after expiry = %v %v, want 0 0", f[13], f[14])
+// A long idle gap must not leave stale flow in the windows, and must not walk
+// the whole bucket ring to expire it.
+func TestIdleGapClearsWindows(t *testing.T) {
+	h := newHarness(t)
+	h.apply(dep(h.next(), base+100e6, event.SideBuy, lv(100, 9)))
+	h.apply(trade(base+200e6, event.SideBuy, 4))
+	h.apply(dep(h.next(), base+10*3600*1e9, event.SideBuy, lv(100, 9)))
+	f := h.extract()
+	if f[5] != 0 || f[6] != 0 || f[7] != 0 || f[13] != 0 || f[14] != 0 || f[10] != 0 {
+		t.Fatalf("windows survived a one-hour gap: %v %v %v %v %v %v",
+			f[5], f[6], f[7], f[13], f[14], f[10])
 	}
 }
 
@@ -251,7 +278,21 @@ func TestSnapshotResetsWindows(t *testing.T) {
 	h.apply(snap(h.next(), int64(1.2e9), []event.Level{lv(100, 2)}, []event.Level{lv(100.1, 2)}))
 	f := h.extract()
 	if f[5] != 0 || f[7] != 0 || f[14] != 0 {
-		t.Fatalf("windows survived a snapshot: %v %v", f[5], f[7])
+		t.Fatalf("windows survived a snapshot: %v %v %v", f[5], f[7], f[14])
+	}
+}
+
+// A backwards timestamp is counted and folded into the current bucket rather
+// than rewinding the windows.
+func TestBackwardsTimestampIsCounted(t *testing.T) {
+	h := newHarness(t)
+	h.apply(trade(base+2e9, event.SideBuy, 1))
+	h.apply(trade(base+1e9, event.SideSell, 1))
+	if got := h.feat.TimeReversals(); got != 1 {
+		t.Fatalf("TimeReversals = %d, want 1", got)
+	}
+	if f := h.extract(); f[13] != 0 || f[14] != 2 {
+		t.Fatalf("trade_imb/cnt = %v/%v, want 0/2", f[13], f[14])
 	}
 }
 
@@ -267,38 +308,31 @@ func TestNotReadyExtract(t *testing.T) {
 	}
 }
 
+// Features of one vector describe one book state: Extract reads the book it is
+// given, not a copy stashed by the previous Advance.
+func TestExtractUsesTheGivenBook(t *testing.T) {
+	h := newHarness(t)
+	h.apply(dep(h.next(), base+100e6, event.SideBuy, lv(100, 4)))
+	if f := h.extract(); f[0] != float32(2.0/6.0) {
+		t.Fatalf("imb_l1 = %v, want 2/6", f[0])
+	}
+	// Change the book without an event: the level features must follow it.
+	h.book.Apply(dep(h.next(), base+200e6, event.SideBuy, lv(100, 8)))
+	if f := h.extract(); f[0] != float32(6.0/10.0) {
+		t.Fatalf("imb_l1 = %v, want 6/10 after the book changed", f[0])
+	}
+}
+
 func TestReset(t *testing.T) {
 	h := newHarness(t)
 	h.apply(dep(h.next(), int64(1.1e9), event.SideBuy, lv(100, 5)))
 	h.feat.Reset()
-	if h.feat.nCh != 0 || h.feat.nTr != 0 || h.feat.Symbol() != 1 {
-		t.Fatalf("reset left state: %+v", h.feat)
+	if h.feat.started || h.feat.Symbol() != 1 {
+		t.Fatalf("reset left state: started=%v sym=%d", h.feat.started, h.feat.Symbol())
 	}
 }
 
-func TestRollingVolatilityExpires(t *testing.T) {
-	h := newHarness(t)
-	for i := 1; i <= 12; i++ {
-		tm := base + int64(i)*500e6
-		off := 0.01 * float64(i%3)
-		oldOff := 0.01 * float64((i-1)%3)
-		oldBid, oldAsk := 100+oldOff, 100.1+oldOff
-		h.apply(dep(h.next(), tm, event.SideBuy,
-			lv(100+off, 2), lv(99.9, 3), lv(oldBid, 0)))
-		h.apply(dep(h.next(), tm, event.SideSell,
-			lv(100.1+off, 2), lv(100.2, 3), lv(oldAsk, 0)))
-	}
-	if f := h.extract(); f[10] <= 0 {
-		t.Fatalf("volatility = %v (n=%d mean=%g m2=%g), want > 0 before expiry",
-			f[10], h.feat.volN, h.feat.volMean, h.feat.volM2)
-	}
-	h.apply(&event.Envelope{Sequence: h.next(), RecvTime: base + 40e9, Kind: event.KindHeartbeat})
-	if f := h.extract(); f[10] != 0 {
-		t.Fatalf("volatility after expiry = %v, want 0", f[10])
-	}
-}
-
-func TestRollingVolatilityMatchesRetainedWindow(t *testing.T) {
+func TestRollingVolatilityMatchesWindow(t *testing.T) {
 	h := newHarness(t)
 	for i := 1; i <= 300; i++ {
 		tm := base + int64(i)*200e6
@@ -315,49 +349,32 @@ func TestRollingVolatilityMatchesRetainedWindow(t *testing.T) {
 		h.apply(dep(h.next(), tm, event.SideBuy, bids...))
 		h.apply(dep(h.next(), tm, event.SideSell, asks...))
 	}
-
 	e := h.feat
-	tm := base + 300*200e6
-	values := make([]float64, 0, ringLen)
-	oldest := e.chSeq - uint64(e.nCh)
-	for seq := oldest; seq < e.chSeq; seq++ {
-		i := seq & (ringLen - 1)
-		if e.chHasRet[i] && tm-e.chT[i] < win30s {
-			values = append(values, e.chRet[i])
+	// The incremental 30 s window must equal a direct recomputation over the
+	// buckets that are still inside it.
+	var n, sum, sq float64
+	for s := e.c30; s <= e.headSeq; s++ {
+		b := &e.b[s&bktMask]
+		if b.start != s*bucketNs {
+			continue
 		}
+		n += float64(b.retN)
+		sum += b.retSum
+		sq += b.retSq
 	}
-	if uint64(len(values)) != e.volN || len(values) < 2 {
-		t.Fatalf("retained volatility samples = %d, want %d and at least 2", len(values), e.volN)
+	if n < 2 {
+		t.Fatalf("volatility samples retained = %v, want at least 2", n)
 	}
-	var mean float64
-	for _, v := range values {
-		mean += v
+	m2 := sq - sum*sum/n
+	if m2 < 0 {
+		m2 = 0
 	}
-	mean /= float64(len(values))
-	var m2 float64
-	for _, v := range values {
-		d := v - mean
-		m2 += d * d
-	}
-	want := math.Sqrt(m2 / float64(len(values)-1))
+	want := math.Sqrt(m2 / (n - 1))
 	if !near(e.volatility(), want, 1e-9) {
 		t.Fatalf("rolling volatility = %g, want %g", e.volatility(), want)
 	}
-}
-
-func BenchmarkExtract(b *testing.B) {
-	h := &harness{book: &orderbook.Book{}, feat: New(1), seq: 1}
-	h.apply(snap(1, 1e9, []event.Level{lv(100, 2), lv(99.9, 3), lv(99.8, 1)}, []event.Level{lv(100.1, 2), lv(100.2, 3)}))
-	dst := make([]float32, NCore)
-	var seq uint64 = 1
-	var t int64 = 1e9
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		seq++
-		t += 1e6
-		h.apply(dep(seq, t, event.SideBuy, lv(100+float64(i%2)*0.01, float64(i%7+1))))
-		h.feat.Extract(h.book, dst)
+	if f := h.extract(); !near(float64(f[10]), want, 1e-3) {
+		t.Fatalf("vol_30s_bps = %v, want %g", f[10], want)
 	}
 }
 
@@ -374,6 +391,17 @@ func BenchmarkAdvanceAndExtract(b *testing.B) {
 		e.Depth.Sequence = seq
 		e.RecvTime = 1e9 + int64(i)*1e6
 		h.apply(e)
+		h.feat.Extract(h.book, dst)
+	}
+}
+
+func BenchmarkExtractOnly(b *testing.B) {
+	h := &harness{book: &orderbook.Book{}, feat: New(1), seq: 1}
+	h.apply(snap(1, 1e9, []event.Level{lv(100, 2), lv(99.9, 3), lv(99.8, 1)}, []event.Level{lv(100.1, 2), lv(100.2, 3)}))
+	dst := make([]float32, NCore)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
 		h.feat.Extract(h.book, dst)
 	}
 }

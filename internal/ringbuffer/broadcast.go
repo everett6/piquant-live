@@ -55,7 +55,6 @@ type Ring[T any] struct {
 
 	mu     sync.Mutex
 	subs   []subscribed[T]
-	cur    []*Cursor[T]
 	live   int
 	pushed count
 }
@@ -79,7 +78,6 @@ func NewRing[T any](segs, size int) *Ring[T] {
 		mask:   uint64(size - 1),
 		maxLag: uint64(segs) * uint64(size),
 		subs:   make([]subscribed[T], 0, maxSubscribers),
-		cur:    make([]*Cursor[T], 0, maxSubscribers),
 	}
 	for i := range r.segs {
 		r.segs[i].Slots = make([]T, size)
@@ -124,7 +122,6 @@ func (r *Ring[T]) NewCursor(live bool) (*Cursor[T], error) {
 	c := &Cursor[T]{ring: r, live: live}
 	if live {
 		r.subs = append(r.subs, subscribed[T]{pos: &c.pos})
-		r.cur = append(r.cur, c)
 		r.live++
 	}
 	c.Set(r.head.seq.Load())
@@ -146,6 +143,25 @@ func (c *Cursor[T]) Close() {
 		}
 	}
 	r.live--
+	// A consumer that opens and closes cursors repeatedly (a replay harness, a
+	// storage writer restarting per file) would otherwise grow the subscriber
+	// list without bound. Compact whenever the dead entries outnumber the live
+	// ones; a ring supports at most maxSubscribers live cursors, so this keeps
+	// both slices within a small multiple of that.
+	if dead := len(r.subs) - r.live; r.live == 0 || dead > r.live {
+		r.compactLocked()
+	}
+}
+
+// compactLocked drops closed subscribers. Caller holds r.mu.
+func (r *Ring[T]) compactLocked() {
+	out := r.subs[:0]
+	for _, s := range r.subs {
+		if !s.done {
+			out = append(out, s)
+		}
+	}
+	r.subs = out
 }
 
 // Close stops the producer: a blocked Publish returns and further publishes
