@@ -97,8 +97,7 @@ func (b *Book) Reset() {
 func (b *Book) Apply(e *event.Envelope) bool {
 	switch e.Kind {
 	case event.KindSnapshot:
-		b.applySnapshot(&e.Snap)
-		return true
+		return b.applySnapshot(&e.Snap)
 	case event.KindDepth:
 		return b.applyDepth(&e.Depth)
 	case event.KindTrade:
@@ -111,33 +110,70 @@ func (b *Book) Apply(e *event.Envelope) bool {
 	}
 }
 
-func (b *Book) applySnapshot(s *event.SnapshotEvent) {
-	b.Levels[Bids].N = 0
-	b.Levels[Asks].N = 0
-	for i := 0; i < int(s.NBids); i++ {
-		if s.Bids[i].Qty > 0 {
-			b.Levels[Bids].P[b.Levels[Bids].N] = s.Bids[i].Price
-			b.Levels[Bids].Q[b.Levels[Bids].N] = s.Bids[i].Qty
-			b.Levels[Bids].N++
-		}
+// applySnapshot replaces both sides. It returns false when the snapshot is not
+// a trustworthy book state (unsorted side, duplicate price, crossed touch); the
+// book then goes stale and waits for the next snapshot.
+func (b *Book) applySnapshot(s *event.SnapshotEvent) bool {
+	// Validate into scratch arrays first, then commit, so a rejected snapshot
+	// leaves the previous book (and its last good sequence) in place rather
+	// than replacing it with a half-built side.
+	var bids, asks Levels
+	ok := appendLevels(&bids, s.Bids[:s.NBids], true) &&
+		appendLevels(&asks, s.Asks[:s.NAsks], false)
+	if ok && bids.N > 0 && asks.N > 0 && bids.P[0] >= asks.P[0] {
+		// A snapshot whose touch is crossed cannot be a real book state; it
+		// means the snapshot was truncated or assembled from inconsistent
+		// data. Refuse it rather than letting the feature engine divide by a
+		// negative spread.
+		ok = false
 	}
-	for i := 0; i < int(s.NAsks); i++ {
-		if s.Asks[i].Qty > 0 {
-			b.Levels[Asks].P[b.Levels[Asks].N] = s.Asks[i].Price
-			b.Levels[Asks].Q[b.Levels[Asks].N] = s.Asks[i].Qty
-			b.Levels[Asks].N++
-		}
+	if !ok {
+		b.LastSeq = s.Sequence
+		b.Status = StatusStale
+		b.Ready = false
+		b.Gaps++
+		return false
 	}
-	b.Ready = b.Levels[Bids].N > 0 && b.Levels[Asks].N > 0
+	b.Levels[Bids] = bids
+	b.Levels[Asks] = asks
+	b.Ready = true
 	b.LastSeq = s.Sequence
 	b.snapSeq = s.Sequence
 	b.Anchored = true
 	b.Snapshots++
-	if b.Ready {
-		b.Status = StatusLive
-	} else {
-		b.Status = StatusUninit
+	b.Status = StatusLive
+	return true
+}
+
+// appendLevels copies a snapshot side, skipping empty (zero-size) levels, and
+// reports whether the result is strictly ordered (descending for bids). A
+// snapshot that is unsorted, carries a duplicate price or a negative size is
+// rejected: silently re-sorting would hide a corrupt capture, a duplicate
+// would double-count the level in every depth-weighted feature, and a negative
+// size is not a quantity at all.
+func appendLevels(L *Levels, src []event.Level, descending bool) bool {
+	n := 0
+	for i := range src {
+		if src[i].Qty < 0 {
+			return false
+		}
+		if src[i].Qty == 0 {
+			continue
+		}
+		if n == event.MaxLevels {
+			break
+		}
+		for j := 0; j < n; j++ {
+			if L.P[j] == src[i].Price {
+				return false
+			}
+		}
+		L.P[n] = src[i].Price
+		L.Q[n] = src[i].Qty
+		n++
 	}
+	L.N = uint8(n)
+	return strictlyOrdered(L, descending)
 }
 
 func (b *Book) applyDepth(d *event.DepthEvent) bool {
@@ -164,10 +200,12 @@ func (b *Book) applyDepth(d *event.DepthEvent) bool {
 		return false
 	}
 	L := &b.Levels[side]
-	// Updates may arrive after trades on the same price; apply them all. If
-	// the book is not strictly ordered afterwards, rebuild it in place.
+	// The whole batch is applied to the side at once, or not at all: an update
+	// naming an invalid level rejects the batch and leaves the book untouched.
+	// The side is left strictly ordered by construction, so no sort is needed.
 	if !applyLevels(L, d.Updates[:d.NUpdates], side == Bids) {
-		sortLevels(L, side == Bids)
+		b.fail(d.Sequence)
+		return false
 	}
 	if L.N == 0 || b.Levels[Bids].N == 0 || b.Levels[Asks].N == 0 {
 		b.Ready = false
@@ -197,77 +235,6 @@ func (b *Book) fail(seq uint64) {
 	b.Ready = false
 	if seq > b.LastSeq {
 		b.LastSeq = seq
-	}
-}
-
-// applyLevels applies absolute quantity updates (qty 0 removes a level). It
-// returns false when the side is no longer strictly price-ordered.
-func applyLevels(L *Levels, ups []event.Level, descending bool) bool {
-	for i := range ups {
-		lv := &ups[i]
-		idx := -1
-		for j := 0; j < int(L.N); j++ {
-			if L.P[j] == lv.Price {
-				idx = j
-				break
-			}
-		}
-		switch {
-		case lv.Qty == 0:
-			if idx >= 0 {
-				copy(L.P[idx:], L.P[idx+1:L.N])
-				copy(L.Q[idx:], L.Q[idx+1:L.N])
-				L.N--
-			}
-		case idx >= 0:
-			L.Q[idx] = lv.Qty
-		default:
-			if int(L.N) == event.MaxLevels {
-				continue // deeper than L20
-			}
-			L.P[L.N] = lv.Price
-			L.Q[L.N] = lv.Qty
-			L.N++
-			if !ordered(L, descending) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func ordered(L *Levels, descending bool) bool {
-	for i := 1; i < int(L.N); i++ {
-		if descending {
-			if L.P[i] >= L.P[i-1] {
-				return false
-			}
-		} else if L.P[i] <= L.P[i-1] {
-			return false
-		}
-	}
-	return true
-}
-
-// sortLevels insertion-sorts one side; at most 20 levels.
-func sortLevels(L *Levels, descending bool) {
-	for i := 1; i < int(L.N); i++ {
-		p, q := L.P[i], L.Q[i]
-		j := i - 1
-		for j >= 0 {
-			if descending {
-				if L.P[j] > p {
-					break
-				}
-			} else if L.P[j] < p {
-				break
-			}
-			L.P[j+1] = L.P[j]
-			L.Q[j+1] = L.Q[j]
-			j--
-		}
-		L.P[j+1] = p
-		L.Q[j+1] = q
 	}
 }
 

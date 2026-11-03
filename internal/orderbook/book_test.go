@@ -122,12 +122,22 @@ func TestResyncFromSnapshot(t *testing.T) {
 	}
 }
 
-func TestSnapshotWithNegativeUpsStaysLive(t *testing.T) {
+func TestSnapshotWithNegativeQtyRejected(t *testing.T) {
 	b := &Book{}
 	e := snapshot(1, []event.Level{level(10, 1), {Price: event.PriceInt(9), Qty: -5}}, []event.Level{level(11, 1)})
-	b.Apply(e)
-	if b.LevelsOf(Bids).N != 1 {
-		t.Fatalf("negative ups level kept: %+v", b.LevelsOf(Bids))
+	if b.Apply(e) {
+		t.Fatal("snapshot with a negative size accepted")
+	}
+	if b.Ready || b.Gaps != 1 {
+		t.Fatalf("book ready=%v gaps=%d after a corrupt snapshot", b.Ready, b.Gaps)
+	}
+	// A zero-size level is not a corrupt level, it is an empty slot: skip it.
+	b = &Book{}
+	if !b.Apply(snapshot(1, []event.Level{level(10, 1), level(9, 0)}, []event.Level{level(11, 1)})) {
+		t.Fatal("snapshot with a zero-size level rejected")
+	}
+	if n := b.LevelsOf(Bids).N; n != 1 {
+		t.Fatalf("bids = %d levels, want 1", n)
 	}
 }
 
@@ -142,9 +152,10 @@ func TestCrossedBookStales(t *testing.T) {
 	}
 }
 
-func TestUnorderedInsertIsResorted(t *testing.T) {
+func TestUnorderedBatchStaysOrdered(t *testing.T) {
 	b := standardBook(t)
-	// Append deeper levels out of order in one batch.
+	// Deeper levels arrive out of order within one batch; they must be placed
+	// by rank (no sort pass is needed, but the invariant is the same).
 	if !b.Apply(depth(101, event.SideSell, level(100.5, 1), level(100.3, 1), level(100.4, 1))) {
 		t.Fatal("batch rejected")
 	}
