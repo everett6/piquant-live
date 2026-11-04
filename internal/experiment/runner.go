@@ -95,6 +95,12 @@ func InstantiateModel(modelName string, lambda float64, params map[string]any) C
 		return common.NewPerpLiquidationReversionModel(lambda)
 	case "rough_signature_ofi":
 		return common.NewRoughSignatureOFIModel(lambda)
+	case "cartea_jaimungal":
+		gamma := 0.05
+		if g, ok := params["gamma"].(float64); ok && g > 0 {
+			gamma = g
+		}
+		return common.NewCarteaJaimungalMM(gamma, 1.5, 2.0, 0.001, 0.01, 0.5, 60.0)
 	default:
 		return &common.Ridge{Lam: lambda}
 	}

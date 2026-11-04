@@ -398,10 +398,12 @@ const indexHTML = `<!doctype html>
                 <option value="regime_ensemble">BOCPD Regime-Switching Ensemble (Ridge+ENet+GLFT)</option>
                 <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
                 <option value="rough_signature_ofi">Rough Path Signature OFI &amp; Kyle Lambda</option>
+                <option value="cartea_jaimungal">Cartea-Jaimungal HJB Target Inventory &amp; Adverse Selection</option>
               </select>
               <select id="exp-model" style="display:none" aria-hidden="true">
                 <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
                 <option value="rough_signature_ofi">Rough Path Signature OFI &amp; Kyle Lambda</option>
+                <option value="cartea_jaimungal">Cartea-Jaimungal HJB Target Inventory &amp; Adverse Selection</option>
               </select>
             </div>
 
@@ -542,6 +544,7 @@ const indexHTML = `<!doctype html>
               <option value="regime_ensemble">BOCPD Regime-Switching Ensemble</option>
               <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
               <option value="rough_signature_ofi">Rough Path Signature OFI &amp; Kyle Lambda</option>
+              <option value="cartea_jaimungal">Cartea-Jaimungal HJB Target Inventory &amp; Adverse Selection</option>
             </select>
           </div>
           <div class="form-group">

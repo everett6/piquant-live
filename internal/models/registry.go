@@ -162,6 +162,20 @@ func Registry() []ModelSpec {
 			Limitations: "Depth-2 truncation omits third-order rough path iterated integrals during multi-minute regime shifts.",
 			Calibration: "Orthogonalized L2 residual projection on standardized Depth-2 Lévy area features with Kyle impact elasticity.",
 		},
+		// 10. Minutes Horizon: Cartea-Jaimungal HJB Target Inventory & Adverse Selection
+		{
+			ID:          "cartea_jaimungal",
+			Name:        "Cartea-Jaimungal HJB Market Maker",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"spread_bps", "ofi_1s", "vol_30s_bps", "imb_l1", "micro_dev"},
+			Algorithm:   "Cartea-Jaimungal Closed-Form HJB Target Inventory Penalty & Adverse Selection OFI Skew",
+			Version:     "v1.0.0",
+			Description: "Calculates optimal reservation price and asymptotic half-spreads accounting for running inventory penalty, terminal inventory target deviation, and market impact.",
+			Assumptions: "Quadratic running and terminal inventory penalties; linear adverse selection market impact from OFI.",
+			Limitations: "Assumes continuous Poisson fill intensities without discrete queue priority jumps.",
+			Calibration: "Calibrated via running penalty phi, terminal penalty alpha, and liquidity intensity kappa.",
+		},
 		// 8. Hours Horizon: Volatility Regime Filter
 		{
 			ID:          "vol_regime_ridge",
