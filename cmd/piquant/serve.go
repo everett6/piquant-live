@@ -10,8 +10,10 @@ import (
 	"sync"
 	"time"
 
+	"piquant-live/internal/config"
 	"piquant-live/internal/dashboard"
 	"piquant-live/internal/discovery"
+	"piquant-live/internal/experiment"
 	"piquant-live/internal/secrets"
 )
 
@@ -189,19 +191,47 @@ func runAgent(ctx context.Context, args []string) error {
 		defer a.Stop()
 	}
 
-	engine := newEngineState()
+	dDir := f.dataDir
+	if dDir == "" {
+		dDir = defaultDataDir()
+	}
+	_ = os.MkdirAll(dDir, 0o755)
+	_ = experiment.GenerateStandardDatasets(dDir)
+
+	cfg, err := config.Load("configs/production.yaml")
+	if err != nil {
+		cfg, _ = config.Load("configs/dev.yaml")
+	}
+	if cfg == nil {
+		cfg = &config.Config{
+			Symbols: []config.Symbol{
+				{Name: "BTC", VenueSym: "BTCUSDT", Venue: "binance"},
+				{Name: "ETH", VenueSym: "ETHUSDT", Venue: "binance"},
+			},
+			Targets: map[string][]string{
+				"BTC": {"binance:BTCUSDT"},
+				"ETH": {"binance:ETHUSDT"},
+			},
+		}
+	}
+
+	mgr, err := experiment.NewManager(dDir, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot initialize experiment manager: %v\n", err)
+	}
+
 	srv, err := dashboard.New(dashboard.Options{
-		Addr:         f.addr,
-		Token:        storeToken(store, secrets.DashboardToken),
-		PeerToken:    storeToken(store, secrets.PeerToken),
-		Keys:         store,
-		LogFiles:     logFiles(logDir),
-		DataDirs:     dataDirs(f.dataDir),
-		Role:         discovery.RoleEngine,
-		App:          f.app,
-		Discover:     browser,
-		Instance:     instance,
-		EngineStatus: engine.Snapshot,
+		Addr:      f.addr,
+		Token:     storeToken(store, secrets.DashboardToken),
+		PeerToken: storeToken(store, secrets.PeerToken),
+		Keys:      store,
+		LogFiles:  logFiles(logDir),
+		DataDirs:  dataDirs(f.dataDir),
+		Role:      discovery.RoleEngine,
+		App:       f.app,
+		Discover:  browser,
+		Instance:  instance,
+		Manager:   mgr,
 	})
 	if err != nil {
 		return err

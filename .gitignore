@@ -1,0 +1,19 @@
+# Binaries
+bin/
+*.exe
+*.test
+*.prof
+
+# Logs and runtime data
+*.log
+logs/
+data/
+piquant-data/
+.local/
+
+# OS and Editor artifacts
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

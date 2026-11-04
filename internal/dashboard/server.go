@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"piquant-live/internal/discovery"
+	"piquant-live/internal/experiment"
 	"piquant-live/internal/secrets"
 	"piquant-live/internal/telemetry"
 )
@@ -53,20 +54,26 @@ const Version = 1
 
 // Status is what Agent reports and what the dashboard renders.
 type Status struct {
-	V         int            `json:"v"`
-	Role      discovery.Role `json:"role"`
-	Instance  string         `json:"instance"`
-	Name      string         `json:"name"`
-	App       string         `json:"app"`
-	StartedAt time.Time      `json:"started_at"`
-	Now       time.Time      `json:"now"`
-	Host      telemetry.Host `json:"host"`
-	Proc      telemetry.Proc `json:"proc"`
-	Engine    EngineState    `json:"engine"`
-	Peers     []PeerStatus   `json:"peers,omitempty"`
-	Jobs      []Job          `json:"jobs,omitempty"`
-	Warnings  []string       `json:"warnings,omitempty"`
-	Checks    []Check        `json:"checks,omitempty"`
+	V           int                           `json:"v"`
+	Role        discovery.Role                `json:"role"`
+	Instance    string                        `json:"instance"`
+	Name        string                        `json:"name"`
+	App         string                        `json:"app"`
+	StartedAt   time.Time                     `json:"started_at"`
+	Now         time.Time                     `json:"now"`
+	Host        telemetry.Host                `json:"host"`
+	Proc        telemetry.Proc                `json:"proc"`
+	Engine      EngineState                   `json:"engine"`
+	Peers       []PeerStatus                  `json:"peers,omitempty"`
+	Jobs        []Job                         `json:"jobs,omitempty"`
+	Warnings    []string                      `json:"warnings,omitempty"`
+	Checks      []Check                       `json:"checks,omitempty"`
+	PeerEngine  *Status                       `json:"peer_engine,omitempty"`
+	Activity    []string                      `json:"activity,omitempty"`
+	Mode        string                        `json:"mode,omitempty"`
+	Experiments []*experiment.Experiment      `json:"experiments,omitempty"`
+	Searches    []*experiment.ParameterSearch `json:"searches,omitempty"`
+	Datasets    []experiment.DatasetMeta      `json:"datasets,omitempty"`
 }
 
 // EngineState describes the research engine's current activity on the Pi 5.
@@ -149,6 +156,10 @@ type Options struct {
 	Now func() time.Time
 	// ProbeTimeout bounds a health probe to a peer. Zero uses 2 s.
 	ProbeTimeout time.Duration
+	// Manager coordinates experiments and persistence.
+	Manager *experiment.Manager
+	// InitialMode: "simple" (default) or "advanced".
+	Mode string
 }
 
 // Server is the dashboard HTTP server.
@@ -164,6 +175,12 @@ type Server struct {
 
 	mu   sync.Mutex
 	last telemetry.Sample
+
+	modeMu         sync.RWMutex
+	mode           string
+	peerMu         sync.RWMutex
+	lastPeerStatus *Status
+	lastPeerFetch  time.Time
 }
 
 // New validates options and builds a server. It does not listen yet.
@@ -189,6 +206,10 @@ func New(opts Options) (*Server, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	mode := opts.Mode
+	if mode == "" {
+		mode = "simple"
+	}
 	s := &Server{
 		opts:   opts,
 		tel:    telemetry.New(opts.DataDirs...),
@@ -197,6 +218,7 @@ func New(opts Options) (*Server, error) {
 		logger: log.New(os.Stderr, "dashboard: ", log.LstdFlags),
 		sess:   newSessionStore(opts.SessionTTL),
 		lim:    newLoginLimiter(5, 15*time.Minute),
+		mode:   mode,
 	}
 	s.routes()
 	return s, nil
@@ -261,10 +283,49 @@ func (s *Server) Status(ctx context.Context) Status {
 		Engine:    EngineState{Phase: "idle"},
 	}
 	st.Instance = s.opts.Instance
+	st.Mode = s.Mode()
+
+	if s.opts.Manager != nil {
+		st.Activity = s.opts.Manager.ActivityEvents()
+		st.Experiments = s.opts.Manager.ListExperiments()
+		st.Searches = s.opts.Manager.ListSearches()
+		st.Datasets = s.opts.Manager.ListDatasets()
+
+		activeID, activeProg, activeStage, active := s.opts.Manager.ActiveJob()
+		if active {
+			st.Engine = EngineState{
+				Running:  true,
+				Phase:    activeStage,
+				Progress: activeProg,
+				Message:  fmt.Sprintf("Active: %s (%s)", activeID, activeStage),
+				Updated:  time.Now(),
+			}
+		}
+
+		// Sync jobs view
+		st.Jobs = nil
+		for _, exp := range st.Experiments {
+			res := ""
+			if exp.State == experiment.StateCompleted {
+				res = fmt.Sprintf("Val MAE: %.2f bps", exp.ValMetrics.MAE)
+			}
+			st.Jobs = append(st.Jobs, Job{
+				ID:       exp.ID,
+				Name:     exp.Name,
+				State:    string(exp.State),
+				Started:  exp.StartedAt,
+				Finished: exp.FinishedAt,
+				Progress: exp.Progress,
+				Result:   res,
+				Error:    exp.Error,
+			})
+		}
+	}
+
 	if s.opts.EngineStatus != nil {
 		st.Engine = s.opts.EngineStatus()
 	}
-	if s.opts.Jobs != nil {
+	if s.opts.Jobs != nil && len(st.Jobs) == 0 {
 		st.Jobs = s.opts.Jobs()
 	}
 	st.Peers = append(st.Peers, s.peers(ctx)...)
@@ -274,6 +335,33 @@ func (s *Server) Status(ctx context.Context) Status {
 		}
 		return st.Peers[i].Name < st.Peers[j].Name
 	})
+
+	// If running on Pi 3B dashboard, poll the discovered Pi 5 engine peer
+	if s.opts.Role == discovery.RoleDashboard {
+		peerSt := s.syncPeerEngine(ctx, st.Peers)
+		if peerSt != nil {
+			st.PeerEngine = peerSt
+			if len(st.Experiments) == 0 {
+				st.Experiments = peerSt.Experiments
+			}
+			if len(st.Searches) == 0 {
+				st.Searches = peerSt.Searches
+			}
+			if len(st.Datasets) == 0 {
+				st.Datasets = peerSt.Datasets
+			}
+			if len(st.Activity) == 0 {
+				st.Activity = peerSt.Activity
+			}
+			if !st.Engine.Running && peerSt.Engine.Running {
+				st.Engine = peerSt.Engine
+			}
+			if len(st.Jobs) == 0 {
+				st.Jobs = peerSt.Jobs
+			}
+		}
+	}
+
 	st.Checks = s.checks(st)
 	return st
 }
@@ -463,4 +551,68 @@ func defaultLogs(dir string) []string {
 		out = append(out, filepath.Join(dir, n))
 	}
 	return out
+}
+
+func (s *Server) syncPeerEngine(ctx context.Context, peers []PeerStatus) *Status {
+	var enginePeer *PeerStatus
+	for i := range peers {
+		if peers[i].Role == discovery.RoleEngine && peers[i].Live {
+			enginePeer = &peers[i]
+			break
+		}
+	}
+	if enginePeer == nil {
+		return nil
+	}
+
+	s.peerMu.Lock()
+	defer s.peerMu.Unlock()
+	if s.lastPeerStatus != nil && time.Since(s.lastPeerFetch) < 2*time.Second {
+		return s.lastPeerStatus
+	}
+
+	endpoint := "http://" + enginePeer.Addr + "/api/status"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return s.lastPeerStatus
+	}
+	if s.opts.PeerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.opts.PeerToken)
+	}
+	client := &http.Client{Timeout: s.opts.ProbeTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return s.lastPeerStatus
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return s.lastPeerStatus
+	}
+	var remote Status
+	if err := json.NewDecoder(resp.Body).Decode(&remote); err == nil {
+		s.lastPeerStatus = &remote
+		s.lastPeerFetch = time.Now()
+	}
+	return s.lastPeerStatus
+}
+
+// Mode returns current interface mode ("simple" or "advanced").
+func (s *Server) Mode() string {
+	s.modeMu.RLock()
+	defer s.modeMu.RUnlock()
+	if s.mode == "" {
+		return "simple"
+	}
+	return s.mode
+}
+
+// SetMode toggles simple or advanced mode.
+func (s *Server) SetMode(m string) {
+	s.modeMu.Lock()
+	defer s.modeMu.Unlock()
+	if m == "advanced" {
+		s.mode = "advanced"
+	} else {
+		s.mode = "simple"
+	}
 }

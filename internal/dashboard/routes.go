@@ -14,10 +14,14 @@ import (
 	"strings"
 	"time"
 
+	"piquant-live/internal/discovery"
+	"piquant-live/internal/experiment"
+	"piquant-live/internal/models"
+	"piquant-live/internal/models/common"
 	"piquant-live/internal/secrets"
 )
 
-// routes registers every handler. All of them read.
+// routes registers every handler.
 func (s *Server) routes() {
 	s.mux.HandleFunc("/", s.handleIndex)
 	s.mux.HandleFunc("/login", s.handleLogin)
@@ -27,6 +31,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/events", s.handleEvents)
 	s.mux.HandleFunc("/api/logs", s.handleLogs)
 	s.mux.HandleFunc("/api/peers", s.handlePeers)
+	s.mux.HandleFunc("/api/experiments", s.handleExperiments)
+	s.mux.HandleFunc("/api/experiments/run", s.handleExperimentRun)
+	s.mux.HandleFunc("/api/experiments/cancel", s.handleExperimentCancel)
+	s.mux.HandleFunc("/api/searches", s.handleSearches)
+	s.mux.HandleFunc("/api/searches/run", s.handleSearchRun)
+	s.mux.HandleFunc("/api/models", s.handleModels)
+	s.mux.HandleFunc("/api/datasets", s.handleDatasets)
+	s.mux.HandleFunc("/api/datasets/generate", s.handleDatasetGenerate)
+	s.mux.HandleFunc("/api/mode", s.handleMode)
 }
 
 // handleHealth is the unauthenticated-by-token liveness probe peers use. It
@@ -380,4 +393,371 @@ func localAddrsForDisplay() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func (s *Server) handleExperiments(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if s.opts.Manager != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"experiments": s.opts.Manager.ListExperiments()})
+		return
+	}
+	if s.proxyToEngine(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"experiments": []*experiment.Experiment{}})
+}
+
+type runExperimentReq struct {
+	Name       string         `json:"name"`
+	Model      string         `json:"model"`
+	FeatureSet string         `json:"feature_set"`
+	Dataset    string         `json:"dataset"`
+	Horizon    string         `json:"horizon"`
+	Symbol     string         `json:"symbol"`
+	Params     map[string]any `json:"params"`
+}
+
+func (s *Server) handleExperimentRun(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.opts.Manager == nil {
+		if s.proxyToEngine(w, r) {
+			return
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "research engine peer unavailable"})
+		return
+	}
+
+	var req runExperimentReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json: " + err.Error()})
+		return
+	}
+
+	h, err := common.ParseHorizon(req.Horizon)
+	if err != nil {
+		h = common.H30s
+	}
+	if req.Model == "" {
+		req.Model = "mlofi_ridge"
+	}
+	if req.FeatureSet == "" {
+		req.FeatureSet = "multi"
+	}
+	if req.Symbol == "" {
+		req.Symbol = "BTCUSDT"
+	}
+
+	datasetPath := req.Dataset
+	if !filepath.IsAbs(datasetPath) && len(s.opts.DataDirs) > 0 {
+		datasetPath = filepath.Join(s.opts.DataDirs[0], datasetPath)
+	}
+
+	feas := s.opts.Manager.ValidateFeasibility(datasetPath, h)
+	if !feas.Feasible {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "feasibility check failed", "details": feas.Errors})
+		return
+	}
+
+	exp := &experiment.Experiment{
+		ID:         fmt.Sprintf("exp-%d", time.Now().Unix()),
+		Name:       req.Name,
+		Model:      req.Model,
+		FeatureSet: req.FeatureSet,
+		Dataset:    datasetPath,
+		Horizon:    h,
+		Symbol:     req.Symbol,
+		Params:     req.Params,
+		Split:      experiment.DefaultSplit(h),
+		WorkerNode: "pi5",
+	}
+	if exp.Name == "" {
+		exp.Name = fmt.Sprintf("%s on %s (%s)", exp.Model, filepath.Base(datasetPath), h)
+	}
+
+	if err := s.opts.Manager.LaunchExperiment(exp); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": exp.ID})
+}
+
+func (s *Server) handleExperimentCancel(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if s.opts.Manager == nil {
+		if s.proxyToEngine(w, r) {
+			return
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "research engine peer unavailable"})
+		return
+	}
+	if err := s.opts.Manager.CancelActive(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleSearches(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if s.opts.Manager != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"searches": s.opts.Manager.ListSearches()})
+		return
+	}
+	if s.proxyToEngine(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"searches": []*experiment.ParameterSearch{}})
+}
+
+type runSearchReq struct {
+	Name        string    `json:"name"`
+	Model       string    `json:"model"`
+	Dataset     string    `json:"dataset"`
+	Horizon     string    `json:"horizon"`
+	Symbol      string    `json:"symbol"`
+	FeatureSets []string  `json:"feature_sets"`
+	Lambdas     []float64 `json:"lambdas"`
+}
+
+func (s *Server) handleSearchRun(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.opts.Manager == nil {
+		if s.proxyToEngine(w, r) {
+			return
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "research engine peer unavailable"})
+		return
+	}
+
+	var req runSearchReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json: " + err.Error()})
+		return
+	}
+
+	h, err := common.ParseHorizon(req.Horizon)
+	if err != nil {
+		h = common.H30s
+	}
+	datasetPath := req.Dataset
+	if !filepath.IsAbs(datasetPath) && len(s.opts.DataDirs) > 0 {
+		datasetPath = filepath.Join(s.opts.DataDirs[0], datasetPath)
+	}
+
+	ps := &experiment.ParameterSearch{
+		ID:      fmt.Sprintf("search-%d", time.Now().Unix()),
+		Name:    req.Name,
+		Model:   req.Model,
+		Dataset: datasetPath,
+		Horizon: h,
+		Symbol:  req.Symbol,
+	}
+	if ps.Name == "" {
+		ps.Name = fmt.Sprintf("Grid Search on %s (%s)", filepath.Base(datasetPath), h)
+	}
+	if ps.Model == "" {
+		ps.Model = "mlofi_ridge"
+	}
+	if ps.Symbol == "" {
+		ps.Symbol = "BTCUSDT"
+	}
+
+	space := experiment.DefaultSearchSpace()
+	if len(req.FeatureSets) > 0 {
+		space.FeatureSets = req.FeatureSets
+	}
+	if len(req.Lambdas) > 0 {
+		space.Lambdas = req.Lambdas
+	}
+
+	if err := s.opts.Manager.LaunchSearch(ps, space); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": ps.ID})
+}
+
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"models":       models.Registry(),
+		"feature_sets": models.AvailableFeatureSets(),
+		"features":     models.FeatureNames(),
+	})
+}
+
+func (s *Server) handleDatasets(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if s.opts.Manager != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"datasets": s.opts.Manager.ListDatasets()})
+		return
+	}
+	if s.proxyToEngine(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"datasets": []experiment.DatasetMeta{}})
+}
+
+type genDatasetReq struct {
+	Instrument string  `json:"instrument"`
+	Records    int     `json:"records"`
+	StartPrice float64 `json:"start_price"`
+}
+
+func (s *Server) handleDatasetGenerate(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.opts.Manager == nil {
+		if s.proxyToEngine(w, r) {
+			return
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "research engine peer unavailable"})
+		return
+	}
+
+	var req genDatasetReq
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Instrument == "" {
+		req.Instrument = "BTCUSDT"
+	}
+	if req.Records <= 0 {
+		req.Records = 3000
+	}
+	if req.StartPrice <= 0 {
+		if strings.Contains(req.Instrument, "ETH") {
+			req.StartPrice = 3400.0
+		} else {
+			req.StartPrice = 68000.0
+		}
+	}
+
+	dataDir := "data"
+	if len(s.opts.DataDirs) > 0 {
+		dataDir = s.opts.DataDirs[0]
+	}
+	_ = os.MkdirAll(dataDir, 0o755)
+
+	filename := fmt.Sprintf("%s_sample_%d.jsonl", strings.ToLower(req.Instrument), time.Now().Unix())
+	targetPath := filepath.Join(dataDir, filename)
+
+	tick := 0.1
+	if strings.Contains(req.Instrument, "ETH") {
+		tick = 0.01
+	}
+
+	if err := experiment.GenerateSynthetic(targetPath, experiment.SyntheticOptions{
+		Venue:      "binance",
+		Instrument: req.Instrument,
+		Records:    req.Records,
+		StartPrice: req.StartPrice,
+		TickSize:   tick,
+		Seed:       time.Now().UnixNano(),
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.opts.Manager.LogActivity(fmt.Sprintf("Generated new dataset: %s (%d records).", filename, req.Records))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "filename": filename, "path": targetPath})
+}
+
+func (s *Server) handleMode(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if r.Method == http.MethodPost {
+		var req struct {
+			Mode string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err == nil && req.Mode != "" {
+			s.SetMode(req.Mode)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"mode": s.Mode()})
+}
+
+// proxyToEngine forwards a request from Pi 3B dashboard to the Pi 5 research engine.
+func (s *Server) proxyToEngine(w http.ResponseWriter, r *http.Request) bool {
+	if s.opts.Discover == nil {
+		return false
+	}
+	var engineAddr string
+	for _, p := range s.opts.Discover.Peers() {
+		if p.Role == discovery.RoleEngine {
+			engineAddr = p.Addr
+			break
+		}
+	}
+	if engineAddr == "" {
+		return false
+	}
+
+	targetURL := "http://" + engineAddr + r.URL.Path
+	if r.URL.RawQuery != "" {
+		targetURL += "?" + r.URL.RawQuery
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+	if s.opts.PeerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.opts.PeerToken)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	for k, vv := range resp.Header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+	return true
 }
