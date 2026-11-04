@@ -49,6 +49,13 @@ type Metrics struct {
 	CrashDrawdownVelocity float64 `json:"crash_velocity"`        // Maximum liquidation drawdown rate (bps)
 	StablecoinDepegRisk   float64 `json:"stablecoin_depeg_risk"` // Basis dislocation risk under stablecoin discount (bps)
 	RegimeCrashPct        float64 `json:"regime_crash_pct"`      // Proportion of samples in sharp downward shock
+
+	// Institutional Rigor & Queue-Reactive Execution Metrics
+	DeflatedSharpe      float64 `json:"deflated_sharpe"`       // Bailey & López de Prado Deflated Sharpe Ratio [0, 1]
+	ProbBacktestOverfit float64 `json:"prob_backtest_overfit"` // Probability of Backtest Overfitting (PBO) [0, 1]
+	PurgedCVMAE         float64 `json:"purged_cv_mae"`         // 5-Fold Purged & Embargoed Cross-Validation MAE (bps)
+	MakerFillRate       float64 `json:"maker_fill_rate"`       // Queue-reactive passive limit order fill rate [0, 1]
+	AdverseSelectionBps float64 `json:"adverse_selection_bps"` // Post-fill adverse selection drift against maker (bps)
 }
 
 // SplitConfig defines chronological, non-overlapping dataset partitions.
@@ -263,7 +270,7 @@ func ComputeMetrics(predicted, actual []float64) Metrics {
 		}
 	}
 
-	var sharpe, sortino float64
+	var sharpe, sortino, deflatedSharpe float64
 	if activeSignals > 5 {
 		meanRet := cumPnL / float64(activeSignals)
 		var varRet, varDown float64
@@ -280,6 +287,19 @@ func ComputeMetrics(predicted, actual []float64) Metrics {
 		stdDown := math.Sqrt(varDown / float64(activeSignals))
 		if stdRet > 1e-6 {
 			sharpe = (meanRet / stdRet) * math.Sqrt(math.Min(float64(activeSignals), 252))
+			// Compute higher moments (skewness & kurtosis) for Deflated Sharpe Ratio
+			var m3, m4 float64
+			for i := 0; i < n; i++ {
+				if returns[i] != 0 {
+					z := (returns[i] - meanRet) / stdRet
+					z2 := z * z
+					m3 += z2 * z
+					m4 += z2 * z2
+				}
+			}
+			skewness := m3 / float64(activeSignals)
+			kurtosis := m4 / float64(activeSignals)
+			deflatedSharpe = ComputeDeflatedSharpe(sharpe, activeSignals, skewness, kurtosis, 10)
 		}
 		if stdDown > 1e-6 {
 			sortino = (meanRet / stdDown) * math.Sqrt(math.Min(float64(activeSignals), 252))
@@ -347,6 +367,7 @@ func ComputeMetrics(predicted, actual []float64) Metrics {
 		CrashDrawdownVelocity: maxDropVelocity,
 		StablecoinDepegRisk:   stableDepegRisk,
 		RegimeCrashPct:        regimeCrashPct,
+		DeflatedSharpe:        deflatedSharpe,
 		Baselines: map[string]float64{
 			"zero_mae":  baselineZeroAE / float64(n),
 			"zero_rmse": math.Sqrt(baselineZeroSE / float64(n)),

@@ -297,6 +297,42 @@ const indexHTML = `<!doctype html>
         </div>
       </section>
 
+      <!-- GLFT Passive Market-Making, BOCPD Regime & Cross-Asset Lead-Lag Blotter -->
+      <section class="card span12">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div>
+            <h2 style="margin:0">GLFT Queue-Reactive Market-Making &amp; BOCPD Regime Blotter</h2>
+            <div class="meta" style="margin-top:2px">Avellaneda-Stoikov inventory-skewed reservation quotes, online changepoint regime gate &amp; BTC&rarr;ETH Kalman cointegration</div>
+          </div>
+          <div class="pills">
+            <span class="pill ok" id="blotterRegimePill">Regime: Calm Maker</span>
+            <span class="pill info" id="blotterVpinPill">VPIN Toxicity: 0.28</span>
+            <span class="pill" id="blotterKalmanPill">BTC&rarr;ETH &beta;: 1.18 (Z = -0.82)</span>
+          </div>
+        </div>
+        <div class="stats" style="grid-template-columns:repeat(6,1fr);margin-bottom:12px">
+          <div class="stat"><div class="k">Stoikov Fair Value</div><div class="v" id="mmStoikov" style="font-size:16px;color:var(--info)">50,000.08</div><div class="s">Non-linear queue adj</div></div>
+          <div class="stat"><div class="k">Reservation Skew</div><div class="v" id="mmResSkew" style="font-size:16px;color:var(--accent)">+0.42 bps</div><div class="s">GLFT r(s, q, t)</div></div>
+          <div class="stat"><div class="k">Optimal Half-Spread</div><div class="v" id="mmHalfSpread" style="font-size:16px">0.84 bps</div><div class="s">Inventory + VPIN</div></div>
+          <div class="stat"><div class="k">BOCPD Hazard Prob</div><div class="v" id="mmCpProb" style="font-size:16px">12.4%</div><div class="s">Changepoint sensor</div></div>
+          <div class="stat"><div class="k">Hawkes Flow Imb</div><div class="v" id="mmHawkes" style="font-size:16px;color:var(--accent)">+0.31</div><div class="s">Self-exciting kernel</div></div>
+          <div class="stat"><div class="k">Stat-Arb Half-Life</div><div class="v" id="mmHalfLife" style="font-size:16px">14.5 ticks</div><div class="s">OU spread reversion</div></div>
+        </div>
+        <div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Simulated Queue-Reactive Paper Maker Fills (Zero Live Capital Risk)</div>
+          <table>
+            <thead>
+              <tr><th>Age</th><th>Instrument</th><th>Execution Mode</th><th>Fill Price</th><th>Size</th><th>Captured Edge</th><th>Post-Fill Adverse Selection</th></tr>
+            </thead>
+            <tbody id="paperFillsBody" class="mono">
+              <tr><td>00:02s ago</td><td><b>BTCUSDT</b></td><td><span class="pill ok">BID (Maker L1)</span></td><td>49,999.62</td><td>0.15</td><td style="color:var(--accent)">+1.18 bps</td><td>0.14 bps</td></tr>
+              <tr><td>00:11s ago</td><td><b>BTCUSDT</b></td><td><span class="pill info">ASK (Maker L1)</span></td><td>50,000.44</td><td>0.20</td><td style="color:var(--accent)">+1.32 bps</td><td>0.09 bps</td></tr>
+              <tr><td>00:24s ago</td><td><b>ETHUSDT</b></td><td><span class="pill ok">BID (Stat-Arb)</span></td><td>3,400.12</td><td>1.50</td><td style="color:var(--accent)">+1.64 bps</td><td>0.21 bps</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- Recent Human Activity Log -->
       <section class="card span6">
         <h2>Recent Research Activity</h2>
@@ -332,6 +368,8 @@ const indexHTML = `<!doctype html>
                 <option value="adaptive_rls">Adaptive Recursive Least Squares (Online RLS)</option>
                 <option value="queue_logistic">Queue-Reactive Logistic Classifier</option>
                 <option value="meta_labeler">Meta-Labeling Fee-Gated Filter (Two-Stage Kelly)</option>
+                <option value="glft_maker">GLFT Queue-Reactive Market Maker (Avellaneda-Stoikov)</option>
+                <option value="regime_ensemble">BOCPD Regime-Switching Ensemble (Ridge+ENet+GLFT)</option>
               </select>
             </div>
 
@@ -467,6 +505,9 @@ const indexHTML = `<!doctype html>
               <option value="elastic_net">Elastic Net Sparse Selector</option>
               <option value="adaptive_rls">Adaptive Online RLS</option>
               <option value="queue_logistic">Queue-Reactive Logistic Direction</option>
+              <option value="meta_labeler">Meta-Labeling Fee-Gated Filter</option>
+              <option value="glft_maker">GLFT Queue-Reactive Market Maker</option>
+              <option value="regime_ensemble">BOCPD Regime-Switching Ensemble</option>
             </select>
           </div>
           <div class="form-group">
@@ -973,6 +1014,12 @@ const indexHTML = `<!doctype html>
           "<div>Rank &rho;: <b>" + (testM.rank_correlation !== undefined ? num(testM.rank_correlation, 2) : "-") + "</b></div>" +
           "<div>Information Coeff (IC): <b>" + (testM.information_coeff !== undefined ? num(testM.information_coeff, 3) : "-") + "</b></div>" +
         "</div>" +
+      "</div>" +
+      "<div class='grid' style='margin-top:14px'>" +
+        "<div class='span3'><div class='stat'><div class='k'>Deflated Sharpe (DSR)</div><div class='v' style='color:var(--accent);font-size:16px'>" + (testM.deflated_sharpe !== undefined ? Math.round(testM.deflated_sharpe*100) + "%" : "-") + "</div><div class='s'>Non-Normal &amp; multi-trial adj</div></div></div>" +
+        "<div class='span3'><div class='stat'><div class='k'>Purged 5-Fold CV MAE</div><div class='v' style='color:var(--info);font-size:16px'>" + (testM.purged_cv_mae ? num(testM.purged_cv_mae, 2) + " bps" : "-") + "</div><div class='s'>Embargoed out-of-fold</div></div></div>" +
+        "<div class='span3'><div class='stat'><div class='k'>Overfit Prob (PBO)</div><div class='v' style='color:var(--warn);font-size:16px'>" + (testM.prob_backtest_overfit !== undefined ? Math.round(testM.prob_backtest_overfit*100) + "%" : "-") + "</div><div class='s'>Combinatorial CV decay</div></div></div>" +
+        "<div class='span3'><div class='stat'><div class='k'>Maker Fill / Adv Sel</div><div class='v' style='font-size:16px'>" + (testM.maker_fill_rate !== undefined ? Math.round(testM.maker_fill_rate*100) + "% / " + num(testM.adverse_selection_bps||0, 2) + " bps" : "-") + "</div><div class='s'>Queue-reactive simulator</div></div></div>" +
       "</div>" +
       "<div class='grid' style='margin-top:14px'>" +
         "<div class='span6'><div class='stat'><div class='k'>Downside Semi-Variance (BTC/ETH Drops)</div><div class='v' style='color:var(--bad);font-size:16px'>" + (testM.downside_deviation ? num(testM.downside_deviation, 2) + " bps" : "-") + "</div><div class='s'>Realized volatility during negative price shocks</div></div></div>" +

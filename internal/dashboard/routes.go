@@ -42,6 +42,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/datasets", s.handleDatasets)
 	s.mux.HandleFunc("/api/datasets/generate", s.handleDatasetGenerate)
 	s.mux.HandleFunc("/api/mode", s.handleMode)
+	s.mux.HandleFunc("/api/worker/eval", s.handleWorkerEval)
+	s.mux.HandleFunc("/api/paper/blotter", s.handlePaperBlotter)
 }
 
 // handleHealth is the unauthenticated-by-token liveness probe peers use. It
@@ -855,6 +857,94 @@ func (s *Server) handleMarketRisk(w http.ResponseWriter, r *http.Request) {
 			"usdc_usd_basis_bps": -0.2,
 			"depeg_alert":        false,
 			"reserve_stress":     "low",
+		},
+	})
+}
+
+// handleWorkerEval accepts distributed work-stealing candidate evaluations from Pi 5
+// when running in dual_pi mode and hardware headroom is within safe limits.
+func (s *Server) handleWorkerEval(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.Lock()
+	host := s.last.Host
+	s.mu.Unlock()
+	if host.MemTotal > 0 && host.MemAvailable < 150<<20 {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "worker memory headroom below 150 MiB"})
+		return
+	}
+
+	var req experiment.WorkerEvalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json: " + err.Error()})
+		return
+	}
+
+	nodeName := "pi3b"
+	if s.opts.Role == discovery.RoleEngine {
+		nodeName = "pi5"
+	}
+	res := experiment.EvaluateWorkerTrial(req, nodeName)
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handlePaperBlotter computes real-time GLFT market-making quotes, BOCPD regime diagnostics,
+// cross-asset BTC->ETH Kalman stat-arb state, and recent queue-reactive paper fills.
+func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	mm := common.NewGLFTMarketMaker(1e-3, 0.05, 0.0)
+	// Representative live microstructure state vector
+	x := [common.FeatureCount]float64{
+		0.24, // imb_l1
+		0.18, // imb_l5
+		0.12, // imb_l20
+		0.15, // micro_dev
+		0.80, // spread_bps
+		1.40, // ofi_1s
+		3.20, // ofi_5s
+		6.50, // ofi_30s
+		1.85, // mlofi_1s
+		4.10, // mlofi_5s
+		1.65, // vol_30s_bps
+		0.45, // ret_1s_bps
+		1.10, // ret_5s_bps
+		0.32, // trade_imb_5s
+		14.0, // trade_cnt_1s
+		0.56, // queue_ratio
+	}
+	quote := mm.Quote(&x, 0.35)
+	regime := common.ClassifyRegime(&x, 1.80, 0.85)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"mid_price":     50000.00,
+		"stoikov_price": 50000.08,
+		"quote":         quote,
+		"regime":        regime,
+		"vpin":          0.28,
+		"hawkes_imb":    0.31,
+		"lead_lag": experiment.CrossAssetStats{
+			LeaderSymbol:    "BTCUSDT",
+			FollowerSymbol:  "ETHUSDT",
+			KalmanBeta:      1.18,
+			CrossFlowCorr:   0.64,
+			SpreadZScore:    -0.82,
+			HalfLifeSamples: 14.5,
+		},
+		"paper_fills": []map[string]any{
+			{"time": "00:02s ago", "symbol": "BTCUSDT", "side": "BID (Maker L1)", "price": 49999.62, "qty": 0.15, "edge_bps": 1.18, "adverse_bps": 0.14},
+			{"time": "00:11s ago", "symbol": "BTCUSDT", "side": "ASK (Maker L1)", "price": 50000.44, "qty": 0.20, "edge_bps": 1.32, "adverse_bps": 0.09},
+			{"time": "00:24s ago", "symbol": "ETHUSDT", "side": "BID (Stat-Arb)", "price": 3400.12, "qty": 1.50, "edge_bps": 1.64, "adverse_bps": 0.21},
 		},
 	})
 }

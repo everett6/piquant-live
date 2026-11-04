@@ -140,3 +140,94 @@ func TestMetaLabelingFilter(t *testing.T) {
 		t.Errorf("expected meta-labeler to filter out noisy sub-fee trade, got pred=%v ok=%v", predWeak, okWeak)
 	}
 }
+
+func TestGLFTMarketMakerAndQueueSimulation(t *testing.T) {
+	mm := NewGLFTMarketMaker(1e-3, 0.05, 0.0)
+	samples := make([]Sample, 100)
+	for i := 0; i < 100; i++ {
+		x0 := float64(i%5) - 2.0
+		var x [FeatureCount]float64
+		x[0] = x0
+		x[3] = x0 * 0.1 // micro_dev
+		x[4] = 1.0      // spread_bps
+		x[5] = x0 * 1.5 // ofi_1s
+		x[10] = 2.0     // vol_30s_bps
+		x[14] = 8.0     // trade_cnt_1s
+		x[15] = 0.5     // queue_ratio
+		samples[i] = Sample{X: x, Y: x0 * 1.8}
+	}
+
+	if err := mm.Fit(samples, []int{0, 3, 4, 5, 10}); err != nil {
+		t.Fatalf("GLFTMarketMaker.Fit failed: %v", err)
+	}
+
+	var xTest [FeatureCount]float64
+	xTest[0] = 1.0
+	xTest[3] = 0.2
+	xTest[4] = 1.0
+	xTest[10] = 2.5
+
+	qFlat := mm.Quote(&xTest, 0.0)
+	qLong := mm.Quote(&xTest, 3.0)
+	qShort := mm.Quote(&xTest, -3.0)
+
+	// Inventory skew invariant: holding long inventory must shift reservation price downward
+	if qLong.ReservationBps >= qFlat.ReservationBps {
+		t.Errorf("expected long inventory to skew reservation price downward: long=%v flat=%v", qLong.ReservationBps, qFlat.ReservationBps)
+	}
+	if qShort.ReservationBps <= qFlat.ReservationBps {
+		t.Errorf("expected short inventory to skew reservation price upward: short=%v flat=%v", qShort.ReservationBps, qFlat.ReservationBps)
+	}
+
+	sim := SimulateQueueMakerFills(samples, mm)
+	if sim.FillRate <= 0 || sim.FillRate > 1.0 {
+		t.Errorf("expected valid queue fill rate in (0, 1], got %v", sim.FillRate)
+	}
+}
+
+func TestRegimeSwitchingEnsemble(t *testing.T) {
+	ens := NewRegimeSwitchingEnsemble(1e-3)
+	samples := make([]Sample, 120)
+	for i := 0; i < 120; i++ {
+		x0 := float64(i%7) - 3.0
+		var x [FeatureCount]float64
+		x[0] = x0
+		x[4] = 0.8
+		x[8] = x0 * 1.2
+		x[10] = 1.5
+		samples[i] = Sample{X: x, Y: x0 * 2.0}
+	}
+
+	if err := ens.Fit(samples, []int{0, 4, 8, 10}); err != nil {
+		t.Fatalf("RegimeSwitchingEnsemble.Fit failed: %v", err)
+	}
+
+	// Test Calm Regime classification
+	var xCalm [FeatureCount]float64
+	xCalm[4] = 0.8
+	xCalm[10] = 1.2
+	dCalm := ClassifyRegime(&xCalm, 1.5, 0.8)
+	if dCalm.Regime != RegimeCalmMaker {
+		t.Errorf("expected calm_maker regime, got %v", dCalm.Regime)
+	}
+
+	// Test Toxic Cascade Regime classification
+	var xToxic [FeatureCount]float64
+	xToxic[4] = 4.5   // wide spread
+	xToxic[10] = 8.0  // volatility spike
+	xToxic[11] = -8.5 // sharp 1s drop
+	dToxic := ClassifyRegime(&xToxic, 1.5, 0.8)
+	if dToxic.Regime != RegimeToxicCascade {
+		t.Errorf("expected toxic_cascade regime, got %v", dToxic.Regime)
+	}
+
+	var xSignal [FeatureCount]float64
+	xSignal[0] = 2.0
+	xSignal[4] = 0.8
+	xSignal[8] = 2.4
+	xSignal[10] = 1.5
+	pred := ens.Predict(&xSignal)
+	if pred <= 0 {
+		t.Errorf("expected positive prediction from regime ensemble on bullish flow, got %v", pred)
+	}
+}

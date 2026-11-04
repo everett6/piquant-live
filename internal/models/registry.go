@@ -106,7 +106,35 @@ func Registry() []ModelSpec {
 			Limitations: "Reduces trade frequency by 60-80% to preserve capital for high-conviction market regimes.",
 			Calibration: "Thresholded at P(gain > fees) >= 0.55 with fractional Kelly conviction sizing.",
 		},
-		// 6. Hours Horizon: Volatility Regime Filter
+		// 6. Minutes Horizon: GLFT Queue-Reactive Passive Market Maker
+		{
+			ID:          "glft_maker",
+			Name:        "GLFT Queue-Reactive Market Maker",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "micro_dev", "spread_bps", "ofi_1s", "mlofi_1s", "vol_30s_bps", "trade_imb_5s", "queue_ratio"},
+			Algorithm:   "Guéant-Lehalle-Fernandez-Tapia (GLFT) / Avellaneda-Stoikov Inventory-Skewed Reservation Price",
+			Version:     "v1.1.0",
+			Description: "Computes optimal passive bid/ask reservation prices and half-spreads with MLOFI alpha skew, Stoikov microprice, and queue-reactive fill simulation.",
+			Assumptions: "Exponential fill intensity decay with distance from mid; adverse selection proportional to trade flow toxicity.",
+			Limitations: "Queue priority estimation assumes FIFO matching without hidden dark-pool priority jumps.",
+			Calibration: "Empirically calibrated book intensity kappa and post-fill adverse selection drift.",
+		},
+		// 7. Minutes Horizon: Online Regime-Switching Dynamic Ensemble
+		{
+			ID:          "regime_ensemble",
+			Name:        "BOCPD Regime-Switching Ensemble",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "imb_l5", "micro_dev", "spread_bps", "mlofi_1s", "mlofi_5s", "vol_30s_bps", "ret_1s_bps", "trade_imb_5s"},
+			Algorithm:   "Bayesian Online Changepoint Detection (BOCPD) + Exponentially Weighted Model Averaging (Ridge + ElasticNet + GLFT)",
+			Version:     "v1.1.0",
+			Description: "Dynamically classifies market state into Calm Maker, Directional Flow, or Toxic Cascade and blends three specialized experts.",
+			Assumptions: "Microstructure alternates between stationary liquidity provision regimes and self-exciting directional sweeps.",
+			Limitations: "Requires higher compute per sample to fit three constituent sub-experts simultaneously.",
+			Calibration: "Online exponential loss weighting w_{m,t+1} = w_{m,t} exp(-eta * L_{m,t}).",
+		},
+		// 8. Hours Horizon: Volatility Regime Filter
 		{
 			ID:          "vol_regime_ridge",
 			Name:        "EWMA Volatility Flow Estimator",

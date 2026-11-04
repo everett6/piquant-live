@@ -79,6 +79,18 @@ func InstantiateModel(modelName string, lambda float64, params map[string]any) C
 		}
 		base := common.NewRidge(lambda)
 		return common.NewMetaLabelingFilter(base, feeHurdle, threshold)
+	case "glft_maker":
+		gamma := 0.05
+		if g, ok := params["gamma"].(float64); ok && g > 0 {
+			gamma = g
+		}
+		makerFee := 0.0
+		if mf, ok := params["maker_fee_bps"].(float64); ok {
+			makerFee = mf
+		}
+		return common.NewGLFTMarketMaker(lambda, gamma, makerFee)
+	case "regime_ensemble":
+		return common.NewRegimeSwitchingEnsemble(lambda)
 	default:
 		return &common.Ridge{Lam: lambda}
 	}
@@ -351,6 +363,23 @@ func Run(ctx context.Context, exp *Experiment, cfg *config.Config, onProgress fu
 	exp.TrainMetrics = ComputeMetrics(trainPred, trainAct)
 	exp.ValMetrics = ComputeMetrics(valPred, valAct)
 	exp.TestMetrics = ComputeMetrics(testPred, testAct)
+
+	// Purged K-Fold Cross-Validation & Probability of Backtest Overfitting (PBO)
+	cvRes := RunPurgedKFoldCV(append(append([]common.Sample{}, trainSamples...), valSamples...), exp.Model, lambda, exp.Params, featIdx, 5)
+	exp.ValMetrics.PurgedCVMAE = cvRes.MeanMAE
+	exp.ValMetrics.ProbBacktestOverfit = cvRes.ProbBacktestOverfit
+	exp.TestMetrics.PurgedCVMAE = cvRes.MeanMAE
+	exp.TestMetrics.ProbBacktestOverfit = cvRes.ProbBacktestOverfit
+
+	// Queue-reactive maker fill & adverse selection simulation
+	mmSim := common.NewGLFTMarketMaker(lambda, 0.05, 0.0)
+	_ = mmSim.Fit(trainSamples, featIdx)
+	valQStats := common.SimulateQueueMakerFills(valSamples, mmSim)
+	testQStats := common.SimulateQueueMakerFills(testSamples, mmSim)
+	exp.ValMetrics.MakerFillRate = valQStats.FillRate
+	exp.ValMetrics.AdverseSelectionBps = valQStats.AdverseSelectionBps
+	exp.TestMetrics.MakerFillRate = testQStats.FillRate
+	exp.TestMetrics.AdverseSelectionBps = testQStats.AdverseSelectionBps
 
 	exp.OverfitWarning = CheckGeneralization(exp.TrainMetrics, exp.ValMetrics, exp.TestMetrics)
 
