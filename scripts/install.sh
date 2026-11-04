@@ -101,7 +101,15 @@ if [[ ! -f "$SECRETS_FILE" ]]; then
   chmod 0600 "$SECRETS_FILE"
 fi
 
-# 5. Install systemd service
+# 5. Low-latency Linux kernel & hardware tuning
+if [[ "$ROLE" == "agent" && -f "scripts/tune-kernel.sh" ]]; then
+  echo ""
+  echo "Applying low-latency kernel tuning (isolated cores, sysctl busy-polling, performance governor)..."
+  chmod +x scripts/tune-kernel.sh
+  ./scripts/tune-kernel.sh apply || echo "Warning: Kernel tuning partially applied (non-fatal)."
+fi
+
+# 6. Install systemd service
 SERVICE_NAME="piquant-$ROLE.service"
 echo "Installing systemd service $SERVICE_NAME..."
 install -Dm644 "deploy/$SERVICE_NAME" "/etc/systemd/system/$SERVICE_NAME"
