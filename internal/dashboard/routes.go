@@ -988,16 +988,43 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 		1.5,
 	)
 
+	// Volume-Synchronized Probability of Toxicity (VPIN)
+	vpinCalc := common.NewVPINCalculator(10.0, 50)
+	vpinCalc.Update(50000.0, 4.5, false)
+	vpinCalc.Update(49999.5, 3.2, true)
+	vpinCalc.Update(50000.5, 5.0, false)
+	liveVpin := vpinCalc.VPIN()
+
+	// Cont-de Larrard Markovian Queue Position & Depletion Dynamics
+	cdlQueue := common.NewContDeLarrardQueue(14.0, 1.25, 3.10, x[0])
+	fillProb5s := cdlQueue.FillProbability(5.0)
+	timeToFillSec := cdlQueue.ExpectedTimeToFill()
+
+	// Cartea-Jaimungal HJB Target Inventory & Adverse Selection
+	cjMM := common.NewCarteaJaimungalMM(0.05, 1.5, 2.0, 0.001, 0.01, 0.5, 60.0)
+	cjBid, cjAsk, cjRes := cjMM.ComputeQuotes(50000.00, 0.35, 0.0, 30.0, x[3])
+
+	// Extreme Value Theory (EVT) Peaks-Over-Threshold Tail Risk (ES 99.9%)
+	evtEngine := experiment.NewEVTRiskEngine()
+	_ = evtEngine.FitPOT([]float64{0.15, 0.32, 0.58, 0.95, 1.25, 1.60, 2.10, 2.75, 3.40, 4.25, 5.80, 7.20}, 1.50)
+	var999 := evtEngine.VaR(0.001)
+	es999 := evtEngine.ExpectedShortfall(0.001)
+
+	// Microstructure Circuit Breaker
+	spreadBps := quote.HalfSpreadBps * 2.0
+	breaker := experiment.NewMicrostructureCircuitBreaker(spreadBps)
+	halted, haltReason := breaker.Check(spreadBps, 150000.0, liveVpin)
+
 	// Conformal prediction interval & certitude on live reservation signal
 	conformalCal := common.NewSplitConformalCalibrator(0.10)
 	confLower, confUpper, confCertitude := conformalCal.Interval(quote.ReservationBps, x[10])
 	confWidth := confUpper - confLower
 	confPasses := conformalCal.PassesConformalGate(quote.ReservationBps, x[10], 0.20)
 
-	// Online AdaHedge Meta-Portfolio across 6 active model experts
-	adaHedge := common.NewAdaHedgeEnsemble(6, 0.985)
-	prevPreds := [common.MaxEnsembleExperts]float64{0.48, 0.42, 0.44, 0.46, 0.39, 0.51, 0, 0}
-	currPreds := [common.MaxEnsembleExperts]float64{0.45, 0.38, quote.ReservationBps, 0.44, 0.40, 0.52, 0, 0}
+	// Online AdaHedge Meta-Portfolio across 7 active model experts
+	adaHedge := common.NewAdaHedgeEnsemble(7, 0.985)
+	prevPreds := [common.MaxEnsembleExperts]float64{0.48, 0.42, 0.44, 0.46, 0.39, 0.51, 0.45, 0}
+	currPreds := [common.MaxEnsembleExperts]float64{0.45, 0.38, quote.ReservationBps, 0.44, 0.40, 0.52, (cjRes - 50000.00) / 5.0, 0}
 	metaPred, adaWeights := adaHedge.UpdateAndCombine(0.50, prevPreds, currPreds)
 
 	// Sequential Page-Hinkley Drift Guard
@@ -1012,7 +1039,7 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 		"stoikov_price":           50000.08,
 		"quote":                   quote,
 		"regime":                  regime,
-		"vpin":                    0.28,
+		"vpin":                    liveVpin,
 		"hawkes_imb":              0.31,
 		"almgren_chriss_schedule": acSchedule,
 		"kelly_weights": map[string]float64{
@@ -1035,9 +1062,31 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 			"regime_ensemble":            adaWeights[3],
 			"perp_liquidation_reversion": adaWeights[4],
 			"rough_signature_ofi":        adaWeights[5],
+			"cartea_jaimungal":           adaWeights[6],
 		},
 		"adahedge_meta_bps": metaPred,
 		"adahedge_eta":      adaHedge.Eta,
+		"queue_survival": map[string]any{
+			"fill_prob_5s":      fillProb5s,
+			"expected_fill_sec": timeToFillSec,
+		},
+		"cartea_jaimungal": map[string]any{
+			"reservation_price": cjRes,
+			"bid_price":         cjBid,
+			"ask_price":         cjAsk,
+			"half_spread_bps":   (cjAsk - cjBid) / 50000.00 * 10000.0 / 2.0,
+		},
+		"evt_risk": map[string]any{
+			"var_999_bps":   var999,
+			"es_999_bps":    es999,
+			"tail_index_xi": evtEngine.Params.Xi,
+			"scale_beta":    evtEngine.Params.Beta,
+		},
+		"circuit_breaker": map[string]any{
+			"state":  breaker.State.String(),
+			"halted": halted,
+			"reason": haltReason,
+		},
 		"drift_guard": map[string]any{
 			"drift_detected": driftDetected,
 			"statistic":      phStat,

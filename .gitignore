@@ -21,3 +21,5 @@ piquant-data/
 # Build & Agent Artifacts
 .agents/
 graphify-out/
+antigravity-add-model/
+

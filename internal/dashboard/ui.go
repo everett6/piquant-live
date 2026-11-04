@@ -305,8 +305,11 @@ const indexHTML = `<!doctype html>
             <div class="meta" style="margin-top:2px">Avellaneda-Stoikov inventory-skewed reservation quotes, online changepoint regime gate &amp; BTC&rarr;ETH Kalman cointegration</div>
           </div>
           <div class="pills">
+            <span class="pill ok" id="blotterBreakerPill">Circuit Breaker: Normal</span>
+            <span class="pill info" id="blotterEvtPill">EVT 99.9% ES: 4.82 bps</span>
             <span class="pill ok" id="blotterRegimePill">Regime: Calm Maker</span>
             <span class="pill info" id="blotterVpinPill">VPIN Toxicity: 0.28</span>
+            <span class="pill" id="blotterQueuePill">Queue Fill (5s): 85%</span>
             <span class="pill" id="blotterKalmanPill">BTC&rarr;ETH &beta;: 1.18 (Z = -0.82)</span>
           </div>
         </div>
@@ -930,6 +933,17 @@ const indexHTML = `<!doctype html>
         if ($("mmHawkes")) $("mmHawkes").textContent = (d.hawkes_imb >= 0 ? "+" : "") + num(d.hawkes_imb, 2);
         if ($("mmHalfLife")) $("mmHalfLife").textContent = num(ll.half_life_samples, 1) + " ticks";
 
+        if ($("blotterBreakerPill") && d.circuit_breaker) {
+          var cb = d.circuit_breaker;
+          $("blotterBreakerPill").textContent = "Circuit Breaker: " + cb.state;
+          $("blotterBreakerPill").className = "pill " + (cb.halted ? "bad" : (cb.state === "Caution" ? "warn" : "ok"));
+        }
+        if ($("blotterEvtPill") && d.evt_risk) {
+          $("blotterEvtPill").textContent = "EVT 99.9% ES: " + num(d.evt_risk.es_999_bps, 2) + " bps";
+        }
+        if ($("blotterQueuePill") && d.queue_survival) {
+          $("blotterQueuePill").textContent = "Queue Fill (5s): " + Math.round((d.queue_survival.fill_prob_5s || 0.85) * 100) + "%";
+        }
         if ($("blotterRegimePill")) {
           var rName = reg.regime === "calm_maker" ? "Calm Maker" : (reg.regime === "toxic_cascade" ? "Toxic Cascade" : "Directional Flow");
           $("blotterRegimePill").textContent = "Regime: " + rName;
@@ -956,7 +970,7 @@ const indexHTML = `<!doctype html>
             "Ridge: <b>" + num((aw.mlofi_ridge||0)*100, 1) + "%</b> &bull; " +
             "SigOFI: <b style='color:var(--info)'>" + num((aw.rough_signature_ofi||0)*100, 1) + "%</b> &bull; " +
             "GLFT: <b>" + num((aw.glft_mm||0)*100, 1) + "%</b> &bull; " +
-            "PerpRev: <b>" + num((aw.perp_liquidation_reversion||0)*100, 1) + "%</b>";
+            "Cartea: <b style='color:var(--accent)'>" + num((aw.cartea_jaimungal||0)*100, 1) + "%</b>";
         }
         if (d.conformal && $("mmConformalInterval")) {
           var cf = d.conformal;
