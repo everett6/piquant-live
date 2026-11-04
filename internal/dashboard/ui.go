@@ -329,6 +329,20 @@ const indexHTML = `<!doctype html>
               <div id="mmKellyWeights" class="mono" style="font-size:12px;color:var(--text)">BTCUSDT: +3.8% &bull; ETHUSDT: +1.9% &bull; BTC-ETH Stat-Arb: +22.7%</div>
             </div>
           </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line-subtle)">
+            <div>
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--accent);margin-bottom:4px">AdaHedge Regret-Bounded Meta-Portfolio</div>
+              <div id="mmAdaHedgeWeights" class="mono" style="font-size:12px;color:var(--text)">Ridge: 16.8% &bull; SigOFI: 17.4% &bull; GLFT: 16.9% &bull; PerpRev: 16.2%</div>
+            </div>
+            <div>
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--info);margin-bottom:4px">Split Conformal 90% Interval &amp; Gate</div>
+              <div id="mmConformalInterval" class="mono" style="font-size:12px;color:var(--text)">Width: 5.43 bps [-2.29, +3.13] &bull; Gate: PASS</div>
+            </div>
+            <div>
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--warn);margin-bottom:4px">Page&ndash;Hinkley CUSUM Drift Guard</div>
+              <div id="mmDriftGuardStatus" class="mono" style="font-size:12px;color:var(--accent)">Nominal (PH = 0.42 / 12.00) &bull; Rollbacks: 0</div>
+            </div>
+          </div>
         </div>
         <div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px">
           <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Simulated Queue-Reactive Paper Maker Fills (Zero Live Capital Risk)</div>
@@ -383,9 +397,11 @@ const indexHTML = `<!doctype html>
                 <option value="glft_maker">GLFT Queue-Reactive Market Maker (Avellaneda-Stoikov)</option>
                 <option value="regime_ensemble">BOCPD Regime-Switching Ensemble (Ridge+ENet+GLFT)</option>
                 <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
+                <option value="rough_signature_ofi">Rough Path Signature OFI &amp; Kyle Lambda</option>
               </select>
               <select id="exp-model" style="display:none" aria-hidden="true">
                 <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
+                <option value="rough_signature_ofi">Rough Path Signature OFI &amp; Kyle Lambda</option>
               </select>
             </div>
 
@@ -525,6 +541,7 @@ const indexHTML = `<!doctype html>
               <option value="glft_maker">GLFT Queue-Reactive Market Maker</option>
               <option value="regime_ensemble">BOCPD Regime-Switching Ensemble</option>
               <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
+              <option value="rough_signature_ofi">Rough Path Signature OFI &amp; Kyle Lambda</option>
             </select>
           </div>
           <div class="form-group">
@@ -930,6 +947,27 @@ const indexHTML = `<!doctype html>
             "ETH: <b style='color:var(--info)'>" + (kw.ethusdt >= 0 ? "+" : "") + num(kw.ethusdt*100, 1) + "%</b> &bull; " +
             "Stat-Arb: <b style='color:var(--accent)'>" + (kw.stat_arb >= 0 ? "+" : "") + num(kw.stat_arb*100, 1) + "%</b>";
         }
+        if (d.adahedge_weights && $("mmAdaHedgeWeights")) {
+          var aw = d.adahedge_weights;
+          $("mmAdaHedgeWeights").innerHTML =
+            "Ridge: <b>" + num((aw.mlofi_ridge||0)*100, 1) + "%</b> &bull; " +
+            "SigOFI: <b style='color:var(--info)'>" + num((aw.rough_signature_ofi||0)*100, 1) + "%</b> &bull; " +
+            "GLFT: <b>" + num((aw.glft_mm||0)*100, 1) + "%</b> &bull; " +
+            "PerpRev: <b>" + num((aw.perp_liquidation_reversion||0)*100, 1) + "%</b>";
+        }
+        if (d.conformal && $("mmConformalInterval")) {
+          var cf = d.conformal;
+          $("mmConformalInterval").innerHTML =
+            "Width: <b style='color:var(--info)'>" + num(cf.width_bps, 2) + " bps</b> [" + num(cf.lower_bps, 2) + ", " + num(cf.upper_bps, 2) + "] &bull; " +
+            "Cert: <b>" + Math.round((cf.certitude||0)*100) + "%</b>";
+        }
+        if (d.drift_guard && $("mmDriftGuardStatus")) {
+          var dg = d.drift_guard;
+          var dgColor = dg.drift_detected ? "var(--bad)" : "var(--accent)";
+          var dgLabel = dg.drift_detected ? "DRIFT ROLLBACK" : "Nominal";
+          $("mmDriftGuardStatus").innerHTML =
+            "<b style='color:" + dgColor + "'>" + dgLabel + "</b> (PH = " + num(dg.statistic, 2) + " / " + num(dg.threshold, 1) + ")";
+        }
 
         if (d.paper_fills && d.paper_fills.length && $("paperFillsBody")) {
           $("paperFillsBody").innerHTML = d.paper_fills.map(function(f){
@@ -1103,6 +1141,12 @@ const indexHTML = `<!doctype html>
         "<div class='span3'><div class='stat'><div class='k'>Latency Alpha (100ms)</div><div class='v' style='color:var(--warn);font-size:15px'>" + num(testM.alpha_decay_100ms_bps, 2) + " bps</div><div class='s'>Matching-engine delay</div></div></div>" +
         "<div class='span3'><div class='stat'><div class='k'>Signal Half-Life</div><div class='v' style='color:var(--info);font-size:15px'>" + num(testM.signal_half_life_ms, 1) + " ms</div><div class='s'>Exponential alpha decay</div></div></div>" +
         "<div class='span3'><div class='stat'><div class='k'>Walk-Forward IC / ICIR</div><div class='v' style='color:var(--accent);font-size:15px'>" + num(testM.walk_forward_ic, 3) + " / " + num(testM.walk_forward_stability, 2) + "</div><div class='s'>Rolling OOS stability</div></div></div>" +
+      "</div>" +
+      "<div class='grid' style='margin-top:14px'>" +
+        "<div class='span3'><div class='stat'><div class='k'>Spread Capture Edge</div><div class='v' style='color:var(--accent);font-size:15px'>" + num(testM.spread_capture_bps, 2) + " bps</div><div class='s'>FIFO passive half-spread</div></div></div>" +
+        "<div class='span3'><div class='stat'><div class='k'>Directional Drift Alpha</div><div class='v' style='color:var(--info);font-size:15px'>" + num(testM.directional_alpha_bps, 2) + " bps</div><div class='s'>Medium-horizon fundamental</div></div></div>" +
+        "<div class='span3'><div class='stat'><div class='k'>Markout Toxicity Loss</div><div class='v' style='color:var(--bad);font-size:15px'>" + num(testM.markout_toxicity_bps, 2) + " bps</div><div class='s'>1-tick adverse sweep</div></div></div>" +
+        "<div class='span3'><div class='stat'><div class='k'>Conformal 90% Gate Pass</div><div class='v' style='color:var(--accent);font-size:15px'>" + (testM.conformal_pass_rate !== undefined ? Math.round(testM.conformal_pass_rate*100) + "%" : "-") + "</div><div class='s'>Uncertainty clears fees</div></div></div>" +
       "</div>" +
       "<div style='display:flex;justify-content:space-between;align-items:center;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)'>" +
         "<div style='display:flex;gap:10px;align-items:center'>" +

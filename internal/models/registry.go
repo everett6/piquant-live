@@ -148,6 +148,20 @@ func Registry() []ModelSpec {
 			Limitations: "During prolonged macro insolvency events, cascades may chain without immediate V-shaped recovery.",
 			Calibration: "Least-squares residual calibration of liquidation exhaustion alpha and EWMA basis z-score pull.",
 		},
+		// 9. Minutes Horizon: Truncated Depth-2 Path Signatures (Lévy Area) & Kyle's Lambda
+		{
+			ID:          "rough_signature_ofi",
+			Name:        "Rough Path Signature OFI & Kyle Lambda",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "imb_l5", "imb_l20", "micro_dev", "ofi_1s", "mlofi_1s", "ret_1s_bps", "trade_imb_5s"},
+			Algorithm:   "Truncated Depth-2 Path Signature (Lévy Area Cross-Terms) + Dynamic Kyle's Lambda Price Impact Damping",
+			Version:     "v1.3.0",
+			Description: "Captures non-commutative lead-lag order flow trajectories via Depth-2 Lévy area path signatures and dampens predictions under high Kyle price impact.",
+			Assumptions: "Order book lead-lag rotational curl between touch OFI, deep depth, and Hawkes trade intensity carries predictive power beyond linear state snapshots.",
+			Limitations: "Depth-2 truncation omits third-order rough path iterated integrals during multi-minute regime shifts.",
+			Calibration: "Orthogonalized L2 residual projection on standardized Depth-2 Lévy area features with Kyle impact elasticity.",
+		},
 		// 8. Hours Horizon: Volatility Regime Filter
 		{
 			ID:          "vol_regime_ridge",

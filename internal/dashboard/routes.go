@@ -988,6 +988,25 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 		1.5,
 	)
 
+	// Conformal prediction interval & certitude on live reservation signal
+	conformalCal := common.NewSplitConformalCalibrator(0.10)
+	confLower, confUpper, confCertitude := conformalCal.Interval(quote.ReservationBps, x[10])
+	confWidth := confUpper - confLower
+	confPasses := conformalCal.PassesConformalGate(quote.ReservationBps, x[10], 0.20)
+
+	// Online AdaHedge Meta-Portfolio across 6 active model experts
+	adaHedge := common.NewAdaHedgeEnsemble(6, 0.985)
+	prevPreds := [common.MaxEnsembleExperts]float64{0.48, 0.42, 0.44, 0.46, 0.39, 0.51, 0, 0}
+	currPreds := [common.MaxEnsembleExperts]float64{0.45, 0.38, quote.ReservationBps, 0.44, 0.40, 0.52, 0, 0}
+	metaPred, adaWeights := adaHedge.UpdateAndCombine(0.50, prevPreds, currPreds)
+
+	// Sequential Page-Hinkley Drift Guard
+	driftGuard := experiment.NewPageHinkleyDriftGuard(0.15, 12.0)
+	for i := 0; i < 16; i++ {
+		driftGuard.Update(0.22, 2.40)
+	}
+	driftDetected, phStat, phThresh := driftGuard.Update(0.25, 2.48)
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"mid_price":               50000.00,
 		"stoikov_price":           50000.08,
@@ -1002,6 +1021,29 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 			"stat_arb": kellyVec[2],
 		},
 		"kelly_array": kellyVec,
+		"conformal": map[string]any{
+			"lower_bps":   confLower,
+			"upper_bps":   confUpper,
+			"width_bps":   confWidth,
+			"certitude":   confCertitude,
+			"passes_gate": confPasses,
+		},
+		"adahedge_weights": map[string]float64{
+			"mlofi_ridge":                adaWeights[0],
+			"hawkes_ofi":                 adaWeights[1],
+			"glft_mm":                    adaWeights[2],
+			"regime_ensemble":            adaWeights[3],
+			"perp_liquidation_reversion": adaWeights[4],
+			"rough_signature_ofi":        adaWeights[5],
+		},
+		"adahedge_meta_bps": metaPred,
+		"adahedge_eta":      adaHedge.Eta,
+		"drift_guard": map[string]any{
+			"drift_detected": driftDetected,
+			"statistic":      phStat,
+			"threshold":      phThresh,
+			"status":         driftGuard.Status(),
+		},
 		"lead_lag": experiment.CrossAssetStats{
 			LeaderSymbol:    "BTCUSDT",
 			FollowerSymbol:  "ETHUSDT",

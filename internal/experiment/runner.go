@@ -93,6 +93,8 @@ func InstantiateModel(modelName string, lambda float64, params map[string]any) C
 		return common.NewRegimeSwitchingEnsemble(lambda)
 	case "perp_liquidation_reversion":
 		return common.NewPerpLiquidationReversionModel(lambda)
+	case "rough_signature_ofi":
+		return common.NewRoughSignatureOFIModel(lambda)
 	default:
 		return &common.Ridge{Lam: lambda}
 	}

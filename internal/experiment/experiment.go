@@ -63,6 +63,12 @@ type Metrics struct {
 	SignalHalfLifeMs     float64 `json:"signal_half_life_ms"`    // Estimated alpha decay half-life (ms)
 	WalkForwardIC        float64 `json:"walk_forward_ic"`        // Mean expanding/rolling walk-forward out-of-sample IC
 	WalkForwardStability float64 `json:"walk_forward_stability"` // Walk-forward IC stability ratio (ICIR)
+
+	// Post-Trade Markout Attribution & Split Conformal Uncertainty Gating
+	SpreadCaptureBps    float64 `json:"spread_capture_bps"`    // Passive/quasi-passive half-spread capture edge (bps)
+	DirectionalAlphaBps float64 `json:"directional_alpha_bps"` // Medium-horizon fundamental drift contribution (bps)
+	MarkoutToxicityBps  float64 `json:"markout_toxicity_bps"`  // Immediate 1-tick adverse selection toxicity loss (bps)
+	ConformalPassRate   float64 `json:"conformal_pass_rate"`   // Fraction of signals passing 90% split conformal gate [0, 1]
 }
 
 // SplitConfig defines chronological, non-overlapping dataset partitions.
@@ -385,7 +391,8 @@ func ComputeMetrics(predicted, actual []float64) Metrics {
 }
 
 // EvaluatePredictions computes full statistical metrics plus realistic network latency-jitter
-// alpha decay profiles (5ms, 25ms, 100ms) and signal half-life for a slice of samples.
+// alpha decay profiles (5ms, 25ms, 100ms), signal half-life, and post-trade markout attribution
+// for a slice of samples.
 func EvaluatePredictions(samples []common.Sample, predicted []float64) Metrics {
 	actual := make([]float64, len(samples))
 	for i := range samples {
@@ -397,6 +404,12 @@ func EvaluatePredictions(samples []common.Sample, predicted []float64) Metrics {
 	m.AlphaDecay25msBps = d25
 	m.AlphaDecay100msBps = d100
 	m.SignalHalfLifeMs = hl
+
+	spCap, dirAlpha, toxLoss, confPass := ComputeMarkoutAttribution(samples, predicted, 0.05, 0.20)
+	m.SpreadCaptureBps = spCap
+	m.DirectionalAlphaBps = dirAlpha
+	m.MarkoutToxicityBps = toxLoss
+	m.ConformalPassRate = confPass
 	return m
 }
 
