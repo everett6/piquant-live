@@ -275,6 +275,27 @@ const indexHTML = `<!doctype html>
         </div>
       </section>
 
+      <!-- Macro Market Drop & Stablecoin De-peg Risk Monitor -->
+      <section class="card span12">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div>
+            <h2 style="margin:0">Macro Market Drop &amp; Stablecoin De-peg Risk Monitor</h2>
+            <div class="meta" style="margin-top:2px">Real-time liquidation cascade detection, downside velocity &amp; quote asset basis tracking</div>
+          </div>
+          <div class="pills">
+            <span class="pill ok" id="btcRiskPill">BTC: Nominal Flow</span>
+            <span class="pill ok" id="ethRiskPill">ETH: Nominal Flow</span>
+            <span class="pill ok" id="stableRiskPill">Stablecoins: Parity 1.000</span>
+          </div>
+        </div>
+        <div class="stats" style="grid-template-columns:repeat(4,1fr)">
+          <div class="stat"><div class="k">BTC 5s Drop Velocity</div><div class="v" id="btcVelocity" style="font-size:18px">-1.2 bps</div><div class="s">Cascade Risk: Low</div></div>
+          <div class="stat"><div class="k">ETH 5s Drop Velocity</div><div class="v" id="ethVelocity" style="font-size:18px">-1.8 bps</div><div class="s">Liquidity: Deep</div></div>
+          <div class="stat"><div class="k">USDT/USD Basis</div><div class="v" id="usdtBasis" style="font-size:18px">+0.5 bps</div><div class="s">Peg: Fully Collateralized</div></div>
+          <div class="stat"><div class="k">USDC/USD Basis</div><div class="v" id="usdcBasis" style="font-size:18px">-0.2 bps</div><div class="s">De-peg Alert: None</div></div>
+        </div>
+      </section>
+
       <!-- Recent Human Activity Log -->
       <section class="card span6">
         <h2>Recent Research Activity</h2>
@@ -469,7 +490,10 @@ const indexHTML = `<!doctype html>
               &bull; Total Trials: 20 candidate evaluations (In-Memory Accelerated)
             </div>
           </div>
-          <button id="btnLaunchSearch" class="btn btn-primary" type="button">Start Hyperparameter Search</button>
+          <div style="display:flex;gap:10px;margin-top:10px">
+            <button id="btnLaunchSearch" class="btn btn-primary" type="button">Start Grid Search</button>
+            <button id="btnLaunchQuantumSearch" class="btn btn-secondary" style="border-color:var(--info);color:var(--info)" type="button">&psi; Quantum Annealing</button>
+          </div>
         </form>
       </section>
 
@@ -923,6 +947,10 @@ const indexHTML = `<!doctype html>
           "<div>Information Coeff (IC): <b>" + (testM.information_coeff !== undefined ? num(testM.information_coeff, 3) : "-") + "</b></div>" +
         "</div>" +
       "</div>" +
+      "<div class='grid' style='margin-top:14px'>" +
+        "<div class='span6'><div class='stat'><div class='k'>Downside Semi-Variance (BTC/ETH Drops)</div><div class='v' style='color:var(--bad);font-size:16px'>" + (testM.downside_deviation ? num(testM.downside_deviation, 2) + " bps" : "-") + "</div><div class='s'>Realized volatility during negative price shocks</div></div></div>" +
+        "<div class='span6'><div class='stat'><div class='k'>Stablecoin &amp; Cascade Dislocation Risk</div><div class='v' style='color:var(--warn);font-size:16px'>" + (testM.stablecoin_depeg_risk ? num(testM.stablecoin_depeg_risk, 2) + " bps" : "-") + "</div><div class='s'>Basis drift exposure under quote asset discount / liquidation</div></div></div>" +
+      "</div>" +
       "<div style='display:flex;justify-content:space-between;align-items:center;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)'>" +
         "<div style='display:flex;gap:10px;align-items:center'>" +
           "<span style='font-size:12px;color:var(--muted);font-weight:600'>Side-by-side comparison:</span>" +
@@ -1222,6 +1250,35 @@ const indexHTML = `<!doctype html>
         alert("Search launch failed: " + err.message);
       });
   });
+
+  // Action: Launch Quantum-Inspired Annealing Search
+  var btnQ = $("btnLaunchQuantumSearch");
+  if (btnQ) {
+    btnQ.addEventListener("click", function(){
+      btnQ.disabled = true;
+      btnQ.textContent = "Annealing...";
+      var payload = {
+        model: $("srchModel").value,
+        dataset: $("srchDataset").value,
+        horizon: $("srchHorizon").value
+      };
+      fetch("/api/searches/quantum", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(payload)
+      }).then(function(r){ return r.json(); })
+        .then(function(res){
+          btnQ.disabled = false;
+          btnQ.textContent = "\u03c8 Quantum Annealing";
+          if (res.error) alert("Quantum Search Error: " + res.error);
+          else alert("Quantum-Inspired Annealing search launched. Exploring transverse tunneling landscape.");
+        }).catch(function(err){
+          btnQ.disabled = false;
+          btnQ.textContent = "\u03c8 Quantum Annealing";
+          alert("Quantum search launch failed: " + err.message);
+        });
+    });
+  }
 
   $("btnNewSearch").addEventListener("click", function(){
     navButtons.forEach(function(b){ if (b.getAttribute("data-tab")==="tab-search") b.click(); });

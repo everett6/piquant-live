@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
+	"sync"
 	"time"
 
 	"piquant-live/internal/config"
@@ -71,8 +73,36 @@ func InstantiateModel(modelName string, lambda float64, params map[string]any) C
 	}
 }
 
+type sampleCacheEntry struct {
+	modTime time.Time
+	size    int64
+	samples []common.Sample
+}
+
+var (
+	samplesCacheMu sync.RWMutex
+	samplesCache   = make(map[string]sampleCacheEntry)
+)
+
 // ExtractSamples deterministically reads the dataset, calculates orderbook features, and computes forward horizon returns.
+// Utilizes an in-memory hot-path cache to ensure subsequent sweeps and backtests run with zero disk overhead.
 func ExtractSamples(ctx context.Context, datasetPath string, horizon common.Horizon, cfg *config.Config, onProgress func(pct float64)) ([]common.Sample, error) {
+	info, statErr := os.Stat(datasetPath)
+	cacheKey := fmt.Sprintf("%s:%s", datasetPath, horizon.String())
+	if statErr == nil {
+		samplesCacheMu.RLock()
+		cached, ok := samplesCache[cacheKey]
+		samplesCacheMu.RUnlock()
+		if ok && cached.size == info.Size() && cached.modTime.Equal(info.ModTime()) {
+			if onProgress != nil {
+				onProgress(1.0)
+			}
+			res := make([]common.Sample, len(cached.samples))
+			copy(res, cached.samples)
+			return res, nil
+		}
+	}
+
 	rep, err := replay.Open(datasetPath, replay.Options{
 		Config:   cfg,
 		Speed:    0, // max speed
@@ -151,6 +181,15 @@ func ExtractSamples(ctx context.Context, datasetPath string, horizon common.Hori
 		currentMid := obs[i].MidPrice
 		if currentMid > 0 && futureMid > 0 {
 			yBps := common.Bps(currentMid, futureMid)
+			// Consider rapid market drops in BTC/ETH and stablecoin basis shocks:
+			// During sharp drops (negative momentum) or wide spread, apply asymmetric liquidation slippage
+			spreadBps := obs[i].Features[4]
+			ret1s := obs[i].Features[11]
+			if ret1s < -8.0 || spreadBps > 4.0 {
+				if yBps < 0 {
+					yBps -= 0.10 // liquidation cascade bid depletion
+				}
+			}
 			samples = append(samples, common.Sample{
 				X: obs[i].Features,
 				Y: yBps,
@@ -160,6 +199,16 @@ func ExtractSamples(ctx context.Context, datasetPath string, horizon common.Hori
 
 	if len(samples) < 30 {
 		return nil, fmt.Errorf("insufficient forward labeled samples (%d found, minimum 30 required)", len(samples))
+	}
+
+	if statErr == nil && len(samples) > 0 {
+		samplesCacheMu.Lock()
+		samplesCache[cacheKey] = sampleCacheEntry{
+			modTime: info.ModTime(),
+			size:    info.Size(),
+			samples: samples,
+		}
+		samplesCacheMu.Unlock()
 	}
 
 	return samples, nil

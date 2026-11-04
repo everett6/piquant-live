@@ -181,6 +181,7 @@ type Server struct {
 	peerMu         sync.RWMutex
 	lastPeerStatus *Status
 	lastPeerFetch  time.Time
+	httpClient     *http.Client
 }
 
 // New validates options and builds a server. It does not listen yet.
@@ -219,6 +220,16 @@ func New(opts Options) (*Server, error) {
 		sess:   newSessionStore(opts.SessionTTL),
 		lim:    newLoginLimiter(5, 15*time.Minute),
 		mode:   mode,
+	}
+	tr := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  false,
+	}
+	s.httpClient = &http.Client{
+		Transport: tr,
+		Timeout:   10 * time.Second,
 	}
 	s.routes()
 	return s, nil
@@ -579,8 +590,7 @@ func (s *Server) syncPeerEngine(ctx context.Context, peers []PeerStatus) *Status
 	if s.opts.PeerToken != "" {
 		req.Header.Set("Authorization", "Bearer "+s.opts.PeerToken)
 	}
-	client := &http.Client{Timeout: s.opts.ProbeTimeout}
-	resp, err := client.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return s.lastPeerStatus
 	}

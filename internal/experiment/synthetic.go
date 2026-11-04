@@ -90,6 +90,16 @@ func GenerateSynthetic(path string, opts SyntheticOptions) error {
 
 		// Mean-reverting random walk for mid with realistic volatility
 		shock := (rng.Float64() - 0.495) * opts.TickSize * 3.0
+
+		// Model occasional sharp cryptocurrency flash drops (liquidation cascade)
+		if i%450 == 0 && i > 150 {
+			shock = -opts.TickSize * (15.0 + rng.Float64()*15.0)
+		}
+		// Model periodic quote currency / stablecoin basis drift (e.g. USDT discount or depeg)
+		if i%350 == 0 {
+			shock += (rng.Float64() - 0.5) * opts.TickSize * 4.0
+		}
+
 		mid += shock
 		if math.Abs(mid-opts.StartPrice) > 100*opts.TickSize {
 			mid = 0.95*mid + 0.05*opts.StartPrice

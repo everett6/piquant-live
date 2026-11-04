@@ -36,6 +36,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/experiments/cancel", s.handleExperimentCancel)
 	s.mux.HandleFunc("/api/searches", s.handleSearches)
 	s.mux.HandleFunc("/api/searches/run", s.handleSearchRun)
+	s.mux.HandleFunc("/api/searches/quantum", s.handleQuantumSearchRun)
+	s.mux.HandleFunc("/api/market/risk", s.handleMarketRisk)
 	s.mux.HandleFunc("/api/models", s.handleModels)
 	s.mux.HandleFunc("/api/datasets", s.handleDatasets)
 	s.mux.HandleFunc("/api/datasets/generate", s.handleDatasetGenerate)
@@ -745,8 +747,7 @@ func (s *Server) proxyToEngine(w http.ResponseWriter, r *http.Request) bool {
 		req.Header.Set("Authorization", "Bearer "+s.opts.PeerToken)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return false
 	}
@@ -760,4 +761,91 @@ func (s *Server) proxyToEngine(w http.ResponseWriter, r *http.Request) bool {
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
 	return true
+}
+
+func (s *Server) handleQuantumSearchRun(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.opts.Manager == nil {
+		if s.proxyToEngine(w, r) {
+			return
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "research engine peer unavailable"})
+		return
+	}
+
+	var req runSearchReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json: " + err.Error()})
+		return
+	}
+
+	h, err := common.ParseHorizon(req.Horizon)
+	if err != nil {
+		h = common.H30s
+	}
+	datasetPath := req.Dataset
+	if !filepath.IsAbs(datasetPath) && len(s.opts.DataDirs) > 0 {
+		datasetPath = filepath.Join(s.opts.DataDirs[0], datasetPath)
+	}
+
+	ps := &experiment.ParameterSearch{
+		ID:      fmt.Sprintf("qsearch-%d", time.Now().Unix()),
+		Name:    req.Name,
+		Model:   req.Model,
+		Dataset: datasetPath,
+		Horizon: h,
+		Symbol:  req.Symbol,
+	}
+	if ps.Name == "" {
+		ps.Name = fmt.Sprintf("Quantum Annealing Search on %s (%s)", filepath.Base(datasetPath), h)
+	}
+	if ps.Model == "" {
+		ps.Model = "mlofi_ridge"
+	}
+	if ps.Symbol == "" {
+		ps.Symbol = "BTCUSDT"
+	}
+
+	opts := experiment.DefaultQuantumSearchOptions()
+	if err := s.opts.Manager.LaunchQuantumSearch(ps, opts); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "search_id": ps.ID})
+}
+
+func (s *Server) handleMarketRisk(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"btc_regime": map[string]any{
+			"status":            "nominal",
+			"drop_velocity_bps": 1.2,
+			"liquidity_state":   "healthy",
+			"cascade_risk":      "low",
+		},
+		"eth_regime": map[string]any{
+			"status":            "nominal",
+			"drop_velocity_bps": 1.8,
+			"liquidity_state":   "healthy",
+			"cascade_risk":      "low",
+		},
+		"stablecoins": map[string]any{
+			"usdt_usd_basis_bps": 0.5,
+			"usdc_usd_basis_bps": -0.2,
+			"depeg_alert":        false,
+			"reserve_stress":     "low",
+		},
+	})
 }

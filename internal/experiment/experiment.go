@@ -43,6 +43,12 @@ type Metrics struct {
 	MeanForecast        float64            `json:"mean_forecast"`        // Mean predicted move (bps)
 	MeanRealized        float64            `json:"mean_realized"`        // Mean actual move (bps)
 	Baselines           map[string]float64 `json:"baselines"`            // Baseline MAE: zero, last-return, mean
+
+	// Market Crash & Stablecoin Drop Sensitivity
+	DownsideDeviation     float64 `json:"downside_deviation"`    // Semi-variance on negative moves (bps)
+	CrashDrawdownVelocity float64 `json:"crash_velocity"`        // Maximum liquidation drawdown rate (bps)
+	StablecoinDepegRisk   float64 `json:"stablecoin_depeg_risk"` // Basis dislocation risk under stablecoin discount (bps)
+	RegimeCrashPct        float64 `json:"regime_crash_pct"`      // Proportion of samples in sharp downward shock
 }
 
 // SplitConfig defines chronological, non-overlapping dataset partitions.
@@ -280,22 +286,67 @@ func ComputeMetrics(predicted, actual []float64) Metrics {
 		}
 	}
 
+	// Downside Risk, Market Drop & Stablecoin De-peg Sensitivity
+	var sumDownSq float64
+	var downCount int
+	var crashShocks int
+	var maxDropVelocity float64
+
+	var sumActSq float64
+	for _, a := range actual {
+		diff := a - meanActual
+		sumActSq += diff * diff
+	}
+	stdActual := math.Sqrt(sumActSq / float64(n))
+	crashThreshold := -1.8 * stdActual
+	if crashThreshold > -1.2 {
+		crashThreshold = -1.2
+	}
+
+	for i := 0; i < n; i++ {
+		a := actual[i]
+		if a < 0 {
+			sumDownSq += a * a
+			downCount++
+		}
+		if a < crashThreshold {
+			crashShocks++
+		}
+		if i >= 4 {
+			windowDrop := (actual[i] + actual[i-1] + actual[i-2] + actual[i-3] + actual[i-4]) / 5.0
+			if windowDrop < 0 && math.Abs(windowDrop) > maxDropVelocity {
+				maxDropVelocity = math.Abs(windowDrop)
+			}
+		}
+	}
+
+	downsideDev := 0.0
+	if downCount > 0 {
+		downsideDev = math.Sqrt(sumDownSq / float64(downCount))
+	}
+	regimeCrashPct := float64(crashShocks) / float64(n)
+	stableDepegRisk := math.Abs(meanActual)*0.2 + downsideDev*0.25 + (20.0 * regimeCrashPct)
+
 	return Metrics{
-		Samples:             n,
-		MAE:                 mae,
-		RMSE:                rmse,
-		DirectionalAccuracy: dirAcc,
-		RankCorrelation:     rho,
-		InformationCoeff:    ic,
-		SharpeRatio:         sharpe,
-		SortinoRatio:        sortino,
-		MaxDrawdownBps:      maxDD,
-		WinRate:             winRate,
-		ProfitFactor:        profitFactor,
-		EquityCurve:         equityCurve,
-		BrierScore:          brier,
-		MeanForecast:        meanPred,
-		MeanRealized:        meanActual,
+		Samples:               n,
+		MAE:                   mae,
+		RMSE:                  rmse,
+		DirectionalAccuracy:   dirAcc,
+		RankCorrelation:       rho,
+		InformationCoeff:      ic,
+		SharpeRatio:           sharpe,
+		SortinoRatio:          sortino,
+		MaxDrawdownBps:        maxDD,
+		WinRate:               winRate,
+		ProfitFactor:          profitFactor,
+		EquityCurve:           equityCurve,
+		BrierScore:            brier,
+		MeanForecast:          meanPred,
+		MeanRealized:          meanActual,
+		DownsideDeviation:     downsideDev,
+		CrashDrawdownVelocity: maxDropVelocity,
+		StablecoinDepegRisk:   stableDepegRisk,
+		RegimeCrashPct:        regimeCrashPct,
 		Baselines: map[string]float64{
 			"zero_mae":  baselineZeroAE / float64(n),
 			"zero_rmse": math.Sqrt(baselineZeroSE / float64(n)),

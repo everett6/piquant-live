@@ -38,6 +38,14 @@ type Manager struct {
 
 	// ActivityLog records user-facing milestone events in human-friendly language.
 	activityLog []string
+
+	datasetCache map[string]datasetCacheEntry
+}
+
+type datasetCacheEntry struct {
+	modTime time.Time
+	size    int64
+	meta    DatasetMeta
 }
 
 // NewManager creates a manager rooted at dataDir.
@@ -55,10 +63,11 @@ func NewManager(dataDir string, cfg *config.Config) (*Manager, error) {
 	}
 
 	m := &Manager{
-		dataDir:     dataDir,
-		cfg:         cfg,
-		experiments: make(map[string]*Experiment),
-		searches:    make(map[string]*ParameterSearch),
+		dataDir:      dataDir,
+		cfg:          cfg,
+		experiments:  make(map[string]*Experiment),
+		searches:     make(map[string]*ParameterSearch),
+		datasetCache: make(map[string]datasetCacheEntry),
 		activityLog: []string{
 			"Research engine started.",
 			"Hardware telemetry initialized.",
@@ -281,6 +290,53 @@ func (m *Manager) LaunchSearch(ps *ParameterSearch, space SearchSpace) error {
 	return nil
 }
 
+// LaunchQuantumSearch starts a Quantum-Inspired Annealing hyperparameter search in a background goroutine.
+func (m *Manager) LaunchQuantumSearch(ps *ParameterSearch, opts QuantumSearchOptions) error {
+	m.mu.Lock()
+	if m.currentJob != "" {
+		m.mu.Unlock()
+		return errors.New("another experiment or search is currently active")
+	}
+
+	if ps.ID == "" {
+		ps.ID = fmt.Sprintf("qsearch-%d", time.Now().Unix())
+	}
+	if ps.CreatedAt.IsZero() {
+		ps.CreatedAt = time.Now()
+	}
+	ps.State = StateQueued
+	m.searches[ps.ID] = ps
+	_ = m.saveSearch(ps)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.activeCancel = cancel
+	m.currentJob = ps.ID
+	m.mu.Unlock()
+
+	m.LogActivity(fmt.Sprintf("Quantum-Inspired Annealing search #%s started for %s.", ps.ID, ps.Model))
+
+	go func() {
+		defer func() {
+			m.mu.Lock()
+			m.currentJob = ""
+			m.activeCancel = nil
+			_ = m.saveSearch(ps)
+			m.mu.Unlock()
+			if ps.State == StateCompleted && ps.BestTrial != nil {
+				m.LogActivity(fmt.Sprintf("Quantum search #%s completed. Best trial: lambda=%.4f (Val MAE: %.2f bps).", ps.ID, ps.BestTrial.Lambda, ps.BestTrial.ValMAE))
+			}
+		}()
+
+		_ = RunQuantumSearch(ctx, ps, opts, m.cfg, func(pct float64) {
+			m.mu.Lock()
+			ps.Progress = pct
+			m.mu.Unlock()
+		})
+	}()
+
+	return nil
+}
+
 // CancelActive cancels any running experiment or search.
 func (m *Manager) CancelActive() error {
 	m.mu.Lock()
@@ -356,8 +412,11 @@ type DatasetMeta struct {
 	QualityDesc string `json:"quality_desc"`
 }
 
-// ListDatasets scans dataDir for .jsonl capture files and computes their checksums and metadata.
+// ListDatasets scans dataDir for .jsonl capture files with in-memory stat caching to eliminate disk read overhead.
 func (m *Manager) ListDatasets() []DatasetMeta {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	pattern := filepath.Join(m.dataDir, "*.jsonl")
 	matches, _ := filepath.Glob(pattern)
 	var list []DatasetMeta
@@ -366,8 +425,12 @@ func (m *Manager) ListDatasets() []DatasetMeta {
 		if err != nil {
 			continue
 		}
+		if entry, ok := m.datasetCache[p]; ok && entry.size == info.Size() && entry.modTime.Equal(info.ModTime()) {
+			list = append(list, entry.meta)
+			continue
+		}
+
 		csum, _ := dataset.Checksum(p)
-		// Read quality header
 		r, err := dataset.Open(p)
 		var records, rejected int64
 		desc := "valid capture"
@@ -384,7 +447,7 @@ func (m *Manager) ListDatasets() []DatasetMeta {
 			desc = q.Describe()
 			_ = r.Close()
 		}
-		list = append(list, DatasetMeta{
+		meta := DatasetMeta{
 			Name:        filepath.Base(p),
 			Path:        p,
 			Size:        info.Size(),
@@ -392,7 +455,13 @@ func (m *Manager) ListDatasets() []DatasetMeta {
 			Records:     records,
 			Rejected:    rejected,
 			QualityDesc: desc,
-		})
+		}
+		m.datasetCache[p] = datasetCacheEntry{
+			modTime: info.ModTime(),
+			size:    info.Size(),
+			meta:    meta,
+		}
+		list = append(list, meta)
 	}
 	return list
 }
