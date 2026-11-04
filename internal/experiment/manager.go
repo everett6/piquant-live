@@ -14,6 +14,7 @@ import (
 	"piquant-live/internal/config"
 	"piquant-live/internal/dataset"
 	"piquant-live/internal/models/common"
+	"piquant-live/internal/telemetry"
 )
 
 // FeasibilityResult provides guidance on whether an experiment is runnable.
@@ -40,6 +41,7 @@ type Manager struct {
 	activityLog []string
 
 	datasetCache map[string]datasetCacheEntry
+	telCollector *telemetry.Collector
 }
 
 type datasetCacheEntry struct {
@@ -68,6 +70,7 @@ func NewManager(dataDir string, cfg *config.Config) (*Manager, error) {
 		experiments:  make(map[string]*Experiment),
 		searches:     make(map[string]*ParameterSearch),
 		datasetCache: make(map[string]datasetCacheEntry),
+		telCollector: telemetry.New(dataDir),
 		activityLog: []string{
 			"Research engine started.",
 			"Hardware telemetry initialized.",
@@ -243,6 +246,20 @@ func (m *Manager) LaunchExperiment(exp *Experiment) error {
 	return nil
 }
 
+// ThermalRecommendedWorkers samples the CPU core temperature and returns the thermally safe
+// parallel worker count for multi-seed or hyperparameter evaluations.
+func (m *Manager) ThermalRecommendedWorkers() (bool, int, float64) {
+	var tempC float64
+	if m != nil && m.telCollector != nil {
+		sample := m.telCollector.Collect()
+		if sample.Host.TempOK {
+			tempC = float64(sample.Host.TempC)
+		}
+	}
+	throttled, workers := ShouldThrottleForThermal(tempC)
+	return throttled, workers, tempC
+}
+
 // LaunchSearch starts a parameter search in a background goroutine.
 func (m *Manager) LaunchSearch(ps *ParameterSearch, space SearchSpace) error {
 	m.mu.Lock()
@@ -266,7 +283,12 @@ func (m *Manager) LaunchSearch(ps *ParameterSearch, space SearchSpace) error {
 	m.currentJob = ps.ID
 	m.mu.Unlock()
 
-	m.LogActivity(fmt.Sprintf("Parameter search #%s started for %s.", ps.ID, ps.Model))
+	throttled, workers, tempC := m.ThermalRecommendedWorkers()
+	if throttled {
+		m.LogActivity(fmt.Sprintf("Thermal guardrail active (%.1f°C): throttling search #%s to %d workers.", tempC, ps.ID, workers))
+	} else {
+		m.LogActivity(fmt.Sprintf("Parameter search #%s started for %s (%d workers).", ps.ID, ps.Model, workers))
+	}
 
 	go func() {
 		defer func() {

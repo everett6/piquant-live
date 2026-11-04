@@ -134,6 +134,20 @@ func Registry() []ModelSpec {
 			Limitations: "Requires higher compute per sample to fit three constituent sub-experts simultaneously.",
 			Calibration: "Online exponential loss weighting w_{m,t+1} = w_{m,t} exp(-eta * L_{m,t}).",
 		},
+		// 8. Minutes Horizon: Perpetual Basis & Liquidation Cascade Reversion
+		{
+			ID:          "perp_liquidation_reversion",
+			Name:        "Perp Basis & Liquidation Reversion",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "micro_dev", "spread_bps", "ofi_30s", "mlofi_1s", "vol_30s_bps", "ret_1s_bps", "trade_imb_5s", "trade_cnt_1s"},
+			Algorithm:   "Regularized Ridge + Non-Linear Liquidation Cascade Exhaustion Reversion & Perpetual Basis Carry",
+			Version:     "v1.2.0",
+			Description: "Detects forced margin liquidation cascades and captures post-cascade V-shaped exhaustion reversion combined with perpetual funding basis carry.",
+			Assumptions: "Forced liquidations create temporary price dislocations beyond fundamental liquidity equilibrium that revert upon exhaustion.",
+			Limitations: "During prolonged macro insolvency events, cascades may chain without immediate V-shaped recovery.",
+			Calibration: "Least-squares residual calibration of liquidation exhaustion alpha and EWMA basis z-score pull.",
+		},
 		// 8. Hours Horizon: Volatility Regime Filter
 		{
 			ID:          "vol_regime_ridge",

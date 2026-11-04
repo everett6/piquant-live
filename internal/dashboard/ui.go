@@ -318,6 +318,18 @@ const indexHTML = `<!doctype html>
           <div class="stat"><div class="k">Hawkes Flow Imb</div><div class="v" id="mmHawkes" style="font-size:16px;color:var(--accent)">+0.31</div><div class="s">Self-exciting kernel</div></div>
           <div class="stat"><div class="k">Stat-Arb Half-Life</div><div class="v" id="mmHalfLife" style="font-size:16px">14.5 ticks</div><div class="s">OU spread reversion</div></div>
         </div>
+        <div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:12px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+            <div>
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--info);margin-bottom:4px">Almgren&ndash;Chriss 5-Slice Optimal Trajectory (sinh/cosh)</div>
+              <div id="mmAlmgrenSchedule" class="mono" style="font-size:12px;color:var(--text)">Slice 1: 31.2% &bull; Slice 2: 24.1% &bull; Slice 3: 18.7% &bull; Slice 4: 14.6% &bull; Slice 5: 11.4%</div>
+            </div>
+            <div>
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--accent);margin-bottom:4px">Multi-Asset Covariance Kelly Weights (w* = f &Sigma;<sup>-1</sup>&mu;)</div>
+              <div id="mmKellyWeights" class="mono" style="font-size:12px;color:var(--text)">BTCUSDT: +3.8% &bull; ETHUSDT: +1.9% &bull; BTC-ETH Stat-Arb: +22.7%</div>
+            </div>
+          </div>
+        </div>
         <div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px">
           <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Simulated Queue-Reactive Paper Maker Fills (Zero Live Capital Risk)</div>
           <table>
@@ -370,6 +382,10 @@ const indexHTML = `<!doctype html>
                 <option value="meta_labeler">Meta-Labeling Fee-Gated Filter (Two-Stage Kelly)</option>
                 <option value="glft_maker">GLFT Queue-Reactive Market Maker (Avellaneda-Stoikov)</option>
                 <option value="regime_ensemble">BOCPD Regime-Switching Ensemble (Ridge+ENet+GLFT)</option>
+                <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
+              </select>
+              <select id="exp-model" style="display:none" aria-hidden="true">
+                <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
               </select>
             </div>
 
@@ -508,6 +524,7 @@ const indexHTML = `<!doctype html>
               <option value="meta_labeler">Meta-Labeling Fee-Gated Filter</option>
               <option value="glft_maker">GLFT Queue-Reactive Market Maker</option>
               <option value="regime_ensemble">BOCPD Regime-Switching Ensemble</option>
+              <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
             </select>
           </div>
           <div class="form-group">
@@ -592,6 +609,7 @@ const indexHTML = `<!doctype html>
           <input id="genRecords" type="number" value="3000" step="500">
         </div>
         <button id="btnGenDataset" class="btn btn-secondary" style="width:100%" type="button">Generate Capture File</button>
+        <button id="btnRecordStream" class="btn btn-primary" style="width:100%;margin-top:8px" type="button">Record Public Stream</button>
         <div id="genStatus" class="meta" style="margin-top:10px"></div>
       </section>
     </div>
@@ -900,6 +918,19 @@ const indexHTML = `<!doctype html>
         if ($("blotterVpinPill")) $("blotterVpinPill").textContent = "VPIN Toxicity: " + num(d.vpin, 2);
         if ($("blotterKalmanPill")) $("blotterKalmanPill").textContent = "BTC\u2192ETH \u03b2: " + num(ll.kalman_beta, 2) + " (Z = " + num(ll.spread_z_score, 2) + ")";
 
+        if (d.almgren_chriss_schedule && d.almgren_chriss_schedule.length && $("mmAlmgrenSchedule")) {
+          $("mmAlmgrenSchedule").innerHTML = d.almgren_chriss_schedule.map(function(s, idx){
+            return "S" + (idx+1) + ": <b>" + num(s*100, 1) + "%</b>";
+          }).join(" &bull; ");
+        }
+        if (d.kelly_weights && $("mmKellyWeights")) {
+          var kw = d.kelly_weights;
+          $("mmKellyWeights").innerHTML =
+            "BTC: <b style='color:var(--accent)'>" + (kw.btcusdt >= 0 ? "+" : "") + num(kw.btcusdt*100, 1) + "%</b> &bull; " +
+            "ETH: <b style='color:var(--info)'>" + (kw.ethusdt >= 0 ? "+" : "") + num(kw.ethusdt*100, 1) + "%</b> &bull; " +
+            "Stat-Arb: <b style='color:var(--accent)'>" + (kw.stat_arb >= 0 ? "+" : "") + num(kw.stat_arb*100, 1) + "%</b>";
+        }
+
         if (d.paper_fills && d.paper_fills.length && $("paperFillsBody")) {
           $("paperFillsBody").innerHTML = d.paper_fills.map(function(f){
             var isBid = f.side && f.side.indexOf("BID") >= 0;
@@ -1066,6 +1097,12 @@ const indexHTML = `<!doctype html>
       "<div class='grid' style='margin-top:14px'>" +
         "<div class='span6'><div class='stat'><div class='k'>Downside Semi-Variance (BTC/ETH Drops)</div><div class='v' style='color:var(--bad);font-size:16px'>" + (testM.downside_deviation ? num(testM.downside_deviation, 2) + " bps" : "-") + "</div><div class='s'>Realized volatility during negative price shocks</div></div></div>" +
         "<div class='span6'><div class='stat'><div class='k'>Stablecoin &amp; Cascade Dislocation Risk</div><div class='v' style='color:var(--warn);font-size:16px'>" + (testM.stablecoin_depeg_risk ? num(testM.stablecoin_depeg_risk, 2) + " bps" : "-") + "</div><div class='s'>Basis drift exposure under quote asset discount / liquidation</div></div></div>" +
+      "</div>" +
+      "<div class='grid' style='margin-top:14px'>" +
+        "<div class='span3'><div class='stat'><div class='k'>Latency Alpha (5ms / 25ms)</div><div class='v' style='color:var(--accent);font-size:15px'>" + num(testM.alpha_decay_5ms_bps, 2) + " / " + num(testM.alpha_decay_25ms_bps, 2) + " bps</div><div class='s'>Retained edge under jitter</div></div></div>" +
+        "<div class='span3'><div class='stat'><div class='k'>Latency Alpha (100ms)</div><div class='v' style='color:var(--warn);font-size:15px'>" + num(testM.alpha_decay_100ms_bps, 2) + " bps</div><div class='s'>Matching-engine delay</div></div></div>" +
+        "<div class='span3'><div class='stat'><div class='k'>Signal Half-Life</div><div class='v' style='color:var(--info);font-size:15px'>" + num(testM.signal_half_life_ms, 1) + " ms</div><div class='s'>Exponential alpha decay</div></div></div>" +
+        "<div class='span3'><div class='stat'><div class='k'>Walk-Forward IC / ICIR</div><div class='v' style='color:var(--accent);font-size:15px'>" + num(testM.walk_forward_ic, 3) + " / " + num(testM.walk_forward_stability, 2) + "</div><div class='s'>Rolling OOS stability</div></div></div>" +
       "</div>" +
       "<div style='display:flex;justify-content:space-between;align-items:center;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)'>" +
         "<div style='display:flex;gap:10px;align-items:center'>" +
@@ -1428,6 +1465,37 @@ const indexHTML = `<!doctype html>
         status.textContent = "Error: " + err.message;
       });
   });
+
+  // Action: Record Public Exchange Market Stream
+  var btnRec = $("btnRecordStream");
+  if (btnRec) {
+    btnRec.addEventListener("click", function(){
+      var status = $("genStatus");
+      btnRec.disabled = true;
+      status.textContent = "Recording public exchange stream...";
+      var payload = {
+        symbol: $("genInstrument").value || "BTCUSDT",
+        ticks: parseInt($("genRecords").value, 10) || 600
+      };
+      fetch("/api/datasets/capture", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(payload)
+      }).then(function(r){ return r.json(); })
+        .then(function(res){
+          btnRec.disabled = false;
+          if (res.ok) {
+            status.textContent = "Recorded " + res.filename;
+            fetchDatasets();
+          } else {
+            status.textContent = "Capture failed: " + res.error;
+          }
+        }).catch(function(err){
+          btnRec.disabled = false;
+          status.textContent = "Error: " + err.message;
+        });
+    });
+  }
 
   function fetchDatasets(){
     fetch("/api/datasets").then(function(r){ return r.json(); }).then(function(d){

@@ -41,6 +41,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/models", s.handleModels)
 	s.mux.HandleFunc("/api/datasets", s.handleDatasets)
 	s.mux.HandleFunc("/api/datasets/generate", s.handleDatasetGenerate)
+	s.mux.HandleFunc("/api/datasets/capture", s.handleDatasetCapture)
 	s.mux.HandleFunc("/api/mode", s.handleMode)
 	s.mux.HandleFunc("/api/worker/eval", s.handleWorkerEval)
 	s.mux.HandleFunc("/api/paper/blotter", s.handlePaperBlotter)
@@ -703,6 +704,59 @@ func (s *Server) handleDatasetGenerate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "filename": filename, "path": targetPath})
 }
 
+type captureDatasetReq struct {
+	Symbol      string `json:"symbol"`
+	DurationSec int    `json:"duration_sec"`
+	Ticks       int    `json:"ticks"`
+}
+
+func (s *Server) handleDatasetCapture(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.opts.Manager == nil {
+		if s.proxyToEngine(w, r) {
+			return
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "research engine peer unavailable"})
+		return
+	}
+
+	var req captureDatasetReq
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Symbol == "" {
+		req.Symbol = "BTCUSDT"
+	}
+	if req.Ticks <= 0 {
+		req.Ticks = 600
+	}
+
+	dataDir := "data"
+	if len(s.opts.DataDirs) > 0 {
+		dataDir = s.opts.DataDirs[0]
+	}
+
+	info, err := experiment.CapturePublicMarketStream(dataDir, req.Symbol, req.DurationSec, req.Ticks)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.opts.Manager.LogActivity(fmt.Sprintf("Recorded public market stream: %s (%d ticks, sha256=%s...).", info.Name, info.Records, info.Checksum[:12]))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"filename": info.Name,
+		"path":     info.Path,
+		"dataset":  info,
+	})
+}
+
 func (s *Server) handleMode(w http.ResponseWriter, r *http.Request) {
 	if s.authenticate(r) == authNone {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
@@ -925,14 +979,29 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 	}
 	quote := mm.Quote(&x, 0.35)
 	regime := common.ClassifyRegime(&x, 1.80, 0.85)
+	acSchedule := common.AlmgrenChrissSchedule(1.0, 5, 1.65, 0.08, 0.12)
+	kellyVec := common.MultiAssetKellyAllocate(
+		[3]float64{1.45, 1.80, 1.64},
+		[3]float64{18.0, 24.0, 9.5},
+		0.64,
+		0.5,
+		1.5,
+	)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"mid_price":     50000.00,
-		"stoikov_price": 50000.08,
-		"quote":         quote,
-		"regime":        regime,
-		"vpin":          0.28,
-		"hawkes_imb":    0.31,
+		"mid_price":               50000.00,
+		"stoikov_price":           50000.08,
+		"quote":                   quote,
+		"regime":                  regime,
+		"vpin":                    0.28,
+		"hawkes_imb":              0.31,
+		"almgren_chriss_schedule": acSchedule,
+		"kelly_weights": map[string]float64{
+			"btcusdt":  kellyVec[0],
+			"ethusdt":  kellyVec[1],
+			"stat_arb": kellyVec[2],
+		},
+		"kelly_array": kellyVec,
 		"lead_lag": experiment.CrossAssetStats{
 			LeaderSymbol:    "BTCUSDT",
 			FollowerSymbol:  "ETHUSDT",

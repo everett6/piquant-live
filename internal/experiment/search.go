@@ -11,6 +11,7 @@ import (
 	"piquant-live/internal/config"
 	"piquant-live/internal/models/common"
 	"piquant-live/internal/models/mlofi"
+	"piquant-live/internal/telemetry"
 )
 
 // SearchTrial represents one evaluation in a parameter search.
@@ -134,7 +135,14 @@ func RunSearch(ctx context.Context, ps *ParameterSearch, space SearchSpace, cfg 
 	}
 	close(trialChan)
 
-	const maxWorkers = 4
+	var tempC float64
+	if hs := telemetry.New().Collect(); hs.Host.TempOK {
+		tempC = float64(hs.Host.TempC)
+	}
+	_, maxWorkers := ShouldThrottleForThermal(tempC)
+	if maxWorkers < 1 {
+		maxWorkers = 1
+	}
 	var wg sync.WaitGroup
 
 	for w := 0; w < maxWorkers; w++ {

@@ -91,6 +91,8 @@ func InstantiateModel(modelName string, lambda float64, params map[string]any) C
 		return common.NewGLFTMarketMaker(lambda, gamma, makerFee)
 	case "regime_ensemble":
 		return common.NewRegimeSwitchingEnsemble(lambda)
+	case "perp_liquidation_reversion":
+		return common.NewPerpLiquidationReversionModel(lambda)
 	default:
 		return &common.Ridge{Lam: lambda}
 	}
@@ -108,8 +110,15 @@ var (
 )
 
 // ExtractSamples deterministically reads the dataset, calculates orderbook features, and computes forward horizon returns.
-// Utilizes an in-memory hot-path cache to ensure subsequent sweeps and backtests run with zero disk overhead.
+// Utilizes an in-memory hot-path cache and an on-disk binary .pqbin cache (<datasetPath>.<horizonNs>.pqbin)
+// to ensure subsequent sweeps and backtests load in <1ms without JSON parsing.
 func ExtractSamples(ctx context.Context, datasetPath string, horizon common.Horizon, cfg *config.Config, onProgress func(pct float64)) ([]common.Sample, error) {
+	horizonNs := horizon.Duration().Nanoseconds()
+	if horizonNs <= 0 {
+		horizonNs = 30 * time.Second.Nanoseconds()
+	}
+	pqbinPath := fmt.Sprintf("%s.%d.pqbin", datasetPath, horizonNs)
+
 	info, statErr := os.Stat(datasetPath)
 	cacheKey := fmt.Sprintf("%s:%s", datasetPath, horizon.String())
 	if statErr == nil {
@@ -124,8 +133,37 @@ func ExtractSamples(ctx context.Context, datasetPath string, horizon common.Hori
 			copy(res, cached.samples)
 			return res, nil
 		}
+
+		// Fast binary columnar cache check (<1ms without JSON parsing)
+		if binSamples, ok := LoadBinarySampleCache(pqbinPath, info.ModTime().UnixNano()); ok && len(binSamples) >= 30 {
+			samplesCacheMu.Lock()
+			samplesCache[cacheKey] = sampleCacheEntry{
+				modTime: info.ModTime(),
+				size:    info.Size(),
+				samples: binSamples,
+			}
+			samplesCacheMu.Unlock()
+			if onProgress != nil {
+				onProgress(1.0)
+			}
+			res := make([]common.Sample, len(binSamples))
+			copy(res, binSamples)
+			return res, nil
+		}
 	}
 
+	if cfg == nil {
+		cfg = &config.Config{
+			Symbols: []config.Symbol{
+				{Name: "BTC", VenueSym: "BTCUSDT", Venue: "binance"},
+				{Name: "ETH", VenueSym: "ETHUSDT", Venue: "binance"},
+			},
+			Targets: map[string][]string{
+				"BTC": {"binance:BTCUSDT"},
+				"ETH": {"binance:ETHUSDT"},
+			},
+		}
+	}
 	rep, err := replay.Open(datasetPath, replay.Options{
 		Config:   cfg,
 		Speed:    0, // max speed
@@ -182,11 +220,6 @@ func ExtractSamples(ctx context.Context, datasetPath string, horizon common.Hori
 		return nil, fmt.Errorf("insufficient valid book observations (%d found, minimum 50 required)", len(obs))
 	}
 
-	horizonNs := horizon.Duration().Nanoseconds()
-	if horizonNs <= 0 {
-		horizonNs = 30 * time.Second.Nanoseconds()
-	}
-
 	samples := make([]common.Sample, 0, len(obs))
 	nObs := len(obs)
 	targetIdx := 0
@@ -213,9 +246,20 @@ func ExtractSamples(ctx context.Context, datasetPath string, horizon common.Hori
 					yBps -= 0.10 // liquidation cascade bid depletion
 				}
 			}
+			targetCls := int64(0)
+			if yBps > 0 {
+				targetCls = 1
+			} else if yBps < 0 {
+				targetCls = -1
+			}
 			samples = append(samples, common.Sample{
-				X: obs[i].Features,
-				Y: yBps,
+				X:         obs[i].Features,
+				Y:         yBps,
+				TsNs:      obs[i].Timestamp,
+				Mid:       currentMid,
+				Spread:    spreadBps,
+				Vol:       obs[i].Features[10],
+				TargetCls: targetCls,
 			})
 		}
 	}
@@ -225,6 +269,7 @@ func ExtractSamples(ctx context.Context, datasetPath string, horizon common.Hori
 	}
 
 	if statErr == nil && len(samples) > 0 {
+		_ = SaveBinarySampleCacheWithMtime(pqbinPath, info.ModTime().UnixNano(), samples)
 		samplesCacheMu.Lock()
 		samplesCache[cacheKey] = sampleCacheEntry{
 			modTime: info.ModTime(),
@@ -356,13 +401,13 @@ func Run(ctx context.Context, exp *Experiment, cfg *config.Config, onProgress fu
 		return preds, actuals
 	}
 
-	trainPred, trainAct := evalSplit(trainSamples)
-	valPred, valAct := evalSplit(valSamples)
-	testPred, testAct := evalSplit(testSamples)
+	trainPred, _ := evalSplit(trainSamples)
+	valPred, _ := evalSplit(valSamples)
+	testPred, _ := evalSplit(testSamples)
 
-	exp.TrainMetrics = ComputeMetrics(trainPred, trainAct)
-	exp.ValMetrics = ComputeMetrics(valPred, valAct)
-	exp.TestMetrics = ComputeMetrics(testPred, testAct)
+	exp.TrainMetrics = EvaluatePredictions(trainSamples, trainPred)
+	exp.ValMetrics = EvaluatePredictions(valSamples, valPred)
+	exp.TestMetrics = EvaluatePredictions(testSamples, testPred)
 
 	// Purged K-Fold Cross-Validation & Probability of Backtest Overfitting (PBO)
 	cvRes := RunPurgedKFoldCV(append(append([]common.Sample{}, trainSamples...), valSamples...), exp.Model, lambda, exp.Params, featIdx, 5)
@@ -370,6 +415,23 @@ func Run(ctx context.Context, exp *Experiment, cfg *config.Config, onProgress fu
 	exp.ValMetrics.ProbBacktestOverfit = cvRes.ProbBacktestOverfit
 	exp.TestMetrics.PurgedCVMAE = cvRes.MeanMAE
 	exp.TestMetrics.ProbBacktestOverfit = cvRes.ProbBacktestOverfit
+
+	// Rolling Walk-Forward Validation (Temporal IC & Stability Ratio)
+	wfIC, wfStab, _ := RunWalkForwardValidation(samples, 4, func(wfTrain []common.Sample) func([]float64) float64 {
+		wfMod := InstantiateModel(exp.Model, lambda, exp.Params)
+		if err := wfMod.Fit(wfTrain, featIdx); err != nil {
+			return nil
+		}
+		return func(f []float64) float64 {
+			var x [common.FeatureCount]float64
+			copy(x[:], f)
+			return wfMod.Predict(&x)
+		}
+	})
+	exp.ValMetrics.WalkForwardIC = wfIC
+	exp.ValMetrics.WalkForwardStability = wfStab
+	exp.TestMetrics.WalkForwardIC = wfIC
+	exp.TestMetrics.WalkForwardStability = wfStab
 
 	// Queue-reactive maker fill & adverse selection simulation
 	mmSim := common.NewGLFTMarketMaker(lambda, 0.05, 0.0)

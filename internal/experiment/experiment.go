@@ -55,6 +55,14 @@ type Metrics struct {
 	PurgedCVMAE         float64 `json:"purged_cv_mae"`         // 5-Fold Purged & Embargoed Cross-Validation MAE (bps)
 	MakerFillRate       float64 `json:"maker_fill_rate"`       // Queue-reactive passive limit order fill rate [0, 1]
 	AdverseSelectionBps float64 `json:"adverse_selection_bps"` // Post-fill adverse selection drift against maker (bps)
+
+	// Network Latency-Jitter Alpha Decay & Rolling Walk-Forward Validation
+	AlphaDecay5msBps     float64 `json:"alpha_decay_5ms_bps"`    // Retained net trade edge under 5ms round-trip jitter (bps)
+	AlphaDecay25msBps    float64 `json:"alpha_decay_25ms_bps"`   // Retained net trade edge under 25ms round-trip jitter (bps)
+	AlphaDecay100msBps   float64 `json:"alpha_decay_100ms_bps"`  // Retained net trade edge under 100ms round-trip jitter (bps)
+	SignalHalfLifeMs     float64 `json:"signal_half_life_ms"`    // Estimated alpha decay half-life (ms)
+	WalkForwardIC        float64 `json:"walk_forward_ic"`        // Mean expanding/rolling walk-forward out-of-sample IC
+	WalkForwardStability float64 `json:"walk_forward_stability"` // Walk-forward IC stability ratio (ICIR)
 }
 
 // SplitConfig defines chronological, non-overlapping dataset partitions.
@@ -374,6 +382,22 @@ func ComputeMetrics(predicted, actual []float64) Metrics {
 			"mean_rmse": math.Sqrt(baselineMeanSE / float64(n)),
 		},
 	}
+}
+
+// EvaluatePredictions computes full statistical metrics plus realistic network latency-jitter
+// alpha decay profiles (5ms, 25ms, 100ms) and signal half-life for a slice of samples.
+func EvaluatePredictions(samples []common.Sample, predicted []float64) Metrics {
+	actual := make([]float64, len(samples))
+	for i := range samples {
+		actual[i] = samples[i].Y
+	}
+	m := ComputeMetrics(predicted, actual)
+	d5, d25, d100, hl := SimulateLatencyAlphaDecay(samples, predicted, 0.05, 0.20)
+	m.AlphaDecay5msBps = d5
+	m.AlphaDecay25msBps = d25
+	m.AlphaDecay100msBps = d100
+	m.SignalHalfLifeMs = hl
+	return m
 }
 
 // spearmanRankCorrelation calculates the rank correlation between two vectors.

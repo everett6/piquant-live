@@ -33,8 +33,13 @@ func NewRidge(lam float64) *Ridge {
 
 // design rows are (x, y) pairs; features listed in idx are used.
 type Sample struct {
-	X [FeatureCount]float64
-	Y float64
+	X         [FeatureCount]float64
+	Y         float64
+	TsNs      int64
+	Mid       float64
+	Spread    float64
+	Vol       float64
+	TargetCls int64
 }
 
 // Standardise computes the training mean and standard deviation per feature.
