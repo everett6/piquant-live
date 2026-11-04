@@ -17,3 +17,7 @@ piquant-data/
 *~
 .idea/
 .vscode/
+
+# Build & Agent Artifacts
+.agents/
+graphify-out/

@@ -9,12 +9,12 @@ import (
 // without storing trade history, using an exponential decay kernel.
 // LambdaPlus(t) = mu + sum_{t_i < t} alpha * exp(-beta * (t - t_i))
 type HawkesIntensity struct {
-	Mu          float64 // Baseline intensity (trades/sec)
-	AlphaSelf   float64 // Self-excitation jump
-	AlphaCross  float64 // Cross-excitation jump
-	Beta        float64 // Exponential decay rate (1/sec)
-	lastTimeNs  int64
-	intensityBuy float64
+	Mu            float64 // Baseline intensity (trades/sec)
+	AlphaSelf     float64 // Self-excitation jump
+	AlphaCross    float64 // Cross-excitation jump
+	Beta          float64 // Exponential decay rate (1/sec)
+	lastTimeNs    int64
+	intensityBuy  float64
 	intensitySell float64
 }
 
@@ -75,12 +75,12 @@ func (h *HawkesIntensity) TotalIntensity() float64 {
 
 // VPINTracker measures Volume-Synchronized Probability of Toxicity across M volume buckets.
 type VPINTracker struct {
-	BucketVol    float64
-	NBuckets     int
-	currBuyVol   float64
-	currSellVol  float64
-	bucketDiffs  []float64
-	bucketIdx    int
+	BucketVol     float64
+	NBuckets      int
+	currBuyVol    float64
+	currSellVol   float64
+	bucketDiffs   []float64
+	bucketIdx     int
 	filledBuckets int
 }
 
@@ -168,9 +168,9 @@ func StoikovMicroprice(bestBid, bestAsk, bidQty, askQty int64) float64 {
 
 // TripleBarrierLabeler evaluates whether profit target, stop loss, or time horizon is hit first.
 type TripleBarrierLabeler struct {
-	PtBps      float64 // Profit target in basis points
-	SlBps      float64 // Stop loss in basis points
-	Horizon    time.Duration
+	PtBps   float64 // Profit target in basis points
+	SlBps   float64 // Stop loss in basis points
+	Horizon time.Duration
 }
 
 // BarrierResult represents the outcome of a triple-barrier exit.

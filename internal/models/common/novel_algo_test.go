@@ -109,9 +109,9 @@ func TestMetaLabelingFilter(t *testing.T) {
 	// Create samples where informative feature X0 drives direction and X1 drives trade magnitude / conviction
 	samples := make([]Sample, 120)
 	for i := 0; i < 120; i++ {
-		x0 := float64(i%6) - 2.5     // direction signal
+		x0 := float64(i%6) - 2.5      // direction signal
 		x1 := float64((i*3)%10) * 0.5 // conviction signal (0.0 to 4.5)
-		y := x0 * (x1 * 3.0)         // magnitude proportional to x1
+		y := x0 * (x1 * 3.0)          // magnitude proportional to x1
 		samples[i] = Sample{
 			X: [FeatureCount]float64{x0, x1},
 			Y: y,
