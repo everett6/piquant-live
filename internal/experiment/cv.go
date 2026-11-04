@@ -2,6 +2,7 @@ package experiment
 
 import (
 	"math"
+	"sync"
 
 	"piquant-live/internal/models/common"
 )
@@ -81,6 +82,7 @@ func invNormalCDF(p float64) float64 {
 
 // RunPurgedKFoldCV executes K-Fold Cross-Validation with purging and embargo buffers
 // around each validation fold to eliminate serial lookahead leakage across overlapping labels.
+// Folds are evaluated in parallel across CPU cores using a bounded worker pool.
 func RunPurgedKFoldCV(samples []common.Sample, modelName string, lambda float64, params map[string]any, featIdx []int, kFolds int) PurgedCVResult {
 	n := len(samples)
 	if kFolds < 2 {
@@ -93,9 +95,17 @@ func RunPurgedKFoldCV(samples []common.Sample, modelName string, lambda float64,
 	foldSize := n / kFolds
 	embargo := int(math.Max(2.0, float64(n)*0.02)) // 2% purge/embargo buffer on each boundary
 
-	foldMAEs := make([]float64, 0, kFolds)
-	var sumMAE, sumSharpe float64
-	var overfitFolds int
+	type foldResult struct {
+		mae     float64
+		sharpe  float64
+		overfit bool
+		valid   bool
+	}
+	foldResults := make([]foldResult, kFolds)
+
+	maxWorkers := 4
+	sem := make(chan struct{}, maxWorkers)
+	var wg sync.WaitGroup
 
 	for k := 0; k < kFolds; k++ {
 		valStart := k * foldSize
@@ -107,61 +117,89 @@ func RunPurgedKFoldCV(samples []common.Sample, modelName string, lambda float64,
 			continue
 		}
 
-		// Construct purged + embargoed training set:
-		// Exclude [valStart - embargo, valEnd + embargo)
-		purgeLeft := valStart - embargo
-		if purgeLeft < 0 {
-			purgeLeft = 0
-		}
-		embargoRight := valEnd + embargo
-		if embargoRight > n {
-			embargoRight = n
-		}
+		kIdx := k
+		wg.Add(1)
+		go func(k int, vStart, vEnd int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-		trainSlice := make([]common.Sample, 0, n-(embargoRight-purgeLeft))
-		if purgeLeft > 0 {
-			trainSlice = append(trainSlice, samples[:purgeLeft]...)
-		}
-		if embargoRight < n {
-			trainSlice = append(trainSlice, samples[embargoRight:]...)
-		}
-		if len(trainSlice) < 10 {
-			continue
-		}
+			// Construct purged + embargoed training set:
+			// Exclude [vStart - embargo, vEnd + embargo)
+			purgeLeft := vStart - embargo
+			if purgeLeft < 0 {
+				purgeLeft = 0
+			}
+			embargoRight := vEnd + embargo
+			if embargoRight > n {
+				embargoRight = n
+			}
 
-		valSlice := samples[valStart:valEnd]
+			trainSlice := make([]common.Sample, 0, n-(embargoRight-purgeLeft))
+			if purgeLeft > 0 {
+				trainSlice = append(trainSlice, samples[:purgeLeft]...)
+			}
+			if embargoRight < n {
+				trainSlice = append(trainSlice, samples[embargoRight:]...)
+			}
+			if len(trainSlice) < 10 {
+				return
+			}
 
-		mod := InstantiateModel(modelName, lambda, params)
-		if err := mod.Fit(trainSlice, featIdx); err != nil {
-			continue
-		}
+			valSlice := samples[vStart:vEnd]
 
-		// Evaluate in-sample train Sharpe vs out-of-fold val Sharpe to measure PBO
-		trainPreds := make([]float64, len(trainSlice))
-		trainActuals := make([]float64, len(trainSlice))
-		for i, s := range trainSlice {
-			trainPreds[i] = mod.Predict(&s.X)
-			trainActuals[i] = s.Y
-		}
-		trainM := ComputeMetrics(trainPreds, trainActuals)
+			mod := InstantiateModel(modelName, lambda, params)
+			if err := mod.Fit(trainSlice, featIdx); err != nil {
+				return
+			}
 
-		valPreds := make([]float64, len(valSlice))
-		valActuals := make([]float64, len(valSlice))
-		for i, s := range valSlice {
-			valPreds[i] = mod.Predict(&s.X)
-			valActuals[i] = s.Y
-		}
-		valM := ComputeMetrics(valPreds, valActuals)
+			// Evaluate in-sample train Sharpe vs out-of-fold val Sharpe to measure PBO
+			trainPreds := make([]float64, len(trainSlice))
+			trainActuals := make([]float64, len(trainSlice))
+			for i, s := range trainSlice {
+				trainPreds[i] = mod.Predict(&s.X)
+				trainActuals[i] = s.Y
+			}
+			trainM := ComputeMetrics(trainPreds, trainActuals)
 
-		foldMAEs = append(foldMAEs, valM.MAE)
-		sumMAE += valM.MAE
-		sumSharpe += valM.SharpeRatio
+			valPreds := make([]float64, len(valSlice))
+			valActuals := make([]float64, len(valSlice))
+			for i, s := range valSlice {
+				valPreds[i] = mod.Predict(&s.X)
+				valActuals[i] = s.Y
+			}
+			valM := ComputeMetrics(valPreds, valActuals)
 
-		// Fold exhibits backtest overfitting if in-sample Sharpe > 0 but out-of-fold Sharpe <= 0
-		// or out-of-fold MAE degrades > 25% over zero-forecast baseline
-		zeroBaselineMAE := valM.Baselines["zero_mae"]
-		if (trainM.SharpeRatio > 0.1 && valM.SharpeRatio < 0) || (zeroBaselineMAE > 0 && valM.MAE > zeroBaselineMAE*1.15) {
-			overfitFolds++
+			// Fold exhibits backtest overfitting if in-sample Sharpe > 0 but out-of-fold Sharpe <= 0
+			// or out-of-fold MAE degrades > 15% over zero-forecast baseline
+			overfit := false
+			zeroBaselineMAE := valM.Baselines["zero_mae"]
+			if (trainM.SharpeRatio > 0.1 && valM.SharpeRatio < 0) || (zeroBaselineMAE > 0 && valM.MAE > zeroBaselineMAE*1.15) {
+				overfit = true
+			}
+
+			foldResults[k] = foldResult{
+				mae:     valM.MAE,
+				sharpe:  valM.SharpeRatio,
+				overfit: overfit,
+				valid:   true,
+			}
+		}(kIdx, valStart, valEnd)
+	}
+	wg.Wait()
+
+	foldMAEs := make([]float64, 0, kFolds)
+	var sumMAE, sumSharpe float64
+	var overfitFolds int
+
+	for k := 0; k < kFolds; k++ {
+		if foldResults[k].valid {
+			foldMAEs = append(foldMAEs, foldResults[k].mae)
+			sumMAE += foldResults[k].mae
+			sumSharpe += foldResults[k].sharpe
+			if foldResults[k].overfit {
+				overfitFolds++
+			}
 		}
 	}
 

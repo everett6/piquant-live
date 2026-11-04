@@ -60,21 +60,18 @@ func (r *AdaptiveRLS) Fit(samples []Sample, idx []int) error {
 
 	// Dimensions: bias + k features
 	k := len(idx)
+	if k > FeatureCount {
+		k = FeatureCount
+	}
 	d := k + 1
 
-	// Weights vector w[0] = bias, w[1..k] = features
-	w := make([]float64, d)
-
-	// Covariance matrix P initialized to (1/delta) * I
-	p := make([][]float64, d)
+	// Weights, intermediate vectors, and covariance matrix are stack-allocated for 0 allocations.
+	var w, u, pu, gain [FeatureCount + 1]float64
+	var p [FeatureCount + 1][FeatureCount + 1]float64
 	for i := 0; i < d; i++ {
-		p[i] = make([]float64, d)
 		p[i][i] = 1.0 / r.PriorPrecision
 	}
 
-	u := make([]float64, d)
-	pu := make([]float64, d)
-	gain := make([]float64, d)
 	lam := r.ForgettingFactor
 	invLam := 1.0 / lam
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
+	"sync"
 	"time"
 
 	"piquant-live/internal/config"
@@ -96,11 +98,25 @@ func RunSearch(ctx context.Context, ps *ParameterSearch, space SearchSpace, cfg 
 		return err
 	}
 
-	totalCombinations := len(space.FeatureSets) * len(space.Lambdas)
-	trialIdx := 0
+	type trialSpec struct {
+		trialID int
+		fsetStr string
+		lambda  float64
+	}
+	var specs []trialSpec
+	trialCounter := 0
+	for _, fsetStr := range space.FeatureSets {
+		for _, lam := range space.Lambdas {
+			trialCounter++
+			specs = append(specs, trialSpec{trialID: trialCounter, fsetStr: fsetStr, lambda: lam})
+		}
+	}
+	totalCombinations := len(specs)
 
+	var mu sync.Mutex
 	var bestTrial *SearchTrial
 	bestScore := math.MaxFloat64 // Lower Val MAE is better
+	completedCount := 0
 
 	valActuals := make([]float64, len(valSamples))
 	for i, s := range valSamples {
@@ -112,61 +128,83 @@ func RunSearch(ctx context.Context, ps *ParameterSearch, space SearchSpace, cfg 
 		testActuals[i] = s.Y
 	}
 
-	for _, fsetStr := range space.FeatureSets {
-		fset := mlofi.FeatureSet(fsetStr)
-		featIdx, err := mlofi.Features(fset)
-		if err != nil {
-			featIdx = []int{0, 1, 2, 3, 4, 5, 6}
-		}
-
-		for _, lam := range space.Lambdas {
-			if ctx.Err() != nil {
-				ps.State = StateCancelled
-				ps.Error = "search cancelled by user"
-				return ctx.Err()
-			}
-
-			trialIdx++
-			trialStart := time.Now()
-
-			model := InstantiateModel(ps.Model, lam, map[string]any{"lambda": lam})
-			if err := model.Fit(trainSamples, featIdx); err != nil {
-				continue
-			}
-
-			valPreds := make([]float64, len(valSamples))
-			for i, s := range valSamples {
-				valPreds[i] = model.Predict(&s.X)
-			}
-			valMetrics := ComputeMetrics(valPreds, valActuals)
-
-			trialDur := time.Since(trialStart).Milliseconds()
-			trial := SearchTrial{
-				TrialID:    trialIdx,
-				Params:     map[string]any{"lambda": lam, "feature_set": fsetStr},
-				FeatureSet: fsetStr,
-				Lambda:     lam,
-				ValMAE:     valMetrics.MAE,
-				ValRMSE:    valMetrics.RMSE,
-				ValDirAcc:  valMetrics.DirectionalAccuracy,
-				ValRho:     valMetrics.RankCorrelation,
-				DurationMs: trialDur,
-			}
-			ps.Trials = append(ps.Trials, trial)
-
-			// Selection criterion: validation MAE (held-out test is NOT touched)
-			if trial.ValMAE > 0 && trial.ValMAE < bestScore {
-				bestScore = trial.ValMAE
-				currentTrial := trial
-				bestTrial = &currentTrial
-			}
-
-			ps.Progress = 0.40 + 0.50*(float64(trialIdx)/float64(totalCombinations))
-			if onProgress != nil {
-				onProgress(ps.Progress)
-			}
-		}
+	trialChan := make(chan trialSpec, totalCombinations)
+	for _, sp := range specs {
+		trialChan <- sp
 	}
+	close(trialChan)
+
+	const maxWorkers = 4
+	var wg sync.WaitGroup
+
+	for w := 0; w < maxWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for sp := range trialChan {
+				if ctx.Err() != nil {
+					return
+				}
+				trialStart := time.Now()
+				fset := mlofi.FeatureSet(sp.fsetStr)
+				featIdx, err := mlofi.Features(fset)
+				if err != nil {
+					featIdx = []int{0, 1, 2, 3, 4, 5, 6}
+				}
+
+				model := InstantiateModel(ps.Model, sp.lambda, map[string]any{"lambda": sp.lambda})
+				if err := model.Fit(trainSamples, featIdx); err != nil {
+					continue
+				}
+
+				valPreds := make([]float64, len(valSamples))
+				for i, s := range valSamples {
+					valPreds[i] = model.Predict(&s.X)
+				}
+				valMetrics := ComputeMetrics(valPreds, valActuals)
+
+				trialDur := time.Since(trialStart).Milliseconds()
+				trial := SearchTrial{
+					TrialID:    sp.trialID,
+					Params:     map[string]any{"lambda": sp.lambda, "feature_set": sp.fsetStr},
+					FeatureSet: sp.fsetStr,
+					Lambda:     sp.lambda,
+					ValMAE:     valMetrics.MAE,
+					ValRMSE:    valMetrics.RMSE,
+					ValDirAcc:  valMetrics.DirectionalAccuracy,
+					ValRho:     valMetrics.RankCorrelation,
+					DurationMs: trialDur,
+				}
+
+				mu.Lock()
+				ps.Trials = append(ps.Trials, trial)
+				if trial.ValMAE > 0 && trial.ValMAE < bestScore {
+					bestScore = trial.ValMAE
+					currentTrial := trial
+					bestTrial = &currentTrial
+				}
+				completedCount++
+				ps.Progress = 0.40 + 0.50*(float64(completedCount)/float64(totalCombinations))
+				prog := ps.Progress
+				mu.Unlock()
+
+				if onProgress != nil {
+					onProgress(prog)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	if ctx.Err() != nil {
+		ps.State = StateCancelled
+		ps.Error = "search cancelled by user"
+		return ctx.Err()
+	}
+
+	sort.Slice(ps.Trials, func(i, j int) bool {
+		return ps.Trials[i].TrialID < ps.Trials[j].TrialID
+	})
 
 	if bestTrial == nil {
 		ps.State = StateFailed

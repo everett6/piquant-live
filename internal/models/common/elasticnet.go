@@ -75,13 +75,17 @@ func (e *ElasticNet) Fit(samples []Sample, idx []int) error {
 	e.Mean = meanX
 	e.Std = stdX
 
-	// Pre-standardize X matrix for fast cache-locality coordinate updates
-	// z[i][j] where j in 0..k-1
-	z := make([][]float64, n)
-	for i := range samples {
-		z[i] = make([]float64, k)
-		for j, jj := range idx {
-			z[i][j] = (samples[i].X[jj] - meanX[jj]) / stdX[jj]
+	// Pre-standardize X matrix into a contiguous column-major slice for optimal L1 cache locality
+	// and hardware prefetching during cyclical coordinate descent updates.
+	// Column j is located at [j*n .. (j+1)*n-1].
+	zCol := make([]float64, k*n)
+	for j := 0; j < k; j++ {
+		jj := idx[j]
+		m := meanX[jj]
+		s := stdX[jj]
+		offset := j * n
+		for i := range samples {
+			zCol[offset+i] = (samples[i].X[jj] - m) / s
 		}
 	}
 
@@ -91,7 +95,7 @@ func (e *ElasticNet) Fit(samples []Sample, idx []int) error {
 		residuals[i] = samples[i].Y - meanY
 	}
 
-	beta := make([]float64, k)
+	var beta [FeatureCount]float64
 	l1Penalty := e.Lam * e.Alpha
 	l2Penalty := e.Lam * (1.0 - e.Alpha)
 	invDenom := 1.0 / (1.0 + l2Penalty)
@@ -105,10 +109,11 @@ func (e *ElasticNet) Fit(samples []Sample, idx []int) error {
 		var maxChange float64
 
 		for j := 0; j < k; j++ {
+			offset := j * n
 			// Compute partial correlation rho_j = (1/n) * sum(z_ij * r_i) + beta_j
 			var dot float64
 			for i := 0; i < n; i++ {
-				dot += z[i][j] * residuals[i]
+				dot += zCol[offset+i] * residuals[i]
 			}
 			rho := dot/float64(n) + beta[j]
 
@@ -126,9 +131,9 @@ func (e *ElasticNet) Fit(samples []Sample, idx []int) error {
 			}
 
 			if diff != 0 {
-				// Update residuals
+				// Update residuals along contiguous column stride
 				for i := 0; i < n; i++ {
-					residuals[i] -= diff * z[i][j]
+					residuals[i] -= diff * zCol[offset+i]
 				}
 				beta[j] = newBeta
 			}

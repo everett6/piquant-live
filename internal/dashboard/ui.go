@@ -812,6 +812,8 @@ const indexHTML = `<!doctype html>
 
     // Order Book Ladder Update
     updateOrderBookLadder();
+    // Real-Time GLFT Market-Making & BOCPD Regime Blotter Update
+    updatePaperBlotter();
 
     // Experiments
     var exps = st.experiments || [];
@@ -867,6 +869,46 @@ const indexHTML = `<!doctype html>
         "<span style='color:var(--muted)'>" + num(a.c, 2) + "</span>" +
       "</div>";
     }).join("");
+  }
+
+  // GLFT Market-Making & BOCPD Regime Blotter Real-Time Updater
+  var lastBlotterFetch = 0;
+  function updatePaperBlotter() {
+    var now = Date.now();
+    if (now - lastBlotterFetch < 2500) return;
+    lastBlotterFetch = now;
+    fetch("/api/paper/blotter")
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (!d) return;
+        var q = d.quote || {};
+        var reg = d.regime || {};
+        var ll = d.lead_lag || {};
+
+        if ($("mmStoikov")) $("mmStoikov").textContent = num(d.stoikov_price, 2);
+        if ($("mmResSkew")) $("mmResSkew").textContent = (q.reservation_bps >= 0 ? "+" : "") + num(q.reservation_bps, 2) + " bps";
+        if ($("mmHalfSpread")) $("mmHalfSpread").textContent = num(q.half_spread_bps, 2) + " bps";
+        if ($("mmCpProb")) $("mmCpProb").textContent = Math.round((reg.changepoint_prob || 0.12) * 100) + "%";
+        if ($("mmHawkes")) $("mmHawkes").textContent = (d.hawkes_imb >= 0 ? "+" : "") + num(d.hawkes_imb, 2);
+        if ($("mmHalfLife")) $("mmHalfLife").textContent = num(ll.half_life_samples, 1) + " ticks";
+
+        if ($("blotterRegimePill")) {
+          var rName = reg.regime === "calm_maker" ? "Calm Maker" : (reg.regime === "toxic_cascade" ? "Toxic Cascade" : "Directional Flow");
+          $("blotterRegimePill").textContent = "Regime: " + rName;
+          $("blotterRegimePill").className = "pill " + (reg.regime === "toxic_cascade" ? "bad" : (reg.regime === "calm_maker" ? "ok" : "info"));
+        }
+        if ($("blotterVpinPill")) $("blotterVpinPill").textContent = "VPIN Toxicity: " + num(d.vpin, 2);
+        if ($("blotterKalmanPill")) $("blotterKalmanPill").textContent = "BTC\u2192ETH \u03b2: " + num(ll.kalman_beta, 2) + " (Z = " + num(ll.spread_z_score, 2) + ")";
+
+        if (d.paper_fills && d.paper_fills.length && $("paperFillsBody")) {
+          $("paperFillsBody").innerHTML = d.paper_fills.map(function(f){
+            var isBid = f.side && f.side.indexOf("BID") >= 0;
+            var pillClass = isBid ? "pill ok" : "pill info";
+            return "<tr><td>" + esc(f.time) + "</td><td><b>" + esc(f.symbol) + "</b></td><td><span class='" + pillClass + "'>" + esc(f.side) + "</span></td>" +
+              "<td>" + num(f.price, 2) + "</td><td>" + num(f.qty, 2) + "</td><td style='color:var(--accent)'>+" + num(f.edge_bps, 2) + " bps</td><td>" + num(f.adverse_bps, 2) + " bps</td></tr>";
+          }).join("");
+        }
+      }).catch(function(){});
   }
 
   // Interactive SVG Equity Curve Generator

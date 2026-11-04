@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"time"
 
 	"piquant-live/internal/models/common"
@@ -383,8 +382,11 @@ func spearmanRankCorrelation(x, y []float64) float64 {
 	if n < 2 {
 		return 0
 	}
-	rx := rank(x)
-	ry := rank(y)
+	items := make([]rankItem, n)
+	rx := make([]float64, n)
+	ry := make([]float64, n)
+	rankInto(x, rx, items)
+	rankInto(y, ry, items)
 
 	var d2 float64
 	for i := 0; i < n; i++ {
@@ -399,16 +401,12 @@ type rankItem struct {
 	idx int
 }
 
-func rank(v []float64) []float64 {
+func rankInto(v []float64, ranks []float64, items []rankItem) {
 	n := len(v)
-	items := make([]rankItem, n)
 	for i := 0; i < n; i++ {
 		items[i] = rankItem{val: v[i], idx: i}
 	}
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].val < items[j].val
-	})
-	ranks := make([]float64, n)
+	sortRankItems(items)
 	for i := 0; i < n; {
 		j := i + 1
 		for j < n && items[j].val == items[i].val {
@@ -420,7 +418,52 @@ func rank(v []float64) []float64 {
 		}
 		i = j
 	}
+}
+
+func rank(v []float64) []float64 {
+	n := len(v)
+	ranks := make([]float64, n)
+	items := make([]rankItem, n)
+	rankInto(v, ranks, items)
 	return ranks
+}
+
+// sortRankItems is an allocation-free quicksort with an insertion sort base case,
+// avoiding reflection and interface boxing overhead.
+func sortRankItems(a []rankItem) {
+	if len(a) < 16 {
+		for i := 1; i < len(a); i++ {
+			tmp := a[i]
+			j := i
+			for j > 0 && a[j-1].val > tmp.val {
+				a[j] = a[j-1]
+				j--
+			}
+			a[j] = tmp
+		}
+		return
+	}
+	pivot := a[len(a)/2].val
+	left, right := 0, len(a)-1
+	for left <= right {
+		for a[left].val < pivot {
+			left++
+		}
+		for a[right].val > pivot {
+			right--
+		}
+		if left <= right {
+			a[left], a[right] = a[right], a[left]
+			left++
+			right--
+		}
+	}
+	if right > 0 {
+		sortRankItems(a[:right+1])
+	}
+	if left < len(a) {
+		sortRankItems(a[left:])
+	}
 }
 
 // CheckGeneralization compares train, validation, and test metrics and produces
