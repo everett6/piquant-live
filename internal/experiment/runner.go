@@ -22,38 +22,74 @@ type FeatureObservation struct {
 	Features  [common.FeatureCount]float64
 }
 
-// Run executes an experiment deterministically and updates its fields.
-func Run(ctx context.Context, exp *Experiment, cfg *config.Config, onProgress func(stage string, pct float64)) error {
-	exp.StartedAt = time.Now()
-	exp.State = StateRunning
-	exp.Stage = "replay"
-	exp.Progress = 0.05
-	if onProgress != nil {
-		onProgress(exp.Stage, exp.Progress)
-	}
+// ContinuousModel is the shared interface implemented by all regression and classification predictors.
+type ContinuousModel interface {
+	Fit(samples []common.Sample, idx []int) error
+	Predict(x *[common.FeatureCount]float64) float64
+}
 
-	rep, err := replay.Open(exp.Dataset, replay.Options{
+type logisticWrapper struct {
+	mod *common.Logistic
+}
+
+func (w *logisticWrapper) Fit(samples []common.Sample, idx []int) error {
+	binSamples := make([]common.Sample, len(samples))
+	for i, s := range samples {
+		binSamples[i] = s
+		if s.Y > 0 {
+			binSamples[i].Y = 1
+		} else {
+			binSamples[i].Y = 0
+		}
+	}
+	return w.mod.Fit(binSamples, idx)
+}
+
+func (w *logisticWrapper) Predict(x *[common.FeatureCount]float64) float64 {
+	return w.mod.Logit(x) * 2.0
+}
+
+// InstantiateModel creates an unfitted predictor for the specified model family.
+func InstantiateModel(modelName string, lambda float64, params map[string]any) ContinuousModel {
+	switch modelName {
+	case "elastic_net":
+		alpha := 0.5
+		if a, ok := params["alpha"].(float64); ok && a >= 0 && a <= 1 {
+			alpha = a
+		}
+		return common.NewElasticNet(lambda, alpha)
+	case "adaptive_rls":
+		ff := 0.99
+		if f, ok := params["forgetting_factor"].(float64); ok && f > 0.8 && f <= 1.0 {
+			ff = f
+		}
+		return common.NewAdaptiveRLS(ff)
+	case "queue_logistic":
+		return &logisticWrapper{mod: common.NewLogistic(lambda)}
+	default:
+		return &common.Ridge{Lam: lambda}
+	}
+}
+
+// ExtractSamples deterministically reads the dataset, calculates orderbook features, and computes forward horizon returns.
+func ExtractSamples(ctx context.Context, datasetPath string, horizon common.Horizon, cfg *config.Config, onProgress func(pct float64)) ([]common.Sample, error) {
+	rep, err := replay.Open(datasetPath, replay.Options{
 		Config:   cfg,
 		Speed:    0, // max speed
 		MaxBooks: 16,
 	})
 	if err != nil {
-		exp.State = StateFailed
-		exp.Error = fmt.Sprintf("cannot open dataset %s: %v", exp.Dataset, err)
-		return err
+		return nil, fmt.Errorf("cannot open dataset %s: %v", datasetPath, err)
 	}
 
 	featEng := features.New(0)
-	var obs []FeatureObservation
+	obs := make([]FeatureObservation, 0, 4096)
 	featDst := make([]float32, features.NCore)
 
-	// Phase 1: Replay & Feature generation
 	count := 0
 	for {
 		if ctx.Err() != nil {
-			exp.State = StateCancelled
-			exp.Error = "experiment cancelled by user"
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 
 		step, err := rep.Next()
@@ -85,29 +121,20 @@ func Run(ctx context.Context, exp *Experiment, cfg *config.Config, onProgress fu
 		}
 		count++
 		if count%500 == 0 && onProgress != nil {
-			onProgress("replay", math.Min(0.40, 0.05+float64(count)*0.0001))
+			onProgress(math.Min(1.0, float64(count)*0.0002))
 		}
 	}
 
 	if len(obs) < 50 {
-		exp.State = StateFailed
-		exp.Error = fmt.Sprintf("insufficient valid book observations (%d found, minimum 50 required)", len(obs))
-		return errors.New(exp.Error)
+		return nil, fmt.Errorf("insufficient valid book observations (%d found, minimum 50 required)", len(obs))
 	}
 
-	exp.Stage = "labeling"
-	exp.Progress = 0.45
-	if onProgress != nil {
-		onProgress(exp.Stage, exp.Progress)
-	}
-
-	// Phase 2: Compute forward mid returns (bps) at horizon H
-	horizonNs := exp.Horizon.Duration().Nanoseconds()
+	horizonNs := horizon.Duration().Nanoseconds()
 	if horizonNs <= 0 {
 		horizonNs = 30 * time.Second.Nanoseconds()
 	}
 
-	var samples []common.Sample
+	samples := make([]common.Sample, 0, len(obs))
 	nObs := len(obs)
 	targetIdx := 0
 
@@ -117,7 +144,7 @@ func Run(ctx context.Context, exp *Experiment, cfg *config.Config, onProgress fu
 			targetIdx++
 		}
 		if targetIdx >= nObs {
-			break // Remaining observations cannot form a full forward horizon
+			break
 		}
 
 		futureMid := obs[targetIdx].MidPrice
@@ -132,20 +159,33 @@ func Run(ctx context.Context, exp *Experiment, cfg *config.Config, onProgress fu
 	}
 
 	if len(samples) < 30 {
-		exp.State = StateFailed
-		exp.Error = fmt.Sprintf("insufficient forward labeled samples (%d found)", len(samples))
-		return errors.New(exp.Error)
+		return nil, fmt.Errorf("insufficient forward labeled samples (%d found, minimum 30 required)", len(samples))
 	}
 
-	// Phase 3: Train / Val / Test Partitioning with Embargo Gaps
-	embargoGap := int(math.Ceil(float64(len(samples)) * 0.02))
+	return samples, nil
+}
+
+// PartitionSamples splits samples chronologically into train, val, and test slices with an embargo buffer.
+func PartitionSamples(samples []common.Sample, split SplitConfig) (train, val, test []common.Sample, err error) {
+	nTotal := len(samples)
+	if nTotal < 30 {
+		return nil, nil, nil, fmt.Errorf("insufficient forward labeled samples (%d found, minimum 30 required)", nTotal)
+	}
+
+	embargoGap := int(math.Ceil(float64(nTotal) * 0.02))
 	if embargoGap < 2 {
 		embargoGap = 2
 	}
 
-	nTotal := len(samples)
-	nTrain := int(float64(nTotal) * exp.Split.TrainPct)
-	nVal := int(float64(nTotal) * exp.Split.ValPct)
+	trainPct := split.TrainPct
+	valPct := split.ValPct
+	if trainPct <= 0 || valPct <= 0 {
+		trainPct = 0.60
+		valPct = 0.20
+	}
+
+	nTrain := int(float64(nTotal) * trainPct)
+	nVal := int(float64(nTotal) * valPct)
 
 	trainEnd := nTrain
 	valStart := trainEnd + embargoGap
@@ -162,12 +202,45 @@ func Run(ctx context.Context, exp *Experiment, cfg *config.Config, onProgress fu
 		testEnd = nTotal
 	}
 
-	trainSamples := samples[0:trainEnd]
-	valSamples := samples[valStart:valEnd]
-	testSamples := samples[testStart:testEnd]
+	return samples[0:trainEnd], samples[valStart:valEnd], samples[testStart:testEnd], nil
+}
+
+// Run executes an experiment deterministically and updates its fields.
+func Run(ctx context.Context, exp *Experiment, cfg *config.Config, onProgress func(stage string, pct float64)) error {
+	exp.StartedAt = time.Now()
+	exp.State = StateRunning
+	exp.Stage = "replay"
+	exp.Progress = 0.05
+	if onProgress != nil {
+		onProgress(exp.Stage, exp.Progress)
+	}
+
+	samples, err := ExtractSamples(ctx, exp.Dataset, exp.Horizon, cfg, func(pct float64) {
+		if onProgress != nil {
+			onProgress("replay", 0.05+pct*0.40)
+		}
+	})
+	if err != nil {
+		exp.State = StateFailed
+		exp.Error = err.Error()
+		return err
+	}
+
+	exp.Stage = "partitioning"
+	exp.Progress = 0.50
+	if onProgress != nil {
+		onProgress(exp.Stage, exp.Progress)
+	}
+
+	trainSamples, valSamples, testSamples, err := PartitionSamples(samples, exp.Split)
+	if err != nil {
+		exp.State = StateFailed
+		exp.Error = err.Error()
+		return err
+	}
 
 	exp.Stage = "fitting"
-	exp.Progress = 0.60
+	exp.Progress = 0.65
 	if onProgress != nil {
 		onProgress(exp.Stage, exp.Progress)
 	}
@@ -187,8 +260,7 @@ func Run(ctx context.Context, exp *Experiment, cfg *config.Config, onProgress fu
 		lambda = l
 	}
 
-	// Fit Ridge model on Train partition ONLY
-	model := &common.Ridge{Lam: lambda}
+	model := InstantiateModel(exp.Model, lambda, exp.Params)
 	if err := model.Fit(trainSamples, featIdx); err != nil {
 		exp.State = StateFailed
 		exp.Error = fmt.Sprintf("model fit failed: %v", err)

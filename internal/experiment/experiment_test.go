@@ -160,6 +160,53 @@ func TestEndToEndExperimentAndSearch(t *testing.T) {
 	}
 }
 
+func TestAllModelsAndMetrics(t *testing.T) {
+	tmpDir := t.TempDir()
+	datasetPath := filepath.Join(tmpDir, "test_multi_model.jsonl")
+
+	err := GenerateSynthetic(datasetPath, SyntheticOptions{
+		Venue:      "binance",
+		Instrument: "BTCUSDT",
+		Records:    2500,
+		StartPrice: 50000.0,
+		TickSize:   0.1,
+		Seed:       123,
+	})
+	if err != nil {
+		t.Fatalf("GenerateSynthetic failed: %v", err)
+	}
+
+	cfg := &config.Config{
+		Symbols: []config.Symbol{{Name: "BTC", VenueSym: "BTCUSDT", Venue: "binance"}},
+		Targets: map[string][]string{"BTC": {"binance:BTCUSDT"}},
+	}
+
+	modelsToTest := []string{"mlofi_ridge", "elastic_net", "adaptive_rls", "queue_logistic"}
+	for _, mName := range modelsToTest {
+		exp := &Experiment{
+			ID:         "test-" + mName,
+			Name:       "Test " + mName,
+			Model:      mName,
+			FeatureSet: "L5",
+			Dataset:    datasetPath,
+			Horizon:    common.H30s,
+			Symbol:     "BTCUSDT",
+			Params:     map[string]any{"lambda": 0.01, "alpha": 0.5, "forgetting_factor": 0.98},
+			Split:      DefaultSplit(common.H30s),
+		}
+
+		if err := Run(context.Background(), exp, cfg, nil); err != nil {
+			t.Fatalf("Model %s run failed: %v", mName, err)
+		}
+		if exp.State != StateCompleted {
+			t.Fatalf("Model %s state = %s, want completed", mName, exp.State)
+		}
+		if len(exp.TestMetrics.EquityCurve) == 0 {
+			t.Fatalf("Model %s missing equity curve in TestMetrics", mName)
+		}
+	}
+}
+
 func TestInterruptedRecovery(t *testing.T) {
 	tmpDir := t.TempDir()
 	expDir := filepath.Join(tmpDir, "experiments")

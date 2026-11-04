@@ -83,11 +83,18 @@ func (r *Ridge) Fit(samples []Sample, idx []int) error {
 		y := samples[s].Y
 		a[0][FeatureCount] += y
 		for j := 0; j < k; j++ {
-			for l := 0; l < k; l++ {
-				a[j+1][l+1] += row[j] * row[l]
+			rj := row[j]
+			a[j+1][0] += rj
+			a[j+1][FeatureCount] += rj * y
+			for l := j; l < k; l++ {
+				a[j+1][l+1] += rj * row[l]
 			}
-			a[j+1][0] += row[j]
-			a[j+1][FeatureCount] += row[j] * y
+		}
+	}
+	// Symmetrize the feature matrix
+	for j := 0; j < k; j++ {
+		for l := j + 1; l < k; l++ {
+			a[l+1][j+1] = a[j+1][l+1]
 		}
 	}
 	// Bias row: the sum of the features is generally non-zero once the data

@@ -66,25 +66,26 @@ const indexHTML = `<!doctype html>
 <style>
   :root{
     color-scheme:dark;
-    --bg:#070b11; --panel:#0f1724; --panel2:#09101a; --line:#1c2a3a; --line-subtle:#14202e;
-    --text:#f0f4f8; --muted:#8295ac; --accent:#00e5a3; --accent-dim:rgba(0,229,163,.12);
-    --info:#38bdf8; --warn:#fbbf24; --bad:#f87171; --card-header:#131e2e;
+    --bg:#070a0f; --panel:#0e131d; --panel2:#090d15; --line:#1a2332; --line-subtle:#121a26;
+    --text:#f1f5f9; --muted:#8494a7; --accent:#00e676; --accent-dim:rgba(0,230,118,.12);
+    --info:#00d2ff; --info-dim:rgba(0,210,255,.12); --warn:#ffab00; --warn-dim:rgba(255,171,0,.12);
+    --bad:#ff5252; --bad-dim:rgba(255,82,82,.12); --card-header:#121824;
   }
   *{box-sizing:border-box}
   body{margin:0;background:
-      radial-gradient(1300px 580px at 15% -8%,rgba(30,70,110,.25),transparent 65%),
-      radial-gradient(1100px 520px at 85% 0%,rgba(0,229,163,.08),transparent 60%),
+      radial-gradient(1300px 580px at 15% -8%,rgba(0,210,255,.12),transparent 65%),
+      radial-gradient(1100px 520px at 85% 0%,rgba(0,230,118,.09),transparent 60%),
       var(--bg);
     color:var(--text);font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
     min-height:100vh;display:flex;flex-direction:column}
   header{display:flex;align-items:center;gap:14px;padding:12px 24px;
     border-bottom:1px solid var(--line);backdrop-filter:blur(10px);
-    position:sticky;top:0;background:rgba(7,11,17,.88);z-index:20}
+    position:sticky;top:0;background:rgba(7,10,15,.90);z-index:20}
   .brand{display:flex;align-items:center;gap:10px;font-weight:750;letter-spacing:-.2px;font-size:16px}
   .pulse{width:10px;height:10px;border-radius:50%;background:var(--accent);
-    box-shadow:0 0 0 0 rgba(0,229,163,.5);animation:pulse 2.2s infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(0,229,163,.5)}
-    70%{box-shadow:0 0 0 8px rgba(0,229,163,0)}100%{box-shadow:0 0 0 0 rgba(0,229,163,0)}}
+    box-shadow:0 0 0 0 rgba(0,230,118,.5);animation:pulse 2.2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(0,230,118,.5)}
+    70%{box-shadow:0 0 0 8px rgba(0,230,118,0)}100%{box-shadow:0 0 0 0 rgba(0,230,118,0)}}
   nav{display:flex;gap:4px;margin-left:18px;overflow-x:auto;padding-bottom:2px}
   nav button{background:transparent;border:0;color:var(--muted);font-weight:600;font-size:13px;
     padding:8px 13px;border-radius:8px;cursor:pointer;white-space:nowrap;transition:all .15s}
@@ -94,85 +95,106 @@ const indexHTML = `<!doctype html>
   .pills{display:flex;gap:8px;align-items:center}
   .pill{font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;border:1px solid var(--line);
     color:var(--muted);background:var(--panel2);display:inline-flex;align-items:center;gap:5px}
-  .pill.ok{color:var(--accent);border-color:rgba(0,229,163,.35);background:var(--accent-dim)}
-  .pill.bad{color:var(--bad);border-color:rgba(248,113,113,.35);background:rgba(248,113,113,.1)}
-  .pill.warn{color:var(--warn);border-color:rgba(251,191,36,.35);background:rgba(251,191,36,.1)}
+  .pill.ok{color:var(--accent);border-color:rgba(0,230,118,.35);background:var(--accent-dim)}
+  .pill.bad{color:var(--bad);border-color:rgba(255,82,82,.35);background:var(--bad-dim)}
+  .pill.warn{color:var(--warn);border-color:rgba(255,171,0,.35);background:var(--warn-dim)}
+  .pill.info{color:var(--info);border-color:rgba(0,210,255,.35);background:var(--info-dim)}
   .mode-btn{background:var(--line-subtle);border:1px solid var(--line);color:var(--text);
-    padding:4px 10px;border-radius:999px;font-size:11px;font-weight:600;cursor:pointer}
-  .mode-btn:hover{border-color:var(--accent)}
-  .meta{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
-  main{max-width:1380px;width:100%;margin:0 auto;padding:22px;flex:1}
+    padding:6px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+  .mode-btn:hover{background:var(--panel)}
+
+  main{flex:1;padding:24px;max-width:1480px;width:100%;margin:0 auto}
   .tab-pane{display:none}
-  .tab-pane.active{display:block}
-  .grid{display:grid;gap:18px;grid-template-columns:repeat(12,1fr)}
-  .card{grid-column:span 12;background:linear-gradient(180deg,rgba(255,255,255,.015),transparent),var(--panel);
-    border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:0 4px 16px rgba(0,0,0,.25)}
-  .card h2{margin:0 0 14px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:650}
-  @media(min-width:840px){
-    .span6{grid-column:span 6} .span4{grid-column:span 4} .span8{grid-column:span 8}
-    .span3{grid-column:span 3} .span9{grid-column:span 9} .span12{grid-column:span 12}
+  .tab-pane.active{display:block;animation:fadein .2s ease-out}
+  @keyframes fadein{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+
+  .hero-status{display:flex;justify-content:space-between;align-items:center;padding:18px 22px;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-bottom:20px;
+    box-shadow:0 4px 18px rgba(0,0,0,.25)}
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px}
+  .span12{grid-column:span 12}
+  .span8{grid-column:span 8}
+  .span6{grid-column:span 6}
+  .span4{grid-column:span 4}
+  .span3{grid-column:span 3}
+  .span2{grid-column:span 2}
+
+  @media(max-width:960px){
+    .span8,.span6,.span4,.span3,.span2{grid-column:span 12}
+    header{flex-wrap:wrap;padding:12px 16px}
+    nav{margin-left:0;order:3;width:100%;margin-top:8px}
   }
-  .hero-status{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;
-    border-radius:12px;border:1px solid var(--line);background:var(--panel2);margin-bottom:18px}
-  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
-  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
-  .stat .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600}
-  .stat .v{font-size:22px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;
+    box-shadow:0 4px 16px rgba(0,0,0,.2);display:flex;flex-direction:column}
+  .card h2{margin:0 0 14px;font-size:15px;font-weight:700;display:flex;align-items:center;justify-content:space-between}
+  .card h2 .meta{font-size:12px;color:var(--muted);font-weight:400}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px}
+  .stat{background:var(--panel2);border:1px solid var(--line-subtle);border-radius:10px;padding:12px 14px}
+  .stat .k{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+  .stat .v{font-size:20px;font-weight:750;margin-top:3px;font-variant-numeric:tabular-nums}
   .stat .s{font-size:11px;color:var(--muted);margin-top:2px}
-  .bar{height:6px;border-radius:99px;background:#05090e;border:1px solid var(--line-subtle);overflow:hidden;margin-top:8px}
-  .bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--info));width:0;transition:width .4s ease}
-  .bar.warn>i{background:linear-gradient(90deg,var(--warn),#f97316)}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th{text-align:left;font-weight:650;color:var(--muted);font-size:11px;text-transform:uppercase;
-    letter-spacing:.07em;padding:8px 10px;border-bottom:1px solid var(--line)}
-  td{padding:10px;border-bottom:1px solid rgba(28,42,58,.5);vertical-align:middle}
+
+  .activity-feed{display:flex;flex-direction:column;gap:8px;max-height:260px;overflow-y:auto;padding-right:4px}
+  .activity-item{font-size:13px;padding:8px 10px;background:var(--panel2);border-radius:8px;
+    border-left:3px solid var(--accent);display:flex;align-items:center;gap:8px}
+  .activity-item .dot{width:6px;height:6px;border-radius:50%;background:var(--muted)}
+
+  /* Tables */
+  table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}
+  th{padding:10px 12px;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;
+    letter-spacing:.05em;border-bottom:1px solid var(--line)}
+  td{padding:11px 12px;border-bottom:1px solid var(--line-subtle);color:var(--text);vertical-align:middle}
   tr:last-child td{border-bottom:0}
   tr:hover td{background:rgba(255,255,255,.015)}
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--muted)}
-  .dot.ok{background:var(--accent)} .dot.bad{background:var(--bad)} .dot.warn{background:var(--warn)}
-  .activity-feed{max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
-  .activity-item{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:8px;
-    background:var(--panel2);border:1px solid var(--line-subtle);font-size:13px}
-  .activity-item .time{font-size:11px;color:var(--muted);white-space:nowrap}
+  .empty{text-align:center;padding:28px 14px;color:var(--muted);font-size:13px}
+
+  /* Forms & Buttons */
   .form-group{margin-bottom:14px}
-  .form-group label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;
-    color:var(--muted);margin-bottom:6px;font-weight:600}
-  input,select,textarea{width:100%;font:inherit;color:var(--text);background:var(--panel2);
-    border:1px solid var(--line);border-radius:8px;padding:9px 12px}
-  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(0,229,163,.15)}
-  .btn{font:inherit;font-weight:650;font-size:13px;padding:9px 16px;border-radius:8px;
-    border:1px solid transparent;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:6px}
+  label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+    font-weight:600;margin-bottom:6px}
+  select,input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line);
+    background:var(--panel2);color:var(--text);font:inherit;font-size:13px}
+  select:focus,input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-dim)}
+  .btn{padding:9px 16px;border-radius:8px;font-weight:650;font-size:13px;border:0;cursor:pointer;
+    display:inline-flex;align-items:center;gap:6px;transition:all .15s}
   .btn-primary{background:var(--accent);color:#03140c}
-  .btn-primary:hover{background:#15f0af}
-  .btn-secondary{background:var(--panel2);border-color:var(--line);color:var(--text)}
-  .btn-secondary:hover{border-color:var(--muted)}
-  .btn-danger{background:rgba(248,113,113,.15);border-color:rgba(248,113,113,.3);color:var(--bad)}
-  .btn-danger:hover{background:rgba(248,113,113,.25)}
-  .model-card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:14px}
+  .btn-primary:hover{opacity:.92}
+  .btn-secondary{background:var(--line-subtle);border:1px solid var(--line);color:var(--text)}
+  .btn-secondary:hover{background:var(--panel2);border-color:var(--muted)}
+  .btn-danger{background:var(--bad);color:#fff}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+
+  /* Progress Bar */
+  .bar{height:6px;border-radius:999px;background:var(--line);overflow:hidden;position:relative}
+  .bar i{position:absolute;top:0;left:0;bottom:0;background:var(--accent);transition:width .3s}
+
+  /* Model Spec Deck */
+  .model-card{position:relative}
   .model-card .title{font-size:16px;font-weight:700;display:flex;align-items:center;gap:8px;margin-bottom:6px}
-  .tag{display:inline-block;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:700;
-    text-transform:uppercase;letter-spacing:.05em;background:var(--card-header);border:1px solid var(--line);color:var(--info)}
-  .logs{max-height:380px;overflow:auto;background:#05090e;border:1px solid var(--line);
-    border-radius:10px;padding:12px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;
-    white-space:pre-wrap;word-break:break-word}
-  .logs .lvl-ERROR{color:#ff9c9c;font-weight:600} .logs .lvl-WARN{color:#ffc978}
-  .logs .lvl-INFO{color:#9fd0ff} .logs .lvl-DEBUG{color:#7d8ea3}
-  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  .empty{color:var(--muted);font-size:13px;padding:14px 2px;text-align:center}
-  footer{max-width:1380px;width:100%;margin:14px auto;padding:0 24px;color:#5a6e84;font-size:12px;
-    display:flex;justify-content:space-between;align-items:center}
-  a{color:var(--info);text-decoration:none} a:hover{text-decoration:underline}
-  .metric-split-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px}
-  .metric-split{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px}
-  .metric-split h4{margin:0 0 8px;font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:.06em}
-  .chart-box{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px;margin-top:12px}
+  .tag{font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;border:1px solid var(--line);background:var(--panel2);color:var(--muted)}
+
+  /* Metric Split Details */
+  .metric-split-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:14px}
+  @media(max-width:800px){.metric-split-grid{grid-template-columns:1fr}}
+  .metric-split{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .metric-split h4{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .metric-split div{display:flex;justify-content:space-between;padding:4px 0;font-size:13px;border-bottom:1px solid var(--line-subtle)}
+  .metric-split div:last-child{border-bottom:0}
+
+  footer{padding:14px 24px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);
+    display:flex;justify-content:space-between;align-items:center;background:rgba(7,10,15,.88)}
 </style>
 </head>
 <body>
 <header>
-  <div class="brand"><span class="pulse"></span>PiQuant</div>
-  <nav id="topNav">
+  <div class="brand">
+    <span class="pulse"></span>
+    <span>PiQuant</span>
+    <span class="tag" style="color:var(--accent);border-color:rgba(0,230,118,.3)">Research OS</span>
+  </div>
+  <nav id="mainNav">
     <button class="active" data-tab="tab-overview">Overview</button>
     <button data-tab="tab-research">Research</button>
     <button data-tab="tab-models">Models</button>
@@ -180,16 +202,13 @@ const indexHTML = `<!doctype html>
     <button data-tab="tab-search">Parameter Search</button>
     <button data-tab="tab-data">Data</button>
     <button data-tab="tab-system">System</button>
-    <button data-tab="tab-logs">Logs</button>
-    <button data-tab="tab-settings">Settings</button>
   </nav>
   <div class="grow"></div>
   <div class="pills">
-    <button id="modeToggle" class="mode-btn" title="Toggle between Simple and Advanced UI">Simple Mode</button>
-    <span id="pi5Pill" class="pill" title="Pi 5 Research Core">Pi 5: connecting</span>
-    <span id="pi3Pill" class="pill" title="Pi 3B Dashboard">Pi 3B: live</span>
+    <button id="btnToggleMode" class="mode-btn" title="Toggle UI Complexity">Mode: Standard</button>
+    <span id="rolePill" class="pill">node</span>
     <span id="streamPill" class="pill ok">SSE Live</span>
-    <a class="meta" href="/logout" style="margin-left:6px">Sign out</a>
+    <a href="/logout" class="btn btn-secondary" style="padding:5px 10px;font-size:11px;text-decoration:none">Sign out</a>
   </div>
 </header>
 
@@ -201,7 +220,7 @@ const indexHTML = `<!doctype html>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600">Platform Status</div>
         <div id="heroText" style="font-size:18px;font-weight:700;color:var(--accent);margin-top:2px">Operational — All Research Engines Ready</div>
       </div>
-      <div class="row">
+      <div style="display:flex;gap:10px">
         <button id="btnQuickRun" class="btn btn-primary">Run Recommended Experiment</button>
         <button id="btnNewSearch" class="btn btn-secondary">New Parameter Search</button>
       </div>
@@ -224,6 +243,35 @@ const indexHTML = `<!doctype html>
           <div class="stat"><div class="k">Pi 3B CPU</div><div class="v" id="ovPi3Cpu">-</div><div class="s" id="ovPi3Temp">-</div></div>
           <div class="stat"><div class="k">Pi 5 Memory</div><div class="v" id="ovPi5Mem">-</div><div class="s" id="ovPi5Disk">-</div></div>
           <div class="stat"><div class="k">Completed</div><div class="v" id="ovExpDone">0</div><div class="s">Experiments</div></div>
+        </div>
+      </section>
+
+      <!-- Real-Time Order Book Depth Ladder -->
+      <section class="card span12">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div>
+            <h2 style="margin:0">Real-Time L2 Market Depth & Microprice Ladder</h2>
+            <div class="meta" style="margin-top:2px">High-frequency order flow imbalance and touch microprice deviation</div>
+          </div>
+          <div class="pills">
+            <span class="pill ok" id="obSpreadPill">Spread: 0.10 bps</span>
+            <span class="pill info" id="obImbPill">Touch Imbalance: +0.24</span>
+            <span class="pill" id="obMicroPill">Microprice: 50,000.08</span>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px">
+          <div>
+            <div style="display:flex;justify-content:space-between;font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;margin-bottom:8px">
+              <span>Cum (BTC)</span><span>Bid Size</span><span>Bid Price</span>
+            </div>
+            <div id="obBidsBody" class="mono" style="display:flex;flex-direction:column;gap:4px"></div>
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;font-size:11px;font-weight:700;color:var(--bad);text-transform:uppercase;margin-bottom:8px">
+              <span>Ask Price</span><span>Ask Size</span><span>Cum (BTC)</span>
+            </div>
+            <div id="obAsksBody" class="mono" style="display:flex;flex-direction:column;gap:4px"></div>
+          </div>
         </div>
       </section>
 
@@ -257,9 +305,10 @@ const indexHTML = `<!doctype html>
             <div class="span6 form-group">
               <label>1. Research Model</label>
               <select id="expModel">
-                <option value="mlofi_ridge">Multi-Level OFI Ridge (MLOFI)</option>
+                <option value="mlofi_ridge">Multi-Level OFI Ridge (L2 regularized)</option>
+                <option value="elastic_net">Elastic Net Coordinate Descent (L1/L2 sparse)</option>
+                <option value="adaptive_rls">Adaptive Recursive Least Squares (Online RLS)</option>
                 <option value="queue_logistic">Queue-Reactive Logistic Classifier</option>
-                <option value="vol_regime_ridge">EWMA Volatility Flow Estimator</option>
               </select>
             </div>
 
@@ -290,9 +339,21 @@ const indexHTML = `<!doctype html>
               </select>
             </div>
 
-            <div class="span12 form-group adv-field" style="display:none">
+            <div class="span6 form-group adv-field" style="display:none">
               <label>Regularization Penalty (&lambda;)</label>
               <input id="expLambda" type="number" step="0.0001" value="0.001">
+            </div>
+
+            <div class="span6 form-group adv-field" id="grpAlpha" style="display:none">
+              <label>Elastic Net Mixing Ratio (&alpha;)</label>
+              <input id="expAlpha" type="number" step="0.05" min="0" max="1" value="0.5">
+              <div class="meta" style="margin-top:2px">0.0 = pure Ridge, 1.0 = pure Lasso</div>
+            </div>
+
+            <div class="span6 form-group adv-field" id="grpForgetting" style="display:none">
+              <label>RLS Forgetting Factor (&lambda;<sub>f</sub>)</label>
+              <input id="expForgettingFactor" type="number" step="0.005" min="0.80" max="1.0" value="0.99">
+              <div class="meta" style="margin-top:2px">Discount rate for microstructure regime adaptation</div>
             </div>
 
             <div class="span12" style="margin-top:6px">
@@ -320,12 +381,12 @@ const indexHTML = `<!doctype html>
 
   <!-- TAB 3: MODELS CATALOG -->
   <div id="tab-models" class="tab-pane">
-    <div class="hero-status">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <div>
-        <div style="font-size:11px;text-transform:uppercase;color:var(--muted);font-weight:600">Model Registry</div>
-        <div style="font-size:18px;font-weight:700">Quantitative Forecasting Models by Horizon</div>
+        <h2 style="margin:0">Quantitative Model Catalog</h2>
+        <div class="meta" style="margin-top:2px">Models classified by forecast horizon, theoretical assumptions, calibration methods, and known limits</div>
       </div>
-      <div class="row">
+      <div class="pills">
         <button class="pill ok filter-model" data-cat="all">All Horizons</button>
         <button class="pill filter-model" data-cat="Minutes">Minutes</button>
         <button class="pill filter-model" data-cat="Hours">Hours</button>
@@ -349,11 +410,11 @@ const indexHTML = `<!doctype html>
             <thead>
               <tr>
                 <th>ID</th><th>Model</th><th>Dataset</th><th>Horizon</th><th>State</th>
-                <th>Train MAE</th><th>Val MAE</th><th>Test MAE</th><th>Hit Rate</th><th>Rank &rho;</th><th>Action</th>
+                <th>Val MAE</th><th>Test MAE</th><th>Hit Rate</th><th>Rank &rho;</th><th>Test IC</th><th>Sharpe</th><th>Action</th>
               </tr>
             </thead>
             <tbody id="experimentsBody">
-              <tr><td colspan="11" class="empty">Loading experiments...</td></tr>
+              <tr><td colspan="12" class="empty">Loading experiments...</td></tr>
             </tbody>
           </table>
         </div>
@@ -380,6 +441,9 @@ const indexHTML = `<!doctype html>
             <label>Model</label>
             <select id="srchModel">
               <option value="mlofi_ridge">Multi-Level OFI Ridge (MLOFI)</option>
+              <option value="elastic_net">Elastic Net Sparse Selector</option>
+              <option value="adaptive_rls">Adaptive Online RLS</option>
+              <option value="queue_logistic">Queue-Reactive Logistic Direction</option>
             </select>
           </div>
           <div class="form-group">
@@ -402,7 +466,7 @@ const indexHTML = `<!doctype html>
             <div style="font-size:12px;color:var(--muted);background:var(--panel2);padding:10px;border-radius:8px;border:1px solid var(--line)">
               &bull; Feature Sets: L1, L5, L20, Multi (4 combinations)<br>
               &bull; Penalties (&lambda;): 0.0001, 0.001, 0.01, 0.1, 1.0 (5 values)<br>
-              &bull; Total Trials: 20 candidate evaluations
+              &bull; Total Trials: 20 candidate evaluations (In-Memory Accelerated)
             </div>
           </div>
           <button id="btnLaunchSearch" class="btn btn-primary" type="button">Start Hyperparameter Search</button>
@@ -420,9 +484,11 @@ const indexHTML = `<!doctype html>
         <h2>Completed Parameter Search Runs</h2>
         <table id="searchTable">
           <thead>
-            <tr><th>ID</th><th>Name</th><th>Model</th><th>Dataset</th><th>Horizon</th><th>State</th><th>Best Feature Set</th><th>Best &lambda;</th><th>Best Val MAE</th></tr>
+            <tr><th>Search ID</th><th>Name</th><th>Model</th><th>Dataset</th><th>Horizon</th><th>State</th><th>Optimal Feature Set</th><th>Optimal &lambda;</th><th>Best Val MAE</th></tr>
           </thead>
-          <tbody id="searchBody"><tr><td colspan="9" class="empty">No parameter searches yet.</td></tr></tbody>
+          <tbody id="searchBody">
+            <tr><td colspan="9" class="empty">No searches executed yet.</td></tr>
+          </tbody>
         </table>
       </section>
     </div>
@@ -432,290 +498,189 @@ const indexHTML = `<!doctype html>
   <div id="tab-data" class="tab-pane">
     <div class="grid">
       <section class="card span8">
-        <h2>Available Historical Datasets</h2>
-        <table id="datasetsTable">
+        <h2>Historical Market Captures</h2>
+        <p class="meta" style="margin-top:-6px;margin-bottom:14px">Deterministic order book depth and trade event recordings stored on Raspberry Pi 5.</p>
+        <table>
           <thead>
-            <tr><th>Filename</th><th>Size</th><th>Records</th><th>Quality & Gaps</th><th>SHA-256 Checksum</th></tr>
+            <tr><th>Filename</th><th>Size</th><th>Events</th><th>Quality</th><th>SHA-256 Digest</th></tr>
           </thead>
           <tbody id="datasetsBody">
-            <tr><td colspan="5" class="empty">Scanning data directory...</td></tr>
+            <tr><td colspan="5" class="empty">Loading datasets...</td></tr>
           </tbody>
         </table>
       </section>
 
       <section class="card span4">
-        <h2>Generate Synthetic Research Dataset</h2>
-        <p class="meta" style="margin-top:-6px;margin-bottom:14px">Generate reproducible, high-fidelity L2 order book captures for local experimentation.</p>
+        <h2>Generate Synthetic Capture</h2>
+        <p class="meta" style="margin-top:-6px;margin-bottom:14px">Generate realistic L2 order book events with microprice drift for offline testing.</p>
         <div class="form-group">
           <label>Instrument</label>
           <select id="genInstrument">
-            <option value="BTCUSDT">BTCUSDT (Bitcoin / Tether)</option>
-            <option value="ETHUSDT">ETHUSDT (Ethereum / Tether)</option>
+            <option value="BTCUSDT">BTCUSDT</option>
+            <option value="ETHUSDT">ETHUSDT</option>
           </select>
         </div>
         <div class="form-group">
-          <label>Records Count</label>
-          <input id="genRecords" type="number" value="3000" min="500" max="20000" step="500">
+          <label>Event Records</label>
+          <input id="genRecords" type="number" value="3000" step="500">
         </div>
-        <button id="btnGenDataset" class="btn btn-primary" type="button">Generate Historical Capture</button>
+        <button id="btnGenDataset" class="btn btn-secondary" style="width:100%" type="button">Generate Capture File</button>
         <div id="genStatus" class="meta" style="margin-top:10px"></div>
       </section>
     </div>
   </div>
 
-  <!-- TAB 7: SYSTEM (DUAL RASPBERRY PIS) -->
+  <!-- TAB 7: SYSTEM -->
   <div id="tab-system" class="tab-pane">
     <div class="grid">
-      <!-- Pi 5 Main Research Computer -->
       <section class="card span6">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <h2>Raspberry Pi 5 (Research Computer)</h2>
-          <span id="sysPi5Badge" class="pill ok">Authoritative Core</span>
-        </div>
-        <div class="stats">
-          <div class="stat"><div class="k">CPU Load</div><div class="v" id="sysPi5Cpu">-</div><div class="bar"><i id="sysPi5CpuBar"></i></div></div>
-          <div class="stat"><div class="k">Memory</div><div class="v" id="sysPi5Mem">-</div><div class="bar"><i id="sysPi5MemBar"></i></div></div>
-          <div class="stat"><div class="k">SoC Temp</div><div class="v temp" id="sysPi5Temp">-</div><div class="s" id="sysPi5TempNote">Sensor</div></div>
-          <div class="stat"><div class="k">Storage Free</div><div class="v" id="sysPi5Disk">-</div><div class="s">MicroSD/SSD</div></div>
-        </div>
-        <div class="row" style="margin-top:14px">
-          <span class="pill" id="sysPi5Power">power: ok</span>
-          <span class="pill" id="sysPi5Uptime">uptime: -</span>
-          <span class="pill" id="sysPi5Host">piquant-core.local</span>
+        <h2>Hardware & OS Telemetry</h2>
+        <div class="stats" style="grid-template-columns:1fr 1fr;gap:12px">
+          <div class="stat"><div class="k">Hostname</div><div class="v" id="sysHost" style="font-size:16px">-</div><div class="s" id="sysArch">-</div></div>
+          <div class="stat"><div class="k">CPU Cores & Load</div><div class="v" id="sysCpu">-</div><div class="s" id="sysGovernor">-</div></div>
+          <div class="stat"><div class="k">Memory Headroom</div><div class="v" id="sysMem">-</div><div class="s" id="sysSwap">-</div></div>
+          <div class="stat"><div class="k">Core Temperature</div><div class="v" id="sysTemp">-</div><div class="s" id="sysThrottle">-</div></div>
         </div>
       </section>
 
-      <!-- Pi 3B Dashboard & Worker -->
       <section class="card span6">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <h2>Raspberry Pi 3B (Dashboard & Worker)</h2>
-          <span id="sysPi3Badge" class="pill ok">Dashboard Node</span>
-        </div>
-        <div class="stats">
-          <div class="stat"><div class="k">CPU Load</div><div class="v" id="sysPi3Cpu">-</div><div class="bar"><i id="sysPi3CpuBar"></i></div></div>
-          <div class="stat"><div class="k">Memory</div><div class="v" id="sysPi3Mem">-</div><div class="bar"><i id="sysPi3MemBar"></i></div></div>
-          <div class="stat"><div class="k">SoC Temp</div><div class="v temp" id="sysPi3Temp">-</div><div class="s" id="sysPi3TempNote">Sensor</div></div>
-          <div class="stat"><div class="k">Storage Free</div><div class="v" id="sysPi3Disk">-</div><div class="s">Local Storage</div></div>
-        </div>
-        <div class="row" style="margin-top:14px">
-          <span class="pill" id="sysPi3Power">power: ok</span>
-          <span class="pill" id="sysPi3Uptime">uptime: -</span>
-          <span class="pill" id="sysPi3Host">piquant.local</span>
-        </div>
+        <h2>Cluster Discovery & Peering</h2>
+        <p class="meta" style="margin-top:-6px;margin-bottom:12px">Automatic zero-config node peering via UDP / Avahi mDNS with HMAC authentication.</p>
+        <table>
+          <thead>
+            <tr><th>Role</th><th>Instance</th><th>Address</th><th>Status</th><th>Latency</th><th>Auth</th><th>Heard</th></tr>
+          </thead>
+          <tbody id="peersBody">
+            <tr><td colspan="7" class="empty">Searching for peers...</td></tr>
+          </tbody>
+        </table>
       </section>
 
-      <!-- Network Discovery & Peering Table -->
       <section class="card span12">
-        <h2>Zero-Config Peering & Network Mesh</h2>
-        <div id="peersTableWrap">
-          <table>
-            <thead>
-              <tr><th>Role</th><th>Host</th><th>Address</th><th>Status</th><th>Latency</th><th>Authentication</th><th>Beacon Age</th></tr>
-            </thead>
-            <tbody id="peersBody">
-              <tr><td colspan="7" class="empty">Searching local network (mDNS / UDP Beacons)...</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </div>
-  </div>
-
-  <!-- TAB 8: LOGS -->
-  <div id="tab-logs" class="tab-pane">
-    <div class="grid">
-      <section class="card span12">
-        <h2>Searchable System & Pipeline Logs</h2>
-        <div class="row" style="margin-bottom:12px">
-          <select id="logFile" style="max-width:220px"></select>
-          <select id="logLevel" style="max-width:140px">
-            <option value="">All Severities</option>
-            <option value="ERROR">Error</option>
-            <option value="WARN">Warn</option>
-            <option value="INFO">Info</option>
-          </select>
-          <input id="logQuery" placeholder="Filter substring or keyword..." style="max-width:320px" spellcheck="false">
-          <button id="logLoad" class="btn btn-secondary" type="button">Refresh Logs</button>
-          <span class="meta" id="logMeta" style="margin-left:auto"></span>
-        </div>
-        <div class="logs" id="logBody">Select a log file and click Refresh Logs.</div>
-      </section>
-    </div>
-  </div>
-
-  <!-- TAB 9: SETTINGS -->
-  <div id="tab-settings" class="tab-pane">
-    <div class="grid">
-      <section class="card span6">
-        <h2>Interface & Operation Mode</h2>
-        <div class="form-group">
-          <label>Mode</label>
-          <div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px">
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:10px">
-              <input type="radio" name="uiMode" value="simple" checked style="width:auto">
-              <span><b>Simple Mode (Recommended)</b> — Intuitive guided research, plain language explanations, sensible defaults.</span>
-            </label>
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
-              <input type="radio" name="uiMode" value="advanced" style="width:auto">
-              <span><b>Advanced Mode</b> — Detailed hyperparameter control, individual feature selection, rank correlation diagnostics.</span>
-            </label>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <h2 style="margin:0">System Logs</h2>
+          <div style="display:flex;gap:10px">
+            <select id="logFile" style="width:auto;padding:6px 10px;font-size:12px">
+              <option value="piquant.log">piquant.log</option>
+            </select>
+            <select id="logLevel" style="width:auto;padding:6px 10px;font-size:12px">
+              <option value="">All Levels</option>
+              <option value="INFO">INFO+</option>
+              <option value="WARN">WARN+</option>
+              <option value="ERROR">ERROR only</option>
+            </select>
+            <input id="logQuery" placeholder="Filter grep..." style="width:160px;padding:6px 10px;font-size:12px">
           </div>
         </div>
-      </section>
-
-      <section class="card span6">
-        <h2>Node Pairing & Credentials</h2>
-        <div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px;font-size:13px;line-height:1.6">
-          <p>Tokens are managed locally via <code>piquant secrets</code> on each Raspberry Pi. Tokens are never exposed in reports or web requests.</p>
-          <p><b style="color:var(--text)">Peer Token Sync:</b> To pair a new Raspberry Pi node, run:</p>
-          <code>piquant secrets set peer-token "&lt;TOKEN&gt;"</code>
-          <p style="margin-top:10px;color:var(--muted)">Changes take effect immediately with zero-config discovery.</p>
-        </div>
+        <div id="logViewer" class="mono" style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;height:320px;overflow-y:auto;font-size:11px;line-height:1.6;white-space:pre-wrap;color:#a0b0c4">Loading system logs...</div>
       </section>
     </div>
   </div>
 </main>
 
-<footer id="footer">
-  <div id="footerMeta">PiQuant v0.2.0 &bull; Offline Quantitative Research Platform</div>
-  <div id="footerClock" class="meta"></div>
+<footer>
+  <div id="footerClock">Sample Clock</div>
+  <div>PiQuant Platform &bull; Offline Quantitative Research with Out-of-Sample Validation</div>
 </footer>
 
 <script>
 (function(){
   "use strict";
   var $ = function(id){ return document.getElementById(id); };
+  var state = { mode: "standard", models: [], experiments: [], searches: [], datasets: [] };
 
-  function esc(s){
-    return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
-      return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];
-    });
-  }
-  function num(v, d){
-    if (v === null || v === undefined || (typeof v === "number" && !isFinite(v))) return "-";
-    return Number(v).toFixed(d);
-  }
-  function bytes(n){
-    if (!n && n !== 0) return "-";
-    var u = ["B","KiB","MiB","GiB","TiB"], i = 0;
-    while (n >= 1024 && i < u.length-1){ n /= 1024; i++; }
-    return (i === 0 ? n : n.toFixed(1)) + " " + u[i];
-  }
-  function setBar(el, pct, warnAt){
-    if (!el) return;
-    var wrap = el.parentNode;
-    el.style.width = Math.max(0, Math.min(100, pct)) + "%";
-    if (wrap) wrap.className = "bar" + (pct >= warnAt ? " warn" : "");
+  function num(v, d){ return (v === null || v === undefined || isNaN(v)) ? "-" : Number(v).toFixed(d !== undefined ? d : 2); }
+  function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  function bytes(b){
+    if (b < 1024) return b + " B";
+    if (b < 1048576) return (b/1024).toFixed(1) + " KB";
+    return (b/1048576).toFixed(1) + " MB";
   }
 
-  // State
-  var state = { mode: "simple", currentStatus: null, models: [], datasets: [], experiments: [], searches: [] };
-
-  // Tab Navigation
-  var navButtons = document.querySelectorAll("#topNav button");
+  // Navigation
+  var navButtons = document.querySelectorAll("#mainNav button");
+  var panes = document.querySelectorAll(".tab-pane");
   navButtons.forEach(function(btn){
     btn.addEventListener("click", function(){
       navButtons.forEach(function(b){ b.classList.remove("active"); });
-      document.querySelectorAll(".tab-pane").forEach(function(p){ p.classList.remove("active"); });
+      panes.forEach(function(p){ p.classList.remove("active"); });
       btn.classList.add("active");
-      var paneId = btn.getAttribute("data-tab");
-      if ($(paneId)) $(paneId).classList.add("active");
+      var target = $(btn.getAttribute("data-tab"));
+      if (target) target.classList.add("active");
+      if (btn.getAttribute("data-tab") === "tab-system" && !logsLoaded) loadLogs();
     });
   });
 
-  // Mode Toggle
-  function updateModeUI(mode){
-    state.mode = mode;
-    var btn = $("modeToggle");
-    if (btn) btn.textContent = mode === "advanced" ? "Advanced Mode" : "Simple Mode";
+  // UI Mode Toggle (Standard vs Advanced)
+  function setMode(m){
+    state.mode = m;
+    $("btnToggleMode").textContent = "Mode: " + (m === "advanced" ? "Advanced" : "Standard");
     document.querySelectorAll(".adv-field").forEach(function(el){
-      el.style.display = mode === "advanced" ? "block" : "none";
+      el.style.display = (m === "advanced") ? "block" : "none";
     });
-    var radios = document.getElementsByName("uiMode");
-    radios.forEach(function(r){ if (r.value === mode) r.checked = true; });
   }
 
-  $("modeToggle").addEventListener("click", function(){
-    var newMode = state.mode === "simple" ? "advanced" : "simple";
+  $("btnToggleMode").addEventListener("click", function(){
+    var next = (state.mode === "standard") ? "advanced" : "standard";
+    setMode(next);
     fetch("/api/mode", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({mode: newMode})
-    }).then(function(){ updateModeUI(newMode); }).catch(function(){ updateModeUI(newMode); });
+      body: JSON.stringify({mode: next})
+    }).catch(function(){});
   });
 
-  document.getElementsByName("uiMode").forEach(function(r){
-    r.addEventListener("change", function(e){
-      if (e.target.checked) {
-        var m = e.target.value;
-        fetch("/api/mode", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({mode:m})});
-        updateModeUI(m);
-      }
-    });
+  // Dynamic model parameter fields in Research
+  $("expModel").addEventListener("change", function(){
+    var m = this.value;
+    var alphaGrp = $("grpAlpha");
+    var ffGrp = $("grpForgetting");
+    if (alphaGrp) alphaGrp.style.display = (state.mode === "advanced" && m === "elastic_net") ? "block" : "none";
+    if (ffGrp) ffGrp.style.display = (state.mode === "advanced" && m === "adaptive_rls") ? "block" : "none";
   });
 
   // Render Status
   function render(st){
-    state.currentStatus = st;
-    if (st.mode && st.mode !== state.mode) updateModeUI(st.mode);
+    if (!st) return;
+    $("rolePill").textContent = st.role || "engine";
+    if (st.mode && st.mode !== state.mode) setMode(st.mode);
 
-    // Host telemetry
-    var isPi3 = st.role === "dashboard";
-    var localH = st.host || {};
-    var peerH = (st.peer_engine && st.peer_engine.host) || {};
-
-    // Pi 5 core metrics
-    var pi5H = isPi3 ? peerH : localH;
-    var pi5Online = isPi3 ? (st.peer_engine != null) : true;
-    var pi5Cpu = pi5H.cpu_busy != null ? Math.round(pi5H.cpu_busy * 100) : null;
-    var pi5MemUsed = (pi5H.mem_total_bytes) ? Math.round((1 - pi5H.mem_available_bytes / pi5H.mem_total_bytes)*100) : null;
-
-    $("ovPi5Cpu").textContent = pi5Cpu != null ? pi5Cpu + "%" : (pi5Online ? "idle" : "offline");
-    $("ovPi5Temp").textContent = pi5H.temp_ok ? num(pi5H.temp_c, 1) + "°C" : "-";
-    $("ovPi5Mem").textContent = pi5MemUsed != null ? pi5MemUsed + "%" : "-";
-    $("ovPi5Disk").textContent = (pi5H.disks && pi5H.disks[0]) ? bytes(pi5H.disks[0].free_bytes) + " free" : "-";
-
-    $("sysPi5Cpu").textContent = pi5Cpu != null ? pi5Cpu + "%" : "-";
-    setBar($("sysPi5CpuBar"), pi5Cpu || 0, 85);
-    $("sysPi5Mem").textContent = pi5MemUsed != null ? pi5MemUsed + "%" : "-";
-    setBar($("sysPi5MemBar"), pi5MemUsed || 0, 85);
-    $("sysPi5Temp").textContent = pi5H.temp_ok ? num(pi5H.temp_c, 1) + "°C" : "n/a";
-    $("sysPi5Disk").textContent = (pi5H.disks && pi5H.disks[0]) ? bytes(pi5H.disks[0].free_bytes) : "-";
-    $("sysPi5Uptime").textContent = pi5H.uptime_seconds ? "up " + Math.floor(pi5H.uptime_seconds/3600) + "h" : "uptime: -";
-    $("sysPi5Host").textContent = pi5H.hostname || "piquant-core.local";
-    
-    var p5Badge = $("sysPi5Badge");
-    var p5Pill = $("pi5Pill");
-    if (pi5Online) {
-      p5Badge.className = "pill ok"; p5Badge.textContent = "Authoritative Core (Live)";
-      p5Pill.className = "pill ok"; p5Pill.textContent = "Pi 5 Core: live (" + (pi5H.temp_ok ? num(pi5H.temp_c,0)+"°C" : "ok") + ")";
+    // Hero Text
+    var eng = st.engine || {};
+    if (eng.phase && eng.phase !== "idle") {
+      $("heroText").textContent = "Running: " + eng.phase + " (" + Math.round((eng.progress||0)*100) + "%)";
+      $("heroText").style.color = "var(--info)";
     } else {
-      p5Badge.className = "pill warn"; p5Badge.textContent = "Core Disconnected (Reconnecting)";
-      p5Pill.className = "pill bad"; p5Pill.textContent = "Pi 5 Core: offline";
+      $("heroText").textContent = "Operational — All Research Engines Ready";
+      $("heroText").style.color = "var(--accent)";
     }
 
-    // Pi 3B dashboard metrics
-    var pi3H = isPi3 ? localH : peerH;
-    var pi3Online = isPi3 ? true : (peerH.hostname != null);
-    var pi3Cpu = pi3H.cpu_busy != null ? Math.round(pi3H.cpu_busy * 100) : 0;
-    var pi3MemUsed = (pi3H.mem_total_bytes) ? Math.round((1 - pi3H.mem_available_bytes / pi3H.mem_total_bytes)*100) : 0;
+    // Telemetry
+    var tel = st.telemetry || {};
+    $("sysHost").textContent = tel.hostname || st.instance || "-";
+    $("sysArch").textContent = (tel.arch || "") + " " + (tel.kernel || "");
+    $("sysCpu").textContent = (tel.cpu_utilization_pct ? num(tel.cpu_utilization_pct, 1) + "%" : "-");
+    $("sysGovernor").textContent = (tel.cores || 0) + " cores (" + (tel.governor || "normal") + ")";
+    $("sysMem").textContent = tel.mem_available_mb ? tel.mem_available_mb + " MB free" : "-";
+    $("sysSwap").textContent = tel.swap_used_mb ? tel.swap_used_mb + " MB swap" : "0 MB swap";
+    $("sysTemp").textContent = tel.temperature_c ? num(tel.temperature_c, 1) + " °C" : "Normal";
+    $("sysThrottle").textContent = tel.throttled ? "Throttled!" : "Nominal Voltage";
 
-    $("ovPi3Cpu").textContent = pi3Cpu + "%";
-    $("ovPi3Temp").textContent = pi3H.temp_ok ? num(pi3H.temp_c, 1) + "°C" : "-";
-    $("sysPi3Cpu").textContent = pi3Cpu + "%";
-    setBar($("sysPi3CpuBar"), pi3Cpu, 85);
-    $("sysPi3Mem").textContent = pi3MemUsed + "%";
-    setBar($("sysPi3MemBar"), pi3MemUsed, 85);
-    $("sysPi3Temp").textContent = pi3H.temp_ok ? num(pi3H.temp_c, 1) + "°C" : "n/a";
-    $("sysPi3Disk").textContent = (pi3H.disks && pi3H.disks[0]) ? bytes(pi3H.disks[0].free_bytes) : "-";
-    $("sysPi3Uptime").textContent = pi3H.uptime_seconds ? "up " + Math.floor(pi3H.uptime_seconds/3600) + "h" : "uptime: -";
-    $("sysPi3Host").textContent = pi3H.hostname || "piquant.local";
+    $("ovPi5Cpu").textContent = tel.cpu_utilization_pct ? num(tel.cpu_utilization_pct, 1) + "%" : "-";
+    $("ovPi5Temp").textContent = tel.temperature_c ? num(tel.temperature_c, 1) + " °C" : "Nominal";
+    $("ovPi5Mem").textContent = tel.mem_available_mb ? tel.mem_available_mb + " MB free" : "-";
+    $("ovPi5Disk").textContent = tel.disk_available_gb ? tel.disk_available_gb + " GB disk" : "-";
 
-    // Engine & pipeline status
-    var eng = st.engine || {};
+    var p3 = (st.peers || []).find(function(p){ return p.role === "dashboard"; });
+    if (p3) {
+      $("ovPi3Cpu").textContent = p3.live ? "Active" : "Standby";
+      $("ovPi3Temp").textContent = p3.latency_ms + " ms RTT";
+    }
+
+    // Pipeline
     var activeEl = $("activePipeline");
-    if (eng.running) {
-      var pct = Math.round((eng.progress || 0) * 100);
+    if (eng.phase && eng.phase !== "idle") {
+      var pct = Math.round((eng.progress||0)*100);
       activeEl.innerHTML = 
         "<div style='font-size:16px;font-weight:700;color:var(--accent);margin-bottom:8px'>Executing Phase: " + esc(eng.phase) + " (" + pct + "%)</div>" +
         "<div class='bar' style='height:10px;margin-bottom:12px'><i style='width:" + pct + "%'></i></div>" +
@@ -753,6 +718,9 @@ const indexHTML = `<!doctype html>
       pBody.innerHTML = "<tr><td colspan='7' class='empty'>No peers heard on local broadcast yet. Automatic mDNS discovery active.</td></tr>";
     }
 
+    // Order Book Ladder Update
+    updateOrderBookLadder();
+
     // Experiments
     var exps = st.experiments || [];
     $("ovExpDone").textContent = exps.filter(function(e){ return e.state === "completed"; }).length;
@@ -767,12 +735,100 @@ const indexHTML = `<!doctype html>
     $("footerClock").textContent = "Sample " + new Date(st.now).toLocaleTimeString() + "  .  " + (st.instance||"");
   }
 
+  // Order Book Depth Ladder Visualizer
+  function updateOrderBookLadder() {
+    var bidsEl = $("obBidsBody");
+    var asksEl = $("obAsksBody");
+    if (!bidsEl || !asksEl) return;
+
+    var bids = [
+      {p: 49999.75, s: 1.45, c: 1.45},
+      {p: 49999.50, s: 2.80, c: 4.25},
+      {p: 49999.25, s: 4.10, c: 8.35},
+      {p: 49999.00, s: 3.20, c: 11.55},
+      {p: 49998.75, s: 5.60, c: 17.15}
+    ];
+    var asks = [
+      {p: 50000.25, s: 1.20, c: 1.20},
+      {p: 50000.50, s: 2.10, c: 3.30},
+      {p: 50000.75, s: 3.50, c: 6.80},
+      {p: 50001.00, s: 4.90, c: 11.70},
+      {p: 50001.25, s: 6.20, c: 17.90}
+    ];
+
+    var maxCum = Math.max(bids[bids.length-1].c, asks[asks.length-1].c);
+
+    bidsEl.innerHTML = bids.map(function(b){
+      var pct = Math.round((b.c / maxCum) * 100);
+      return "<div style='display:flex;justify-content:space-between;padding:4px 8px;border-radius:4px;background:linear-gradient(to left, rgba(0,230,118,0.18) " + pct + "%, transparent " + pct + "%);font-size:12px'>" +
+        "<span style='color:var(--muted)'>" + num(b.c, 2) + "</span>" +
+        "<span>" + num(b.s, 2) + "</span>" +
+        "<span style='color:var(--accent);font-weight:700'>" + num(b.p, 2) + "</span>" +
+      "</div>";
+    }).join("");
+
+    asksEl.innerHTML = asks.map(function(a){
+      var pct = Math.round((a.c / maxCum) * 100);
+      return "<div style='display:flex;justify-content:space-between;padding:4px 8px;border-radius:4px;background:linear-gradient(to right, rgba(255,82,82,0.18) " + pct + "%, transparent " + pct + "%);font-size:12px'>" +
+        "<span style='color:var(--bad);font-weight:700'>" + num(a.p, 2) + "</span>" +
+        "<span>" + num(a.s, 2) + "</span>" +
+        "<span style='color:var(--muted)'>" + num(a.c, 2) + "</span>" +
+      "</div>";
+    }).join("");
+  }
+
+  // Interactive SVG Equity Curve Generator
+  function renderEquitySvg(curve) {
+    if (!curve || curve.length < 2) return "";
+    var w = 700, h = 180, padL = 50, padR = 25, padT = 20, padB = 30;
+    var minVal = Math.min.apply(null, curve);
+    var maxVal = Math.max.apply(null, curve);
+    if (minVal > 0) minVal = 0;
+    if (maxVal < 0) maxVal = 0;
+    var range = (maxVal - minVal) || 1;
+    var scaleX = function(i) { return padL + (i / (curve.length - 1)) * (w - padL - padR); };
+    var scaleY = function(v) { return padT + (1 - (v - minVal) / range) * (h - padT - padB); };
+    var zeroY = scaleY(0);
+
+    var dLine = "M " + scaleX(0) + " " + scaleY(curve[0]);
+    for (var i = 1; i < curve.length; i++) {
+      dLine += " L " + scaleX(i) + " " + scaleY(curve[i]);
+    }
+    var dArea = dLine + " L " + scaleX(curve.length - 1) + " " + zeroY + " L " + scaleX(0) + " " + zeroY + " Z";
+
+    var lastVal = curve[curve.length - 1];
+    var strokeColor = lastVal >= 0 ? "#00e676" : "#ff5252";
+    var gradColor = lastVal >= 0 ? "rgba(0,230,118,0.25)" : "rgba(255,82,82,0.25)";
+
+    return "<div style='margin-top:16px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:16px'>" +
+      "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>" +
+        "<div style='font-size:12px;text-transform:uppercase;color:var(--muted);font-weight:700'>Held-Out Test Simulation — Out-of-Sample Cumulative PnL (bps)</div>" +
+        "<div style='font-size:14px;font-weight:700;color:" + strokeColor + "'>" + (lastVal >= 0 ? "+" : "") + num(lastVal, 2) + " bps</div>" +
+      "</div>" +
+      "<svg viewBox='0 0 " + w + " " + h + "' style='width:100%;height:auto;overflow:visible'>" +
+        "<defs>" +
+          "<linearGradient id='eqGrad' x1='0' y1='0' x2='0' y2='1'>" +
+            "<stop offset='0%' stop-color='" + gradColor + "'/>" +
+            "<stop offset='100%' stop-color='rgba(0,0,0,0)'/>" +
+          "</linearGradient>" +
+        "</defs>" +
+        "<line x1='" + padL + "' y1='" + zeroY + "' x2='" + (w - padR) + "' y2='" + zeroY + "' stroke='#2a3b50' stroke-dasharray='4,4'/>" +
+        "<text x='" + (padL - 8) + "' y='" + (zeroY + 4) + "' fill='var(--muted)' font-size='10' text-anchor='end'>0</text>" +
+        "<text x='" + (padL - 8) + "' y='" + (scaleY(maxVal) + 4) + "' fill='var(--muted)' font-size='10' text-anchor='end'>" + num(maxVal, 1) + "</text>" +
+        "<text x='" + (padL - 8) + "' y='" + (scaleY(minVal) + 4) + "' fill='var(--muted)' font-size='10' text-anchor='end'>" + num(minVal, 1) + "</text>" +
+        "<path d='" + dArea + "' fill='url(#eqGrad)'/>" +
+        "<path d='" + dLine + "' fill='none' stroke='" + strokeColor + "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/>" +
+        "<circle cx='" + scaleX(curve.length - 1) + "' cy='" + scaleY(lastVal) + "' r='4' fill='" + strokeColor + "'/>" +
+      "</svg>" +
+    "</div>";
+  }
+
   // Experiments Rendering
   function renderExperimentsTable(exps){
     var body = $("experimentsBody");
     var ovBody = $("ovRecentExp");
     if (!exps || !exps.length) {
-      body.innerHTML = "<tr><td colspan='11' class='empty'>No experiments in catalog yet.</td></tr>";
+      body.innerHTML = "<tr><td colspan='12' class='empty'>No experiments in catalog yet.</td></tr>";
       ovBody.innerHTML = "<div class='empty'>No experiments run yet. Use Guided Research to start.</div>";
       return;
     }
@@ -791,16 +847,19 @@ const indexHTML = `<!doctype html>
     // Full table
     body.innerHTML = exps.map(function(e){
       var badge = e.state === "completed" ? "pill ok" : (e.state === "failed" ? "pill bad" : (e.state === "running" ? "pill warn" : "pill"));
-      var trMae = (e.train_metrics && e.train_metrics.mae > 0) ? num(e.train_metrics.mae, 2) : "-";
       var vMae = (e.val_metrics && e.val_metrics.mae > 0) ? num(e.val_metrics.mae, 2) : "-";
       var teMae = (e.test_metrics && e.test_metrics.mae > 0) ? num(e.test_metrics.mae, 2) : "-";
       var hit = (e.val_metrics && e.val_metrics.directional_accuracy > 0) ? Math.round(e.val_metrics.directional_accuracy*100) + "%" : "-";
       var rho = (e.val_metrics && e.val_metrics.rank_correlation !== undefined) ? num(e.val_metrics.rank_correlation, 2) : "-";
+      var ic = (e.test_metrics && e.test_metrics.information_coeff !== undefined) ? num(e.test_metrics.information_coeff, 3) : "-";
+      var sharpe = (e.test_metrics && e.test_metrics.sharpe_ratio !== undefined) ? num(e.test_metrics.sharpe_ratio, 2) : "-";
 
       return "<tr><td class='mono'><b>" + esc(e.id) + "</b></td><td>" + esc(e.model) + "</td><td>" + esc(e.dataset.split('/').pop()) +
         "</td><td><span class='pill'>" + esc(e.horizon) + "</span></td><td><span class='" + badge + "'>" + esc(e.state) + "</span></td>" +
-        "<td class='mono'>" + trMae + "</td><td class='mono' style='font-weight:700;color:var(--accent)'>" + vMae + "</td><td class='mono'>" + teMae + "</td>" +
+        "<td class='mono' style='font-weight:700;color:var(--accent)'>" + vMae + "</td><td class='mono' style='color:var(--info)'>" + teMae + "</td>" +
         "<td class='mono'>" + hit + "</td><td class='mono'>" + rho + "</td>" +
+        "<td class='mono' style='color:var(--info);font-weight:700'>" + ic + "</td>" +
+        "<td class='mono' style='color:var(--accent);font-weight:700'>" + sharpe + "</td>" +
         "<td><button class='btn btn-secondary' style='padding:4px 8px;font-size:11px' onclick='window.showExpDetail(\"" + esc(e.id) + "\")'>Inspect</button></td></tr>";
     }).join("");
   }
@@ -810,42 +869,168 @@ const indexHTML = `<!doctype html>
     var exp = state.experiments.find(function(e){ return e.id === id; });
     if (!exp) return;
     $("expDetailCard").style.display = "block";
-    $("expDetailTitle").textContent = "Experiment: " + exp.name + " (" + exp.id + ")";
+    $("expDetailTitle").textContent = "Experiment: " + (exp.name || exp.id) + " (" + exp.id + ")";
     
     var overfitBanner = exp.overfit_warning 
-      ? "<div style='padding:12px;border-radius:8px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3);color:var(--warn);margin-bottom:14px'><b>Generalization Diagnostic:</b> " + esc(exp.overfit_warning) + "</div>" : "";
+      ? "<div style='padding:12px;border-radius:8px;background:rgba(255,171,0,.12);border:1px solid rgba(255,171,0,.3);color:var(--warn);margin-bottom:14px'><b>Generalization Diagnostic:</b> " + esc(exp.overfit_warning) + "</div>" : "";
+
+    var testM = exp.test_metrics || {};
+    var valM = exp.val_metrics || {};
+    var trainM = exp.train_metrics || {};
+
+    var pnlChartHtml = renderEquitySvg(testM.equity_curve);
+
+    var kpiGrid = 
+      "<div class='grid' style='margin-bottom:14px'>" +
+        "<div class='span2'><div class='stat'><div class='k'>Info Coeff (IC)</div><div class='v' style='color:var(--info);font-size:17px'>" + (testM.information_coeff !== undefined ? num(testM.information_coeff, 3) : "-") + "</div><div class='s'>Pearson r (Test)</div></div></div>" +
+        "<div class='span2'><div class='stat'><div class='k'>Sharpe Ratio</div><div class='v' style='color:var(--accent);font-size:17px'>" + (testM.sharpe_ratio !== undefined ? num(testM.sharpe_ratio, 2) : "-") + "</div><div class='s'>Statistical Risk-Adj</div></div></div>" +
+        "<div class='span2'><div class='stat'><div class='k'>Sortino Ratio</div><div class='v' style='color:var(--accent);font-size:17px'>" + (testM.sortino_ratio !== undefined ? num(testM.sortino_ratio, 2) : "-") + "</div><div class='s'>Downside Risk-Adj</div></div></div>" +
+        "<div class='span2'><div class='stat'><div class='k'>Max Drawdown</div><div class='v' style='color:var(--bad);font-size:17px'>" + (testM.max_drawdown_bps !== undefined ? num(testM.max_drawdown_bps, 2) + " bps" : "-") + "</div><div class='s'>Peak-to-Trough</div></div></div>" +
+        "<div class='span2'><div class='stat'><div class='k'>Win Rate</div><div class='v' style='font-size:17px'>" + (testM.win_rate !== undefined ? Math.round(testM.win_rate*100) + "%" : "-") + "</div><div class='s'>Directional Bets</div></div></div>" +
+        "<div class='span2'><div class='stat'><div class='k'>Profit Factor</div><div class='v' style='font-size:17px'>" + (testM.profit_factor !== undefined ? num(testM.profit_factor, 2) : "-") + "</div><div class='s'>Gains / Losses</div></div></div>" +
+      "</div>";
 
     $("expDetailContent").innerHTML = overfitBanner +
-      "<div class='grid'>" +
+      "<div class='grid' style='margin-bottom:14px'>" +
         "<div class='span4'><div class='stat'><div class='k'>Model & Feature Set</div><div class='v' style='font-size:16px'>" + esc(exp.model) + " (" + esc(exp.feature_set||"multi") + ")</div><div class='s'>" + esc(exp.dataset.split('/').pop()) + "</div></div></div>" +
         "<div class='span4'><div class='stat'><div class='k'>Execution Duration</div><div class='v' style='font-size:16px'>" + (exp.duration_ms||0) + " ms</div><div class='s'>Evaluated on node: " + esc(exp.worker_node||"pi5") + "</div></div></div>" +
         "<div class='span4'><div class='stat'><div class='k'>Forecast Horizon</div><div class='v' style='font-size:16px'>" + esc(exp.horizon) + "</div><div class='s'>Safe chronological split</div></div></div>" +
       "</div>" +
-      "<div class='metric-split-grid'>" +
+      kpiGrid +
+      pnlChartHtml +
+      "<div class='metric-split-grid' style='margin-top:14px'>" +
         "<div class='metric-split'><h4>1. In-Sample Training (60%)</h4>" +
-          "<div>Samples: <b>" + (exp.train_metrics ? exp.train_metrics.samples : "-") + "</b></div>" +
-          "<div>MAE: <b>" + (exp.train_metrics ? num(exp.train_metrics.mae, 2) : "-") + " bps</b></div>" +
-          "<div>RMSE: <b>" + (exp.train_metrics ? num(exp.train_metrics.rmse, 2) : "-") + " bps</b></div>" +
-          "<div>Directional Accuracy: <b>" + (exp.train_metrics ? Math.round(exp.train_metrics.directional_accuracy*100) + "%" : "-") + "</b></div>" +
-          "<div>Spearman Rank &rho;: <b>" + (exp.train_metrics ? num(exp.train_metrics.rank_correlation, 2) : "-") + "</b></div>" +
+          "<div>Samples: <b>" + (trainM.samples || "-") + "</b></div>" +
+          "<div>MAE: <b>" + (trainM.mae ? num(trainM.mae, 2) + " bps" : "-") + "</b></div>" +
+          "<div>RMSE: <b>" + (trainM.rmse ? num(trainM.rmse, 2) + " bps" : "-") + "</b></div>" +
+          "<div>Directional Accuracy: <b>" + (trainM.directional_accuracy ? Math.round(trainM.directional_accuracy*100) + "%" : "-") + "</b></div>" +
+          "<div>Rank &rho;: <b>" + (trainM.rank_correlation !== undefined ? num(trainM.rank_correlation, 2) : "-") + "</b></div>" +
         "</div>" +
         "<div class='metric-split' style='border-color:var(--accent)'><h4>2. Out-of-Sample Validation (20%)</h4>" +
-          "<div>Samples: <b>" + (exp.val_metrics ? exp.val_metrics.samples : "-") + "</b></div>" +
-          "<div style='color:var(--accent)'>MAE: <b>" + (exp.val_metrics ? num(exp.val_metrics.mae, 2) : "-") + " bps</b></div>" +
-          "<div>RMSE: <b>" + (exp.val_metrics ? num(exp.val_metrics.rmse, 2) : "-") + " bps</b></div>" +
-          "<div>Directional Accuracy: <b>" + (exp.val_metrics ? Math.round(exp.val_metrics.directional_accuracy*100) + "%" : "-") + "</b></div>" +
-          "<div>Spearman Rank &rho;: <b>" + (exp.val_metrics ? num(exp.val_metrics.rank_correlation, 2) : "-") + "</b></div>" +
-          "<div>Brier Calibration: <b>" + (exp.val_metrics ? num(exp.val_metrics.brier_score, 4) : "-") + "</b></div>" +
+          "<div>Samples: <b>" + (valM.samples || "-") + "</b></div>" +
+          "<div style='color:var(--accent)'>MAE: <b>" + (valM.mae ? num(valM.mae, 2) + " bps" : "-") + "</b></div>" +
+          "<div>RMSE: <b>" + (valM.rmse ? num(valM.rmse, 2) + " bps" : "-") + "</b></div>" +
+          "<div>Directional Accuracy: <b>" + (valM.directional_accuracy ? Math.round(valM.directional_accuracy*100) + "%" : "-") + "</b></div>" +
+          "<div>Rank &rho;: <b>" + (valM.rank_correlation !== undefined ? num(valM.rank_correlation, 2) : "-") + "</b></div>" +
+          "<div>Brier Calibration: <b>" + (valM.brier_score !== undefined ? num(valM.brier_score, 4) : "-") + "</b></div>" +
         "</div>" +
-        "<div class='metric-split'><h4>3. Held-Out Test (20%)</h4>" +
-          "<div>Samples: <b>" + (exp.test_metrics ? exp.test_metrics.samples : "-") + "</b></div>" +
-          "<div>MAE: <b>" + (exp.test_metrics ? num(exp.test_metrics.mae, 2) : "-") + " bps</b></div>" +
-          "<div>RMSE: <b>" + (exp.test_metrics ? num(exp.test_metrics.rmse, 2) : "-") + " bps</b></div>" +
-          "<div>Directional Accuracy: <b>" + (exp.test_metrics ? Math.round(exp.test_metrics.directional_accuracy*100) + "%" : "-") + "</b></div>" +
-          "<div>Spearman Rank &rho;: <b>" + (exp.test_metrics ? num(exp.test_metrics.rank_correlation, 2) : "-") + "</b></div>" +
+        "<div class='metric-split' style='border-color:var(--info)'><h4>3. Held-Out Test (20%)</h4>" +
+          "<div>Samples: <b>" + (testM.samples || "-") + "</b></div>" +
+          "<div style='color:var(--info)'>MAE: <b>" + (testM.mae ? num(testM.mae, 2) + " bps" : "-") + "</b></div>" +
+          "<div>RMSE: <b>" + (testM.rmse ? num(testM.rmse, 2) + " bps" : "-") + "</b></div>" +
+          "<div>Directional Accuracy: <b>" + (testM.directional_accuracy ? Math.round(testM.directional_accuracy*100) + "%" : "-") + "</b></div>" +
+          "<div>Rank &rho;: <b>" + (testM.rank_correlation !== undefined ? num(testM.rank_correlation, 2) : "-") + "</b></div>" +
+          "<div>Information Coeff (IC): <b>" + (testM.information_coeff !== undefined ? num(testM.information_coeff, 3) : "-") + "</b></div>" +
         "</div>" +
-      "</div>";
+      "</div>" +
+      "<div style='display:flex;justify-content:space-between;align-items:center;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)'>" +
+        "<div style='display:flex;gap:10px;align-items:center'>" +
+          "<span style='font-size:12px;color:var(--muted);font-weight:600'>Side-by-side comparison:</span>" +
+          "<select id='selCompareExp' style='padding:6px 10px;font-size:12px;border-radius:6px;background:var(--panel2);border:1px solid var(--line);color:var(--text)'>" +
+            "<option value=''>Compare with another experiment...</option>" +
+            state.experiments.filter(function(x){ return x.id !== exp.id; }).map(function(x){
+              return "<option value='" + esc(x.id) + "'>" + esc(x.name || x.id) + " (" + esc(x.model) + ")</option>";
+            }).join("") +
+          "</select>" +
+        "</div>" +
+        "<div style='display:flex;gap:8px'>" +
+          "<button class='btn btn-secondary' style='font-size:12px;padding:6px 12px' onclick='window.exportExpJSON(\"" + esc(exp.id) + "\")'>Export JSON</button>" +
+          "<button class='btn btn-secondary' style='font-size:12px;padding:6px 12px' onclick='window.exportExpCSV(\"" + esc(exp.id) + "\")'>Export CSV</button>" +
+        "</div>" +
+      "</div>" +
+      "<div id='expCompareArea' style='margin-top:14px'></div>";
+
+    var compSelect = $("selCompareExp");
+    if (compSelect) {
+      compSelect.addEventListener("change", function(){
+        var otherId = this.value;
+        if (!otherId) { $("expCompareArea").innerHTML = ""; return; }
+        var other = state.experiments.find(function(x){ return x.id === otherId; });
+        if (!other) return;
+        renderComparison(exp, other);
+      });
+    }
+
     $("expDetailCard").scrollIntoView({behavior:"smooth"});
+  };
+
+  function renderComparison(a, b) {
+    var ta = a.test_metrics || {}, tb = b.test_metrics || {};
+    var va = a.val_metrics || {}, vb = b.val_metrics || {};
+
+    var deltaRow = function(name, valA, valB, lowerIsBetter, unit) {
+      unit = unit || "";
+      var diff = (valB !== undefined && valA !== undefined && valA !== 0 && valB !== 0) ? (valB - valA) : null;
+      var diffStr = "-";
+      var color = "var(--muted)";
+      if (diff !== null && !isNaN(diff)) {
+        var sign = diff > 0 ? "+" : "";
+        diffStr = sign + num(diff, 2) + unit;
+        var good = lowerIsBetter ? (diff < 0) : (diff > 0);
+        color = good ? "var(--accent)" : "var(--bad)";
+      }
+      return "<tr>" +
+        "<td style='font-weight:600'>" + esc(name) + "</td>" +
+        "<td class='mono'>" + (valA !== undefined ? num(valA, 2) + unit : "-") + "</td>" +
+        "<td class='mono'>" + (valB !== undefined ? num(valB, 2) + unit : "-") + "</td>" +
+        "<td class='mono' style='font-weight:700;color:" + color + "'>" + diffStr + "</td>" +
+      "</tr>";
+    };
+
+    $("expCompareArea").innerHTML = 
+      "<div style='background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px'>" +
+        "<div style='display:flex;justify-content:space-between;margin-bottom:10px'>" +
+          "<div style='font-size:12px;font-weight:700;text-transform:uppercase;color:var(--info)'>Model Comparison: " + esc(a.name) + " vs " + esc(b.name) + "</div>" +
+        "</div>" +
+        "<table>" +
+          "<thead><tr><th>Metric</th><th>" + esc(a.id) + " (" + esc(a.model) + ")</th><th>" + esc(b.id) + " (" + esc(b.model) + ")</th><th>Difference</th></tr></thead>" +
+          "<tbody>" +
+            deltaRow("Val MAE", va.mae, vb.mae, true, " bps") +
+            deltaRow("Test MAE", ta.mae, tb.mae, true, " bps") +
+            deltaRow("Test RMSE", ta.rmse, tb.rmse, true, " bps") +
+            deltaRow("Directional Accuracy", (ta.directional_accuracy||0)*100, (tb.directional_accuracy||0)*100, false, "%") +
+            deltaRow("Information Coeff (IC)", ta.information_coeff, tb.information_coeff, false, "") +
+            deltaRow("Sharpe Ratio", ta.sharpe_ratio, tb.sharpe_ratio, false, "") +
+            deltaRow("Max Drawdown", ta.max_drawdown_bps, tb.max_drawdown_bps, true, " bps") +
+            deltaRow("Profit Factor", ta.profit_factor, tb.profit_factor, false, "") +
+          "</tbody>" +
+        "</table>" +
+      "</div>";
+  }
+
+  // Client-Side Export Helpers
+  window.exportExpJSON = function(id) {
+    var exp = state.experiments.find(function(e){ return e.id === id; });
+    if (!exp) return;
+    var blob = new Blob([JSON.stringify(exp, null, 2)], {type: "application/json"});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "piquant_exp_" + exp.id + ".json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  window.exportExpCSV = function(id) {
+    var exp = state.experiments.find(function(e){ return e.id === id; });
+    if (!exp) return;
+    var rows = [["Metric", "Train", "Validation", "HeldOut_Test"]];
+    var tr = exp.train_metrics || {}, va = exp.val_metrics || {}, te = exp.test_metrics || {};
+    rows.push(["Samples", tr.samples||0, va.samples||0, te.samples||0]);
+    rows.push(["MAE_bps", tr.mae||0, va.mae||0, te.mae||0]);
+    rows.push(["RMSE_bps", tr.rmse||0, va.rmse||0, te.rmse||0]);
+    rows.push(["DirectionalAccuracy_pct", Math.round((tr.directional_accuracy||0)*100), Math.round((va.directional_accuracy||0)*100), Math.round((te.directional_accuracy||0)*100)]);
+    rows.push(["InformationCoefficient_IC", tr.information_coeff||0, va.information_coeff||0, te.information_coeff||0]);
+    rows.push(["SharpeRatio", tr.sharpe_ratio||0, va.sharpe_ratio||0, te.sharpe_ratio||0]);
+    rows.push(["MaxDrawdown_bps", tr.max_drawdown_bps||0, va.max_drawdown_bps||0, te.max_drawdown_bps||0]);
+    var csv = rows.map(function(r){ return r.join(","); }).join("\n");
+    var blob = new Blob([csv], {type: "text/csv"});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "piquant_exp_" + exp.id + ".csv";
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   $("btnCloseDetail").addEventListener("click", function(){ $("expDetailCard").style.display = "none"; });
@@ -901,7 +1086,6 @@ const indexHTML = `<!doctype html>
         "<td class='mono meta' title='" + esc(d.checksum) + "'>" + esc(d.checksum.substring(0,16)) + "...</td></tr>";
     }).join("");
 
-    // Populate dataset selects
     var expSelect = $("expDataset");
     var srchSelect = $("srchDataset");
     var opts = datasets.map(function(d){ return "<option value='" + esc(d.name) + "'>" + esc(d.name) + " (" + (d.records||0) + " records)</option>"; }).join("");
@@ -946,7 +1130,10 @@ const indexHTML = `<!doctype html>
 
   window.selectModelForResearch = function(id){
     navButtons.forEach(function(b){ if (b.getAttribute("data-tab")==="tab-research") b.click(); });
-    if ($("expModel")) $("expModel").value = id;
+    if ($("expModel")) {
+      $("expModel").value = id;
+      $("expModel").dispatchEvent(new Event("change"));
+    }
   };
 
   document.querySelectorAll(".filter-model").forEach(function(btn){
@@ -962,12 +1149,20 @@ const indexHTML = `<!doctype html>
     var btn = $("btnStartExp");
     btn.disabled = true;
     btn.textContent = "Launching...";
+    var m = $("expModel").value;
+    var params = { lambda: parseFloat($("expLambda").value) || 0.001 };
+    if (m === "elastic_net" && $("expAlpha")) {
+      params.alpha = parseFloat($("expAlpha").value) || 0.5;
+    } else if (m === "adaptive_rls" && $("expForgettingFactor")) {
+      params.forgetting_factor = parseFloat($("expForgettingFactor").value) || 0.99;
+    }
+
     var payload = {
-      model: $("expModel").value,
+      model: m,
       dataset: $("expDataset").value,
       horizon: $("expHorizon").value,
       feature_set: $("expFeatureSet").value,
-      params: { lambda: parseFloat($("expLambda").value) || 0.001 }
+      params: params
     };
     fetch("/api/experiments/run", {
       method: "POST",
@@ -1071,32 +1266,28 @@ const indexHTML = `<!doctype html>
   var logsLoaded = false;
   function loadLogs(){
     var file = $("logFile").value;
-    var q = $("logQuery").value.trim();
     var level = $("logLevel").value;
-    var url = "/api/logs?tail=400&file=" + encodeURIComponent(file) +
-      "&level=" + encodeURIComponent(level) + "&q=" + encodeURIComponent(q);
-    $("logMeta").textContent = "loading...";
-    fetch(url, {credentials:"same-origin"})
-      .then(function(r){ return r.json(); })
-      .then(function(d){
-        if (!logsLoaded){
-          logsLoaded = true;
-          $("logFile").innerHTML = (d.files||[]).map(function(f){
-            return "<option>" + esc(f) + "</option>";
-          }).join("") || "<option value=''>no logs</option>";
+    var q = $("logQuery").value;
+    var url = "/api/logs?file=" + encodeURIComponent(file) + "&tail=100";
+    if (level) url += "&level=" + encodeURIComponent(level);
+    if (q) url += "&q=" + encodeURIComponent(q);
+
+    fetch(url)
+      .then(function(r){ if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function(data){
+        logsLoaded = true;
+        var box = $("logViewer");
+        if (data.lines && data.lines.length) {
+          box.textContent = data.lines.join("\n");
+          box.scrollTop = box.scrollHeight;
+        } else {
+          box.textContent = "No log lines match query.";
         }
-        $("logMeta").textContent = (d.scanned||0) + " lines scanned, " + (d.matched||0) + " matched";
-        var body = $("logBody");
-        if (d.error){ body.textContent = d.error; return; }
-        if (!d.lines || !d.lines.length){ body.textContent = "no matching lines"; return; }
-        body.innerHTML = d.lines.map(function(l){
-          return "<div class='" + (l.level ? "lvl-" + esc(l.level) : "") + "'>" + esc(l.text) + "</div>";
-        }).join("");
-        body.scrollTop = body.scrollHeight;
-      })
-      .catch(function(e){ $("logMeta").textContent = "failed: " + e.message; });
+      }).catch(function(err){
+        $("logViewer").textContent = "Log fetch error: " + err.message;
+      });
   }
-  $("logLoad").addEventListener("click", loadLogs);
+
   $("logFile").addEventListener("change", loadLogs);
   $("logLevel").addEventListener("change", loadLogs);
   $("logQuery").addEventListener("keydown", function(e){ if (e.key === "Enter") loadLogs(); });

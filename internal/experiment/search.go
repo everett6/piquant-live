@@ -58,13 +58,16 @@ func DefaultSearchSpace() SearchSpace {
 	}
 }
 
-// RunSearch executes a parameter search across the search space.
-// It rigorously selects the best configuration based ONLY on validation performance.
+// RunSearch executes a parameter search across the search space with high-throughput in-memory caching.
+// It extracts dataset observations ONCE and evaluates candidates strictly on validation performance.
 // Held-out test performance is evaluated exclusively on the selected candidate.
 func RunSearch(ctx context.Context, ps *ParameterSearch, space SearchSpace, cfg *config.Config, onProgress func(pct float64)) error {
 	ps.StartedAt = time.Now()
 	ps.State = StateRunning
-	ps.Progress = 0.0
+	ps.Progress = 0.05
+	if onProgress != nil {
+		onProgress(0.05)
+	}
 
 	if len(space.FeatureSets) == 0 {
 		space.FeatureSets = []string{string(mlofi.SetL5), string(mlofi.SetMulti)}
@@ -73,13 +76,49 @@ func RunSearch(ctx context.Context, ps *ParameterSearch, space SearchSpace, cfg 
 		space.Lambdas = []float64{1e-3, 1e-2, 1e-1}
 	}
 
+	// 1. Efficient single-pass extraction of order book observations and forward horizon returns
+	samples, err := ExtractSamples(ctx, ps.Dataset, ps.Horizon, cfg, func(pct float64) {
+		if onProgress != nil {
+			onProgress(0.05 + pct*0.35)
+		}
+	})
+	if err != nil {
+		ps.State = StateFailed
+		ps.Error = fmt.Sprintf("dataset extraction failed: %v", err)
+		return err
+	}
+
+	// 2. Chronological partition into Train / Val / Test with Embargo Gap
+	trainSamples, valSamples, testSamples, err := PartitionSamples(samples, DefaultSplit(ps.Horizon))
+	if err != nil {
+		ps.State = StateFailed
+		ps.Error = err.Error()
+		return err
+	}
+
 	totalCombinations := len(space.FeatureSets) * len(space.Lambdas)
 	trialIdx := 0
 
 	var bestTrial *SearchTrial
 	bestScore := math.MaxFloat64 // Lower Val MAE is better
 
-	for _, fset := range space.FeatureSets {
+	valActuals := make([]float64, len(valSamples))
+	for i, s := range valSamples {
+		valActuals[i] = s.Y
+	}
+
+	testActuals := make([]float64, len(testSamples))
+	for i, s := range testSamples {
+		testActuals[i] = s.Y
+	}
+
+	for _, fsetStr := range space.FeatureSets {
+		fset := mlofi.FeatureSet(fsetStr)
+		featIdx, err := mlofi.Features(fset)
+		if err != nil {
+			featIdx = []int{0, 1, 2, 3, 4, 5, 6}
+		}
+
 		for _, lam := range space.Lambdas {
 			if ctx.Err() != nil {
 				ps.State = StateCancelled
@@ -90,34 +129,27 @@ func RunSearch(ctx context.Context, ps *ParameterSearch, space SearchSpace, cfg 
 			trialIdx++
 			trialStart := time.Now()
 
-			// Create trial experiment
-			exp := &Experiment{
-				ID:         fmt.Sprintf("%s-t%d", ps.ID, trialIdx),
-				Name:       fmt.Sprintf("%s trial %d", ps.Name, trialIdx),
-				Model:      ps.Model,
-				FeatureSet: fset,
-				Dataset:    ps.Dataset,
-				Horizon:    ps.Horizon,
-				Symbol:     ps.Symbol,
-				Params:     map[string]any{"lambda": lam},
-				Split:      DefaultSplit(ps.Horizon),
+			model := InstantiateModel(ps.Model, lam, map[string]any{"lambda": lam})
+			if err := model.Fit(trainSamples, featIdx); err != nil {
+				continue
 			}
 
-			err := Run(ctx, exp, cfg, nil)
+			valPreds := make([]float64, len(valSamples))
+			for i, s := range valSamples {
+				valPreds[i] = model.Predict(&s.X)
+			}
+			valMetrics := ComputeMetrics(valPreds, valActuals)
+
 			trialDur := time.Since(trialStart).Milliseconds()
-			if err != nil {
-				continue // Skip failed trial
-			}
-
 			trial := SearchTrial{
 				TrialID:    trialIdx,
-				Params:     map[string]any{"lambda": lam, "feature_set": fset},
-				FeatureSet: fset,
+				Params:     map[string]any{"lambda": lam, "feature_set": fsetStr},
+				FeatureSet: fsetStr,
 				Lambda:     lam,
-				ValMAE:     exp.ValMetrics.MAE,
-				ValRMSE:    exp.ValMetrics.RMSE,
-				ValDirAcc:  exp.ValMetrics.DirectionalAccuracy,
-				ValRho:     exp.ValMetrics.RankCorrelation,
+				ValMAE:     valMetrics.MAE,
+				ValRMSE:    valMetrics.RMSE,
+				ValDirAcc:  valMetrics.DirectionalAccuracy,
+				ValRho:     valMetrics.RankCorrelation,
 				DurationMs: trialDur,
 			}
 			ps.Trials = append(ps.Trials, trial)
@@ -129,7 +161,7 @@ func RunSearch(ctx context.Context, ps *ParameterSearch, space SearchSpace, cfg 
 				bestTrial = &currentTrial
 			}
 
-			ps.Progress = float64(trialIdx) / float64(totalCombinations)
+			ps.Progress = 0.40 + 0.50*(float64(trialIdx)/float64(totalCombinations))
 			if onProgress != nil {
 				onProgress(ps.Progress)
 			}
@@ -144,26 +176,30 @@ func RunSearch(ctx context.Context, ps *ParameterSearch, space SearchSpace, cfg 
 
 	ps.BestTrial = bestTrial
 
-	// Phase 2: Final single evaluation of the selected best configuration on held-out test data
-	finalExp := &Experiment{
-		ID:         fmt.Sprintf("%s-best", ps.ID),
-		Name:       fmt.Sprintf("%s Best Model", ps.Name),
-		Model:      ps.Model,
-		FeatureSet: bestTrial.FeatureSet,
-		Dataset:    ps.Dataset,
-		Horizon:    ps.Horizon,
-		Symbol:     ps.Symbol,
-		Params:     map[string]any{"lambda": bestTrial.Lambda},
-		Split:      DefaultSplit(ps.Horizon),
+	// Phase 3: Final single evaluation of the selected best candidate on held-out test data
+	bestFset := mlofi.FeatureSet(bestTrial.FeatureSet)
+	bestFeatIdx, err := mlofi.Features(bestFset)
+	if err != nil {
+		bestFeatIdx = []int{0, 1, 2, 3, 4, 5, 6}
 	}
-	if err := Run(ctx, finalExp, cfg, nil); err == nil {
-		ps.TestMetrics = &finalExp.TestMetrics
+
+	bestModel := InstantiateModel(ps.Model, bestTrial.Lambda, map[string]any{"lambda": bestTrial.Lambda})
+	if err := bestModel.Fit(trainSamples, bestFeatIdx); err == nil {
+		testPreds := make([]float64, len(testSamples))
+		for i, s := range testSamples {
+			testPreds[i] = bestModel.Predict(&s.X)
+		}
+		testMetrics := ComputeMetrics(testPreds, testActuals)
+		ps.TestMetrics = &testMetrics
 	}
 
 	ps.FinishedAt = time.Now()
 	ps.DurationMs = ps.FinishedAt.Sub(ps.StartedAt).Milliseconds()
 	ps.State = StateCompleted
 	ps.Progress = 1.0
+	if onProgress != nil {
+		onProgress(1.0)
+	}
 
 	return nil
 }

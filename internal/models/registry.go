@@ -50,7 +50,35 @@ func Registry() []ModelSpec {
 			Limitations: "Sensitive to sudden spread widening; does not account for latent iceberg orders or non-displayed dark liquidity.",
 			Calibration: "Calibrated via out-of-sample Brier score and Platt probability scaling.",
 		},
-		// 2. Minutes Horizon: Queue Imbalance Logistic Classifier
+		// 2. Minutes Horizon: Elastic Net Sparse Feature Selector
+		{
+			ID:          "elastic_net",
+			Name:        "Elastic Net Coordinate Descent",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "micro_dev", "spread_bps", "ofi_1s", "ofi_5s", "imb_l5", "imb_l20", "mlofi_1s", "mlofi_5s"},
+			Algorithm:   "L1/L2 Elastic Net via Fast Cyclical Coordinate Descent (Soft-Thresholding)",
+			Version:     "v1.1.0",
+			Description: "Balances sparsity (L1 Lasso) and collinearity grouping (L2 Ridge) to isolate robust order book signals.",
+			Assumptions: "True alpha is sparse; non-informative order book noise features should have coefficients shrunk to zero.",
+			Limitations: "Sensitive to choice of mixing ratio alpha.",
+			Calibration: "Coordinate descent converges to global optimum with duality gap < 1e-6.",
+		},
+		// 3. Minutes Horizon: Adaptive Online RLS
+		{
+			ID:          "adaptive_rls",
+			Name:        "Adaptive Recursive Least Squares",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "micro_dev", "spread_bps", "ofi_1s", "ofi_5s"},
+			Algorithm:   "Exponentially Weighted RLS with Forgetting Factor (Kalman filter formulation)",
+			Version:     "v1.0.0",
+			Description: "Online sequential parameter updates that track non-stationary microstructure regime transitions in real time.",
+			Assumptions: "Recent order flow observations are more predictive of immediate price drift than distant historical prints.",
+			Limitations: "Can over-react to transitory noise if forgetting factor is too small (< 0.95).",
+			Calibration: "Dynamically adjusted covariance matrix with numerical symmetrization.",
+		},
+		// 4. Minutes Horizon: Queue Imbalance Logistic Classifier
 		{
 			ID:          "queue_logistic",
 			Name:        "Queue-Reactive Logistic Direction",
