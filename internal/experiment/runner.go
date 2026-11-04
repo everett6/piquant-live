@@ -68,6 +68,17 @@ func InstantiateModel(modelName string, lambda float64, params map[string]any) C
 		return common.NewAdaptiveRLS(ff)
 	case "queue_logistic":
 		return &logisticWrapper{mod: common.NewLogistic(lambda)}
+	case "meta_labeler":
+		feeHurdle := 10.0
+		if f, ok := params["fee_hurdle_bps"].(float64); ok && f > 0 {
+			feeHurdle = f
+		}
+		threshold := 0.55
+		if t, ok := params["prob_threshold"].(float64); ok && t > 0.5 && t < 1.0 {
+			threshold = t
+		}
+		base := common.NewRidge(lambda)
+		return common.NewMetaLabelingFilter(base, feeHurdle, threshold)
 	default:
 		return &common.Ridge{Lam: lambda}
 	}

@@ -205,6 +205,7 @@ const indexHTML = `<!doctype html>
   </nav>
   <div class="grow"></div>
   <div class="pills">
+    <button id="btnToggleCluster" class="mode-btn" style="background:var(--panel2);border:1px solid var(--accent);color:var(--accent)" title="Toggle Architecture: Pi 5 Standalone vs Pi 5 + Pi 3B Dual-Node">Cluster: Dual-Node (Pi 5 + 3B)</button>
     <button id="btnToggleMode" class="mode-btn" title="Toggle UI Complexity">Mode: Standard</button>
     <span id="rolePill" class="pill">node</span>
     <span id="streamPill" class="pill ok">SSE Live</span>
@@ -330,6 +331,7 @@ const indexHTML = `<!doctype html>
                 <option value="elastic_net">Elastic Net Coordinate Descent (L1/L2 sparse)</option>
                 <option value="adaptive_rls">Adaptive Recursive Least Squares (Online RLS)</option>
                 <option value="queue_logistic">Queue-Reactive Logistic Classifier</option>
+                <option value="meta_labeler">Meta-Labeling Fee-Gated Filter (Two-Stage Kelly)</option>
               </select>
             </div>
 
@@ -635,6 +637,30 @@ const indexHTML = `<!doctype html>
     });
   });
 
+  // Cluster Mode Toggle (Pi 5 Standalone vs Pi 5 + 3B Dual-Node)
+  function setClusterMode(cm){
+    state.cluster_mode = cm;
+    if (cm === "pi5_only") {
+      $("btnToggleCluster").textContent = "Cluster: Pi 5 Standalone";
+      $("btnToggleCluster").style.borderColor = "var(--info)";
+      $("btnToggleCluster").style.color = "var(--info)";
+    } else {
+      $("btnToggleCluster").textContent = "Cluster: Dual-Node (Pi 5 + 3B)";
+      $("btnToggleCluster").style.borderColor = "var(--accent)";
+      $("btnToggleCluster").style.color = "var(--accent)";
+    }
+  }
+
+  $("btnToggleCluster").addEventListener("click", function(){
+    var next = (state.cluster_mode === "pi5_only") ? "dual_pi" : "pi5_only";
+    setClusterMode(next);
+    fetch("/api/mode", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({cluster_mode: next})
+    }).catch(function(){});
+  });
+
   // UI Mode Toggle (Standard vs Advanced)
   function setMode(m){
     state.mode = m;
@@ -668,6 +694,7 @@ const indexHTML = `<!doctype html>
     if (!st) return;
     $("rolePill").textContent = st.role || "engine";
     if (st.mode && st.mode !== state.mode) setMode(st.mode);
+    if (st.cluster_mode && st.cluster_mode !== state.cluster_mode) setClusterMode(st.cluster_mode);
 
     // Hero Text
     var eng = st.engine || {};

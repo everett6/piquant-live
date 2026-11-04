@@ -1,40 +1,36 @@
-# PiQuant — Dual-Node Deployment Guide
+# PiQuant — Production Deployment Guide: Pi 5 Standalone & Dual-Node (Pi 5 + 3B)
 
-This guide details the deployment of PiQuant across two Raspberry Pi nodes:
-* **Raspberry Pi 5** (`piquant-core.local`): Authoritative Research Computer.
-* **Raspberry Pi 3B** (`piquant.local`): Dashboard & Lightweight Worker.
+PiQuant supports two primary operational topologies:
+1. **Raspberry Pi 5 Standalone Mode**:
+   - The Pi 5 hosts both the high-throughput research engine and the full interactive web dashboard co-located at `http://piquant-core.local:8080`.
+   - Zero reliance on external nodes; complete offline quantitative research, model training, parameter search, and telemetry in a single SBC footprint.
+2. **Dual-Node Cooperative Mode (Pi 5 + Pi 3B)**:
+   - **Raspberry Pi 5** (`piquant-core.local`): Authoritative Research Computer (Historical replay, orderbook features, model registry, training, quantum searches).
+   - **Raspberry Pi 3B** (`piquant.local`): Dedicated Dashboard Host & Telemetry Monitor (Serves web assets, proxies engine API, shields Pi 5 from HTTP connection churn).
 
 ---
 
 ## Architecture Overview
 
 ```
-                      +-----------------------------+
-                      |   Raspberry Pi 3B           |
-                      |   Hostname: piquant.local   |
-                      |                             |
-                      |   • Web Interface / Assets  |
-                      |   • Status & Telemetry View |
-                      |   • Searchable Log Viewer   |
-                      |   • Lightweight Worker      |
-                      +--------------+--------------+
-                                     |
-                                     | mDNS Discovery + Mutual Bearer Auth
-                                     | Automatic Heartbeat & SSE Sync
-                                     v
-                      +-----------------------------+
-                      |   Raspberry Pi 5            |
-                      |   Hostname:                 |
-                      |   piquant-core.local        |
-                      |                             |
-                      |   • Historical Replay Engine|
-                      |   • Feature Generation      |
-                      |   • Model Registry & Train  |
-                      |   • Parameter Search        |
-                      |   • Experiment Scheduler    |
-                      |   • Source-of-Truth Store   |
-                      |   • Fallback Web Dashboard  |
-                      +-----------------------------+
+ [Mode A: Pi 5 Standalone]              [Mode B: Dual-Node Topology]
++--------------------------+          +-------------------------+
+|   Raspberry Pi 5         |          |   Raspberry Pi 3B       |
+|   piquant-core.local     |          |   piquant.local         |
+|                          |          |   • Web Dashboard Host  |
+|   • Replay Engine        |          |   • Telemetry Display   |
+|   • Features & Modeling  |          +------------+------------+
+|   • Integrated Dashboard |                       |
+|   • Local Storage        |                       | mDNS + HMAC-SHA256
++--------------------------+                       v
+                                      +-------------------------+
+                                      |   Raspberry Pi 5        |
+                                      |   piquant-core.local    |
+                                      |   • Replay Engine       |
+                                      |   • Feature Generation  |
+                                      |   • Quantum Annealer    |
+                                      |   • Authoritative State |
+                                      +-------------------------+
 ```
 
 ---

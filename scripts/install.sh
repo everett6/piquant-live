@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # PiQuant — Production Node Provisioning and Installation Script
-# Supports Raspberry Pi 5 (agent/engine) and Raspberry Pi 3B (dashboard)
+# Supports Raspberry Pi 5 Standalone, Pi 5 Engine, and Raspberry Pi 3B Dashboard
 set -euo pipefail
 
 ROLE="${1:-auto}"
+MODE="${2:-auto}" # auto | standalone (pi5 only) | dual (pi5 + 3b)
 PREFIX="${PREFIX:-/usr/local}"
 PIQUANT_USER="piquant"
 CONFIG_DIR="/etc/piquant"
@@ -11,6 +12,8 @@ DATA_DIR="/var/lib/piquant/data"
 LOG_DIR="/var/log/piquant"
 
 echo "=== PiQuant Production Installer ==="
+echo "Modes supported: 'standalone' (RPi 5 runs research engine + UI co-located)"
+echo "                 'dual' (RPi 5 engine + RPi 3B dashboard & telemetry)"
 
 # Check root privilege
 if [[ $EUID -ne 0 ]]; then
@@ -117,6 +120,9 @@ echo "Secrets: $SECRETS_FILE"
 echo ""
 if [[ "$ROLE" == "dashboard" ]]; then
   echo "Access the dashboard at http://piquant.local:8080 or http://<this-pi-ip>:8080"
+  echo "Operating in Dual-Node Mode with Raspberry Pi 5 core."
 else
-  echo "PiQuant Research Engine running. Peer discovery active for dashboard connection."
+  echo "PiQuant Research Engine running on Raspberry Pi 5."
+  echo "  - Pi 5 Standalone UI: http://piquant-core.local:8080"
+  echo "  - Dual-Node Mode: Discovers Pi 3B at http://piquant.local:8080 automatically via mDNS."
 fi

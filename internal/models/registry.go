@@ -92,7 +92,21 @@ func Registry() []ModelSpec {
 			Limitations: "Under-predicts adverse selection during high-volume news announcements.",
 			Calibration: "Reliability diagram shows < 2% calibration error within [0.35, 0.65] predicted probability.",
 		},
-		// 3. Hours Horizon: Volatility Regime Filter
+		// 5. Minutes Horizon: Meta-Labeling Fee-Gated Overlay
+		{
+			ID:          "meta_labeler",
+			Name:        "Meta-Labeling Fee-Gated Filter",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "micro_dev", "spread_bps", "ofi_1s", "ofi_5s", "vol_30s_bps", "trade_cnt_1s"},
+			Algorithm:   "Two-Stage López de Prado Meta-Labeling with Half-Kelly Bet Sizing",
+			Version:     "v1.0.0",
+			Description: "Applies a secondary calibrated probability filter to eliminate low-conviction signals that lose to taker fees.",
+			Assumptions: "Primary model produces directional drift; secondary classifier predicts probability of exceeding round-trip execution drag.",
+			Limitations: "Reduces trade frequency by 60-80% to preserve capital for high-conviction market regimes.",
+			Calibration: "Thresholded at P(gain > fees) >= 0.55 with fractional Kelly conviction sizing.",
+		},
+		// 6. Hours Horizon: Volatility Regime Filter
 		{
 			ID:          "vol_regime_ridge",
 			Name:        "EWMA Volatility Flow Estimator",

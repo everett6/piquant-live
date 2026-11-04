@@ -708,13 +708,22 @@ func (s *Server) handleMode(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodPost {
 		var req struct {
-			Mode string `json:"mode"`
+			Mode        string `json:"mode"`
+			ClusterMode string `json:"cluster_mode"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err == nil && req.Mode != "" {
-			s.SetMode(req.Mode)
+		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+			if req.Mode != "" {
+				s.SetMode(req.Mode)
+			}
+			if req.ClusterMode != "" {
+				s.SetClusterMode(req.ClusterMode)
+			}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"mode": s.Mode()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"mode":         s.Mode(),
+		"cluster_mode": s.ClusterMode(),
+	})
 }
 
 // proxyToEngine forwards a request from Pi 3B dashboard to the Pi 5 research engine.

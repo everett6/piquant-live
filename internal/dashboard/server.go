@@ -71,6 +71,7 @@ type Status struct {
 	PeerEngine  *Status                       `json:"peer_engine,omitempty"`
 	Activity    []string                      `json:"activity,omitempty"`
 	Mode        string                        `json:"mode,omitempty"`
+	ClusterMode string                        `json:"cluster_mode,omitempty"` // "pi5_only" or "dual_pi"
 	Experiments []*experiment.Experiment      `json:"experiments,omitempty"`
 	Searches    []*experiment.ParameterSearch `json:"searches,omitempty"`
 	Datasets    []experiment.DatasetMeta      `json:"datasets,omitempty"`
@@ -178,6 +179,7 @@ type Server struct {
 
 	modeMu         sync.RWMutex
 	mode           string
+	clusterMode    string // "pi5_only" or "dual_pi"
 	peerMu         sync.RWMutex
 	lastPeerStatus *Status
 	lastPeerFetch  time.Time
@@ -295,6 +297,7 @@ func (s *Server) Status(ctx context.Context) Status {
 	}
 	st.Instance = s.opts.Instance
 	st.Mode = s.Mode()
+	st.ClusterMode = s.ClusterMode()
 
 	if s.opts.Manager != nil {
 		st.Activity = s.opts.Manager.ActivityEvents()
@@ -449,16 +452,26 @@ func (s *Server) checks(st Status) []Check {
 		})
 	}
 	engineLive := false
-	for _, p := range st.Peers {
-		if p.Role == discovery.RoleEngine && p.Live {
-			engineLive = true
+	if s.ClusterMode() == "pi5_only" || s.opts.Role == discovery.RoleEngine {
+		engineLive = true
+	} else {
+		for _, p := range st.Peers {
+			if p.Role == discovery.RoleEngine && p.Live {
+				engineLive = true
+			}
 		}
 	}
-	if s.opts.Discover != nil {
+	if s.opts.Discover != nil && s.ClusterMode() == "dual_pi" {
 		out = append(out, Check{
 			Name:   "research engine reachable",
 			OK:     engineLive,
 			Detail: pick(engineLive, "", "no engine answered on the local network"),
+		})
+	} else if s.ClusterMode() == "pi5_only" {
+		out = append(out, Check{
+			Name:   "standalone mode",
+			OK:     true,
+			Detail: "running engine and dashboard co-located on Raspberry Pi 5",
 		})
 	}
 	return out
@@ -624,5 +637,26 @@ func (s *Server) SetMode(m string) {
 		s.mode = "advanced"
 	} else {
 		s.mode = "simple"
+	}
+}
+
+// ClusterMode returns the deployment mode: "pi5_only" or "dual_pi".
+func (s *Server) ClusterMode() string {
+	s.modeMu.RLock()
+	defer s.modeMu.RUnlock()
+	if s.clusterMode == "" {
+		return "dual_pi"
+	}
+	return s.clusterMode
+}
+
+// SetClusterMode configures the cluster topology ("pi5_only" or "dual_pi").
+func (s *Server) SetClusterMode(cm string) {
+	s.modeMu.Lock()
+	defer s.modeMu.Unlock()
+	if cm == "pi5_only" {
+		s.clusterMode = "pi5_only"
+	} else {
+		s.clusterMode = "dual_pi"
 	}
 }
