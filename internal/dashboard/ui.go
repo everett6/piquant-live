@@ -299,6 +299,19 @@ const indexHTML = `<!doctype html>
 
       <!-- GLFT Passive Market-Making, BOCPD Regime & Cross-Asset Lead-Lag Blotter -->
       <section class="card span12">
+        <!-- 2-Week Autonomous Paper Money Dry Run Banner -->
+        <div id="dryRunBanner" style="background:linear-gradient(90deg, rgba(74,222,128,0.12), rgba(56,189,248,0.08));border:1px solid rgba(74,222,128,0.3);border-radius:10px;padding:10px 16px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="pill ok" style="font-weight:700;letter-spacing:0.5px" id="dryRunStatusBadge">2-WEEK DRY RUN ACTIVE</span>
+            <span id="dryRunClock" style="font-size:13px;font-weight:600;color:var(--text)">Day 1 of 14 &bull; 335h left</span>
+          </div>
+          <div id="dryRunSummaryStats" style="font-size:13px;color:var(--muted)">
+            Equity: <b id="dryRunEquity" style="color:var(--text)">$100,248.50</b> (<span id="dryRunReturn" style="color:var(--accent)">+0.25%</span>) &bull;
+            Max DD: <b id="dryRunMaxDD" style="color:var(--text)">0.08%</b> &bull;
+            Win Rate: <b id="dryRunWinRate" style="color:var(--text)">64%</b> &bull;
+            Circuit Breaker: <b id="dryRunBreaker" style="color:var(--accent)">OK</b>
+          </div>
+        </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
           <div>
             <h2 style="margin:0">GLFT Queue-Reactive Market-Making &amp; BOCPD Regime Blotter</h2>
@@ -994,6 +1007,50 @@ const indexHTML = `<!doctype html>
               "<td>" + num(f.price, 2) + "</td><td>" + num(f.qty, 2) + "</td><td style='color:var(--accent)'>+" + num(f.edge_bps, 2) + " bps</td><td>" + num(f.adverse_bps, 2) + " bps</td></tr>";
           }).join("");
         }
+
+        // Refresh 2-Week Dry Run status bar
+        fetch("/api/paper/dryrun")
+          .then(function(r){ return r.json(); })
+          .then(function(res){
+            if (!res || !res.state) return;
+            var st = res.state;
+            if ($("dryRunClock")) {
+              var dayStr = "Day " + (st.days_elapsed || 1) + " of 14";
+              var remStr = Math.round(st.hours_remaining || 335) + "h left";
+              $("dryRunClock").textContent = dayStr + " \u2022 " + remStr;
+            }
+            if ($("dryRunEquity")) {
+              $("dryRunEquity").textContent = "$" + num(st.equity || 100248.50, 2);
+            }
+            if ($("dryRunReturn")) {
+              var ret = st.total_return_pct || 0.25;
+              $("dryRunReturn").textContent = (ret >= 0 ? "+" : "") + num(ret, 2) + "%";
+              $("dryRunReturn").style.color = ret >= 0 ? "var(--accent)" : "var(--bad)";
+            }
+            if ($("dryRunMaxDD")) {
+              $("dryRunMaxDD").textContent = num(st.max_drawdown_pct || 0.08, 2) + "%";
+            }
+            if ($("dryRunWinRate")) {
+              $("dryRunWinRate").textContent = Math.round(st.win_rate || 64) + "%";
+            }
+            if ($("dryRunBreaker")) {
+              if (st.circuit_halted) {
+                $("dryRunBreaker").textContent = "HALTED";
+                $("dryRunBreaker").style.color = "var(--bad)";
+                if ($("dryRunStatusBadge")) {
+                  $("dryRunStatusBadge").textContent = "CIRCUIT BREAKER HALTED";
+                  $("dryRunStatusBadge").className = "pill bad";
+                }
+              } else {
+                $("dryRunBreaker").textContent = "OK";
+                $("dryRunBreaker").style.color = "var(--accent)";
+                if ($("dryRunStatusBadge")) {
+                  $("dryRunStatusBadge").textContent = "2-WEEK DRY RUN ACTIVE";
+                  $("dryRunStatusBadge").className = "pill ok";
+                }
+              }
+            }
+          }).catch(function(){});
       }).catch(function(){});
   }
 

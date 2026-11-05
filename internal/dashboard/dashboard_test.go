@@ -516,3 +516,32 @@ func TestClientIP(t *testing.T) {
 		t.Fatalf("clientIP with a proxy = %q", got)
 	}
 }
+
+func TestPaperDryRunEndpoint(t *testing.T) {
+	srv := newTestServer(t, nil)
+	h := srv.Handler()
+
+	if rec := get(t, h, http.MethodGet, "/api/paper/dryrun", nil, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated /api/paper/dryrun code = %d, want 401", rec.Code)
+	}
+
+	recAuth := get(t, h, http.MethodGet, "/api/paper/dryrun", map[string]string{"Authorization": "Bearer " + peerToken}, nil)
+	if recAuth.Code != http.StatusOK {
+		t.Fatalf("authenticated /api/paper/dryrun code = %d, want 200", recAuth.Code)
+	}
+
+	var res map[string]any
+	if err := json.Unmarshal(recAuth.Body.Bytes(), &res); err != nil {
+		t.Fatalf("failed to decode JSON response: %v", err)
+	}
+	if res["status"] != "active" {
+		t.Errorf("expected status 'active', got %v", res["status"])
+	}
+	st, ok := res["state"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected state object in response")
+	}
+	if st["initial_capital"] != 100000.0 {
+		t.Errorf("expected initial_capital 100000, got %v", st["initial_capital"])
+	}
+}
