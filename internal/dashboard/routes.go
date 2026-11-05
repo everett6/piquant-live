@@ -1328,8 +1328,13 @@ func (s *Server) handlePaperDryRun(w http.ResponseWriter, r *http.Request) {
 		}); ok {
 			st := provider.State()
 			fills := provider.RecentFills()
+			ds := "live"
+			if drySt, ok := st.(paper.DryRunState); ok && drySt.DataSource != "" {
+				ds = drySt.DataSource
+			}
 			writeJSON(w, http.StatusOK, map[string]any{
 				"status":       "active",
+				"data_source":  ds,
 				"state":        st,
 				"recent_fills": fills,
 				"tearsheet":    tearSheet,

@@ -311,6 +311,7 @@ const indexHTML = `<!doctype html>
         <div id="dryRunBanner" style="background:linear-gradient(90deg, rgba(74,222,128,0.12), rgba(56,189,248,0.08));border:1px solid rgba(74,222,128,0.3);border-radius:10px;padding:10px 16px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
           <div style="display:flex;align-items:center;gap:10px">
             <span class="pill ok" style="font-weight:700;letter-spacing:0.5px" id="dryRunStatusBadge">2-WEEK DRY RUN ACTIVE</span>
+            <span class="pill ok" style="font-weight:700;letter-spacing:0.5px" id="dryRunDataSourceBadge">FEED: LIVE</span>
             <span id="dryRunClock" style="font-size:13px;font-weight:600;color:var(--text)">Day 1 of 14 &bull; 335h left</span>
           </div>
           <div id="dryRunSummaryStats" style="font-size:13px;color:var(--muted)">
@@ -1090,6 +1091,16 @@ const indexHTML = `<!doctype html>
                   $("dryRunStatusBadge").textContent = "2-WEEK DRY RUN ACTIVE";
                   $("dryRunStatusBadge").className = "pill ok";
                 }
+              }
+            }
+            if ($("dryRunDataSourceBadge")) {
+              var isFallback = st.data_source === "fallback" || st.quoting_paused;
+              if (isFallback) {
+                $("dryRunDataSourceBadge").textContent = "DATA SOURCE: FALLBACK (QUOTING PAUSED)";
+                $("dryRunDataSourceBadge").className = "pill bad";
+              } else {
+                $("dryRunDataSourceBadge").textContent = "DATA SOURCE: LIVE";
+                $("dryRunDataSourceBadge").className = "pill ok";
               }
             }
           }).catch(function(){});

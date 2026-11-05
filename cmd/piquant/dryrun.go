@@ -19,11 +19,14 @@ import (
 
 type dryRunFlags struct {
 	serveFlags
-	capital    float64
-	durationH  float64
-	maxDD      float64
-	symbols    string
-	statusOnly bool
+	capital         float64
+	durationH       float64
+	maxDD           float64
+	symbols         string
+	statusOnly      bool
+	enableFallback  bool
+	enableAllModels bool
+	wsURL           string
 }
 
 func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
@@ -40,6 +43,9 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.Float64Var(&f.maxDD, "max-drawdown", 2.0, "maximum allowable drawdown percentage before circuit breaker halts")
 	fs.StringVar(&f.symbols, "symbols", "BTCUSDT,ETHUSDT", "comma-separated trading symbols")
 	fs.BoolVar(&f.statusOnly, "status", false, "print terminal summary of active dry run and exit")
+	fs.BoolVar(&f.enableFallback, "fallback", false, "opt-in to local synthetic feed generation when offline (default false)")
+	fs.BoolVar(&f.enableAllModels, "enable-all-models", false, "re-enable all registered models in ensemble regardless of ablation gate")
+	fs.StringVar(&f.wsURL, "ws-url", "", "custom Binance public WebSocket URL (default auto)")
 	return f
 }
 
@@ -86,6 +92,10 @@ func runDryRun(ctx context.Context, args []string) error {
 
 	streamCfg := paper.DefaultStreamConfig()
 	streamCfg.Symbols = symList
+	streamCfg.EnableFallback = f.enableFallback
+	if f.wsURL != "" {
+		streamCfg.Endpoint = f.wsURL
+	}
 	ingestor := paper.NewMarketStreamIngestor(streamCfg, ring)
 	ingestor.Start(ctx)
 	defer ingestor.Stop()
@@ -96,6 +106,7 @@ func runDryRun(ctx context.Context, args []string) error {
 	paperCfg.TargetDuration = time.Duration(f.durationH) * time.Hour
 	paperCfg.MaxDrawdownPct = f.maxDD
 	paperCfg.Symbols = symList
+	paperCfg.EnableAllModels = f.enableAllModels
 
 	dryRunEngine, err := paper.NewDryRunEngine(paperCfg, ring, ingestor)
 	if err != nil {
@@ -174,10 +185,20 @@ func printDryRunStatus(stateFile string) error {
 		rem = 0
 	}
 
+	ds := st.DataSource
+	if ds == "" {
+		ds = "live"
+	}
+	if st.QuotingPaused {
+		ds += " (QUOTING PAUSED)"
+	}
+
 	fmt.Println("=======================================================")
 	fmt.Printf(" PIQUANT 2-WEEK AUTONOMOUS DRY RUN STATUS REPORT\n")
 	fmt.Println("=======================================================")
 	fmt.Printf(" Status:          %s\n", pick(!st.CircuitHalted, "ACTIVE (OK)", "CIRCUIT BREAKER HALTED"))
+	fmt.Printf(" Data Source:     %s\n", ds)
+	fmt.Printf(" Feed Down Time:  %.1fs\n", st.FeedDownSeconds)
 	fmt.Printf(" Progress:        Day %d of 14 (%.1f hours remaining)\n", st.DaysElapsed, rem.Hours())
 	fmt.Printf(" Start Time:      %s\n", st.StartTime.Format(time.RFC3339))
 	fmt.Printf(" Target End:      %s\n", st.TargetEndTime.Format(time.RFC3339))
