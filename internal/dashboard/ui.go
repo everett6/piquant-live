@@ -11,6 +11,10 @@ const loginHTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#090d14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
 <title>PiQuant Sign In</title>
 <style>
   :root{color-scheme:dark}
@@ -62,6 +66,10 @@ const indexHTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#090d14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
 <title>PiQuant — Quantitative Research Platform</title>
 <style>
   :root{
@@ -318,6 +326,7 @@ const indexHTML = `<!doctype html>
             <div class="meta" style="margin-top:2px">Avellaneda-Stoikov inventory-skewed reservation quotes, online changepoint regime gate &amp; BTC&rarr;ETH Kalman cointegration</div>
           </div>
           <div class="pills">
+            <span class="pill ok" id="blotterWatchdogPill">Watchdog: NOMINAL</span>
             <span class="pill ok" id="blotterBreakerPill">Circuit Breaker: Normal</span>
             <span class="pill info" id="blotterEvtPill">EVT 99.9% ES: 4.82 bps</span>
             <span class="pill ok" id="blotterRegimePill">Regime: Calm Maker</span>
@@ -357,6 +366,16 @@ const indexHTML = `<!doctype html>
             <div>
               <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--warn);margin-bottom:4px">Page&ndash;Hinkley CUSUM Drift Guard</div>
               <div id="mmDriftGuardStatus" class="mono" style="font-size:12px;color:var(--accent)">Nominal (PH = 0.42 / 12.00) &bull; Rollbacks: 0</div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line-subtle)">
+            <div>
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--accent);margin-bottom:4px">Multi-Venue Smart Order Router (Maker/Taker Split &amp; Venue)</div>
+              <div id="mmSmartRouter" class="mono" style="font-size:12px;color:var(--text)">MakerPerp &bull; Maker: 100% / Taker: 0% &bull; Venue: BINANCE_PERP (Edge: +1.12 bps)</div>
+            </div>
+            <div>
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--info);margin-bottom:4px">Dry-Run Tear-Sheet (Sortino, Calmar &amp; Maker Fill Ratio)</div>
+              <div id="mmTearSheetSummary" class="mono" style="font-size:12px;color:var(--text)">Sortino: 3.38 &bull; Calmar: 38.0 &bull; Profit Factor: 2.12 &bull; Maker Ratio: 83.3%</div>
             </div>
           </div>
         </div>
@@ -415,11 +434,13 @@ const indexHTML = `<!doctype html>
                 <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
                 <option value="rough_signature_ofi">Rough Path Signature OFI &amp; Kyle Lambda</option>
                 <option value="cartea_jaimungal">Cartea-Jaimungal HJB Target Inventory &amp; Adverse Selection</option>
+                <option value="esn_reservoir">Echo State Network Reservoir (ESN Microstructure)</option>
               </select>
               <select id="exp-model" style="display:none" aria-hidden="true">
                 <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
                 <option value="rough_signature_ofi">Rough Path Signature OFI &amp; Kyle Lambda</option>
                 <option value="cartea_jaimungal">Cartea-Jaimungal HJB Target Inventory &amp; Adverse Selection</option>
+                <option value="esn_reservoir">Echo State Network Reservoir (ESN Microstructure)</option>
               </select>
             </div>
 
@@ -561,6 +582,7 @@ const indexHTML = `<!doctype html>
               <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
               <option value="rough_signature_ofi">Rough Path Signature OFI &amp; Kyle Lambda</option>
               <option value="cartea_jaimungal">Cartea-Jaimungal HJB Target Inventory &amp; Adverse Selection</option>
+              <option value="esn_reservoir">Echo State Network Reservoir (ESN Microstructure)</option>
             </select>
           </div>
           <div class="form-group">
@@ -946,6 +968,11 @@ const indexHTML = `<!doctype html>
         if ($("mmHawkes")) $("mmHawkes").textContent = (d.hawkes_imb >= 0 ? "+" : "") + num(d.hawkes_imb, 2);
         if ($("mmHalfLife")) $("mmHalfLife").textContent = num(ll.half_life_samples, 1) + " ticks";
 
+        if ($("blotterWatchdogPill") && d.watchdog) {
+          var wd = d.watchdog;
+          $("blotterWatchdogPill").textContent = "Watchdog: " + (wd.state || "NOMINAL");
+          $("blotterWatchdogPill").className = "pill " + (wd.state === "NOMINAL" ? "ok" : (wd.state === "HALTED_STALE_FEED" ? "bad" : "warn"));
+        }
         if ($("blotterBreakerPill") && d.circuit_breaker) {
           var cb = d.circuit_breaker;
           $("blotterBreakerPill").textContent = "Circuit Breaker: " + cb.state;
@@ -997,6 +1024,21 @@ const indexHTML = `<!doctype html>
           var dgLabel = dg.drift_detected ? "DRIFT ROLLBACK" : "Nominal";
           $("mmDriftGuardStatus").innerHTML =
             "<b style='color:" + dgColor + "'>" + dgLabel + "</b> (PH = " + num(dg.statistic, 2) + " / " + num(dg.threshold, 1) + ")";
+        }
+        if (d.smart_router && $("mmSmartRouter")) {
+          var sr = d.smart_router;
+          $("mmSmartRouter").innerHTML =
+            "<b style='color:var(--accent)'>" + esc(sr.action) + "</b> &bull; " +
+            "Maker: <b>" + Math.round((sr.maker_fraction||0)*100) + "%</b> / Taker: <b>" + Math.round((sr.taker_fraction||0)*100) + "%</b> &bull; " +
+            "Venue: <b style='color:var(--info)'>" + esc(sr.primary_venue) + "</b> (Edge: +" + num(sr.expected_edge_bps, 2) + " bps)";
+        }
+        if (d.tearsheet && $("mmTearSheetSummary")) {
+          var ts = d.tearsheet;
+          $("mmTearSheetSummary").innerHTML =
+            "Sortino: <b style='color:var(--accent)'>" + num(ts.sortino_ratio, 2) + "</b> &bull; " +
+            "Calmar: <b style='color:var(--info)'>" + num(ts.calmar_ratio, 1) + "</b> &bull; " +
+            "PF: <b>" + num(ts.profit_factor, 2) + "</b> &bull; " +
+            "Maker Ratio: <b style='color:var(--accent)'>" + num((ts.maker_fill_ratio||0)*100, 1) + "%</b>";
         }
 
         if (d.paper_fills && d.paper_fills.length && $("paperFillsBody")) {
