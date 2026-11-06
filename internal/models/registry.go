@@ -204,6 +204,20 @@ func Registry() []ModelSpec {
 			Limitations: "Under extreme funding rate regimes or venue disconnections, basis divergence may widen before converging.",
 			Calibration: "Welford EWMA variance with adaptive mean-reversion speed theta.",
 		},
+		// 13. Minutes Horizon: Triangular Cross-Rate Synthetic Arbitrage Model
+		{
+			ID:          "triangular_arb",
+			Name:        "Triangular Cross-Rate Synthetic Arbitrage",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "micro_dev", "spread_bps", "ofi_1s", "ofi_5s", "vol_30s_bps", "ret_1s_bps"},
+			Algorithm:   "Triangular Cross-Rate Synthetic Arbitrage + Multi-Leg Fee Hurdle",
+			Version:     "v1.0.0",
+			Description: "Identifies synthetic vs. direct cross-rate pricing dislocations across a 3-asset triangular loop (BTCUSDT, ETHUSDT, ETHBTC) and evaluates net arbitrage edge net of fees.",
+			Assumptions: "Cross-rate pricing disparity closes via liquidity flow across triangular legs; fee hurdles prevent unprofitable execution.",
+			Limitations: "Simultaneous execution risk (leg risk) across 3 distinct order books during high volatility.",
+			Calibration: "Maker/taker fee schedule and divergence threshold calibrated per venue fee tiers.",
+		},
 		// 8. Hours Horizon: Volatility Regime Filter
 		{
 			ID:          "vol_regime_ridge",

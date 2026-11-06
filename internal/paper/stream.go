@@ -16,7 +16,6 @@ import (
 	"math"
 	"net"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -365,42 +364,26 @@ type binanceCombinedStreamPayload struct {
 	Data   json.RawMessage `json:"data"`
 }
 
-// handleStreamPayload parses raw JSON and routes to SPSCRing.
+// handleStreamPayload parses raw JSON and routes to SPSCRing using zero-alloc fast byte parsers.
 func (m *MarketStreamIngestor) handleStreamPayload(payload []byte) {
 	nowNs := time.Now().UnixNano()
 	m.stats.LastEventNs.Store(nowNs)
 
-	// Handle combined stream wrapper if present
-	var combined binanceCombinedStreamPayload
-	var rawData []byte
-	streamName := ""
-	if err := json.Unmarshal(payload, &combined); err == nil && combined.Stream != "" {
-		streamName = combined.Stream
-		rawData = combined.Data
-	} else {
-		rawData = payload
-	}
-
-	// Route based on stream name or JSON shape
-	if strings.Contains(streamName, "@depth") || bytes.Contains(rawData, []byte(`"lastUpdateId"`)) {
-		m.handleDepthUpdate(streamName, rawData, nowNs)
-	} else if strings.Contains(streamName, "@trade") || bytes.Contains(rawData, []byte(`"e":"trade"`)) {
-		m.handleTradeUpdate(rawData, nowNs)
+	// Route based on stream name or JSON shape with zero heap allocations
+	if bytes.Contains(payload, []byte(`"trade"`)) || bytes.Contains(payload, []byte(`"e":"trade"`)) {
+		m.handleTradeUpdate(payload, nowNs)
+	} else if bytes.Contains(payload, []byte(`"depth"`)) || bytes.Contains(payload, []byte(`"lastUpdateId"`)) || bytes.Contains(payload, []byte(`"bids"`)) || bytes.Contains(payload, []byte(`"asks"`)) {
+		m.handleDepthUpdate(payload, nowNs)
 	}
 }
 
-func (m *MarketStreamIngestor) handleDepthUpdate(streamName string, data []byte, nowNs int64) {
-	var d binanceDepth20Payload
-	if err := json.Unmarshal(data, &d); err != nil {
+func (m *MarketStreamIngestor) handleDepthUpdate(payload []byte, nowNs int64) {
+	var delta marketdata.OrderBookDelta
+	if !marketdata.FastParseDepth20(payload, &delta) {
 		return
 	}
 
-	symbol := "BTCUSDT"
-	if atIdx := strings.Index(streamName, "@"); atIdx > 0 {
-		symbol = strings.ToUpper(streamName[:atIdx])
-	} else if strings.Contains(strings.ToLower(streamName), "ethusdt") {
-		symbol = "ETHUSDT"
-	}
+	symbol := marketdata.FastExtractSymbol(payload)
 
 	m.booksMu.Lock()
 	book, ok := m.books[symbol]
@@ -410,45 +393,30 @@ func (m *MarketStreamIngestor) handleDepthUpdate(streamName string, data []byte,
 		m.symbolIDs[symbol] = uint16(len(m.symbolIDs))
 	}
 
-	// Parse bids & asks
-	nBids := len(d.Bids)
-	if nBids > marketdata.BookDepth {
-		nBids = marketdata.BookDepth
-	}
-	var bids [marketdata.BookDepth]marketdata.PriceLevel
-	for i := 0; i < nBids; i++ {
-		p, _ := strconv.ParseFloat(d.Bids[i][0], 64)
-		s, _ := strconv.ParseFloat(d.Bids[i][1], 64)
-		bids[i] = marketdata.PriceLevel{Price: p, Size: s}
-	}
-
-	nAsks := len(d.Asks)
-	if nAsks > marketdata.BookDepth {
-		nAsks = marketdata.BookDepth
-	}
-	var asks [marketdata.BookDepth]marketdata.PriceLevel
-	for i := 0; i < nAsks; i++ {
-		p, _ := strconv.ParseFloat(d.Asks[i][0], 64)
-		s, _ := strconv.ParseFloat(d.Asks[i][1], 64)
-		asks[i] = marketdata.PriceLevel{Price: p, Size: s}
-	}
-
-	// Set fresh snapshot or update
-	book.SetSnapshot(d.LastUpdateID, bids[:nBids], asks[:nAsks])
+	// Set fresh snapshot or update in-place with zero allocations
+	book.SetSnapshot(delta.FinalUpdateID(), delta.Bids, delta.Asks)
 	symID := m.symbolIDs[symbol]
 	m.booksMu.Unlock()
 
 	mid, hasMid := book.MidPrice()
-	if !hasMid && nBids > 0 && nAsks > 0 {
-		mid = (bids[0].Price + asks[0].Price) * 0.5
+	if !hasMid && len(delta.Bids) > 0 && len(delta.Asks) > 0 {
+		mid = (delta.Bids[0].Price + delta.Asks[0].Price) * 0.5
+	}
+
+	var size float64
+	if len(delta.Bids) > 0 {
+		size += delta.Bids[0].Size
+	}
+	if len(delta.Asks) > 0 {
+		size += delta.Asks[0].Size
 	}
 
 	// Push to lock-free SPSC Ring
 	m.ring.Push(engine.MarketEvent{
 		Timestamp: nowNs,
-		Sequence:  d.LastUpdateID,
+		Sequence:  delta.FinalUpdateID(),
 		Price:     mid,
-		Size:      bids[0].Size + asks[0].Size,
+		Size:      size,
 		Side:      0,
 		Kind:      1, // Depth
 		SymbolID:  symID,
@@ -458,19 +426,24 @@ func (m *MarketStreamIngestor) handleDepthUpdate(streamName string, data []byte,
 	m.stats.TotalEvents.Add(1)
 }
 
-func (m *MarketStreamIngestor) handleTradeUpdate(data []byte, nowNs int64) {
-	var tr binanceTradePayload
-	if err := json.Unmarshal(data, &tr); err != nil {
+func (m *MarketStreamIngestor) handleTradeUpdate(payload []byte, nowNs int64) {
+	var (
+		symbol       string
+		price        float64
+		qty          float64
+		tradeTime    int64
+		isBuyerMaker bool
+	)
+	if !marketdata.FastParseTrade(payload, &symbol, &price, &qty, &tradeTime, &isBuyerMaker) {
 		return
 	}
-
-	p, _ := strconv.ParseFloat(tr.Price, 64)
-	q, _ := strconv.ParseFloat(tr.Quantity, 64)
-	if p <= 0 || q <= 0 {
+	if price <= 0 || qty <= 0 {
 		return
 	}
+	if symbol == "" {
+		symbol = "BTCUSDT"
+	}
 
-	symbol := strings.ToUpper(tr.Symbol)
 	m.booksMu.RLock()
 	symID, ok := m.symbolIDs[symbol]
 	m.booksMu.RUnlock()
@@ -486,15 +459,15 @@ func (m *MarketStreamIngestor) handleTradeUpdate(data []byte, nowNs int64) {
 	}
 
 	side := uint8(1) // Buy
-	if tr.IsBuyerMM {
+	if isBuyerMaker {
 		side = 2 // Sell
 	}
 
 	m.ring.Push(engine.MarketEvent{
 		Timestamp: nowNs,
-		Sequence:  tr.TradeID,
-		Price:     p,
-		Size:      q,
+		Sequence:  uint64(tradeTime),
+		Price:     price,
+		Size:      qty,
 		Side:      side,
 		Kind:      0, // Trade
 		SymbolID:  symID,

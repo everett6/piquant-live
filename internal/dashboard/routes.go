@@ -50,6 +50,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/paper/blotter", s.handlePaperBlotter)
 	s.mux.HandleFunc("/api/paper/dryrun", s.handlePaperDryRun)
 	s.mux.HandleFunc("/api/paper/tearsheet", s.handlePaperTearSheet)
+	s.mux.HandleFunc("/api/paper/reports", s.handlePaperReports)
+	s.mux.HandleFunc("/api/paper/reports/latest", s.handlePaperReportsLatest)
 }
 
 // handleManifest serves the installable Progressive Web App (PWA) manifest.
@@ -1500,5 +1502,130 @@ func (s *Server) handlePaperDryRun(w http.ResponseWriter, r *http.Request) {
 			{"time": "00:11s ago", "symbol": "BTCUSDT", "side": "ASK (Maker L1)", "price": 50000.44, "qty": 0.20, "edge_bps": 1.32, "adverse_bps": 0.09},
 			{"time": "00:24s ago", "symbol": "ETHUSDT", "side": "BID (Stat-Arb)", "price": 3400.12, "qty": 1.50, "edge_bps": 1.64, "adverse_bps": 0.21},
 		},
+	})
+}
+
+type reportSummary struct {
+	Filename  string    `json:"filename"`
+	Date      string    `json:"date"`
+	Path      string    `json:"path"`
+	SizeBytes int64     `json:"size_bytes"`
+	ModTime   time.Time `json:"mod_time"`
+}
+
+// resolveReportsDir returns the preferred path where daily markdown reports are stored.
+func (s *Server) resolveReportsDir() string {
+	candidates := []string{
+		"data/paper/reports",
+		"/var/lib/piquant/data/paper/reports",
+	}
+	for _, dp := range s.opts.DataDirs {
+		candidates = append(candidates, filepath.Join(dp, "paper", "reports"))
+	}
+	for _, c := range candidates {
+		if fi, err := os.Stat(c); err == nil && fi.IsDir() {
+			return c
+		}
+	}
+	if len(s.opts.DataDirs) > 0 {
+		return filepath.Join(s.opts.DataDirs[0], "paper", "reports")
+	}
+	return "data/paper/reports"
+}
+
+// handlePaperReports lists all generated End-of-Day (EOD) risk and performance reports.
+func (s *Server) handlePaperReports(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	reportsDir := s.resolveReportsDir()
+	_ = os.MkdirAll(reportsDir, 0755)
+
+	entries, _ := os.ReadDir(reportsDir)
+	var reports []reportSummary
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		name := entry.Name()
+		datePart := strings.TrimSuffix(strings.TrimPrefix(name, "report_"), ".md")
+		reports = append(reports, reportSummary{
+			Filename:  name,
+			Date:      datePart,
+			Path:      filepath.Join(reportsDir, name),
+			SizeBytes: info.Size(),
+			ModTime:   info.ModTime(),
+		})
+	}
+
+	// If no reports exist on disk, generate today's report on the fly
+	if len(reports) == 0 {
+		drState := s.resolveDryRunState()
+		gen := paper.NewDailyReportGenerator()
+		now := time.Now()
+		_ = gen.SaveReport(drState, reportsDir, now)
+		filename := fmt.Sprintf("report_%s.md", now.Format("2006-01-02"))
+		fullPath := filepath.Join(reportsDir, filename)
+		var size int64
+		if fi, err := os.Stat(fullPath); err == nil {
+			size = fi.Size()
+		}
+		reports = append(reports, reportSummary{
+			Filename:  filename,
+			Date:      now.Format("2006-01-02"),
+			Path:      fullPath,
+			SizeBytes: size,
+			ModTime:   now,
+		})
+	}
+
+	// Sort descending by date
+	sort.Slice(reports, func(i, j int) bool {
+		return reports[i].Date > reports[j].Date
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"reports": reports,
+		"total":   len(reports),
+	})
+}
+
+// handlePaperReportsLatest returns the current / latest End-of-Day risk and performance report.
+func (s *Server) handlePaperReportsLatest(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	drState := s.resolveDryRunState()
+	gen := paper.NewDailyReportGenerator()
+	now := time.Now()
+	reportContent := gen.GenerateReport(drState, now)
+
+	// Persist to reports dir
+	reportsDir := s.resolveReportsDir()
+	_ = gen.SaveReport(drState, reportsDir, now)
+
+	filename := fmt.Sprintf("report_%s.md", now.Format("2006-01-02"))
+
+	if r.URL.Query().Get("format") == "raw" || strings.Contains(r.Header.Get("Accept"), "text/markdown") {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, reportContent)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"date":     now.Format("2006-01-02"),
+		"filename": filename,
+		"report":   reportContent,
+		"content":  reportContent,
 	})
 }

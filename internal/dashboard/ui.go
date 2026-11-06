@@ -496,6 +496,7 @@ const indexHTML = `<!doctype html>
                 <option value="cartea_jaimungal">Cartea-Jaimungal HJB Target Inventory &amp; Adverse Selection</option>
                 <option value="esn_reservoir">Echo State Network Reservoir (ESN Microstructure)</option>
                 <option value="spot_perp_basis">Spot-Perp Basis Arbitrage (Welford Z-Score)</option>
+                <option value="triangular_arb">Triangular Cross-Rate Synthetic Arbitrage (Leg A/B/C)</option>
               </select>
               <select id="exp-model" style="display:none" aria-hidden="true">
                 <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
@@ -503,6 +504,7 @@ const indexHTML = `<!doctype html>
                 <option value="cartea_jaimungal">Cartea-Jaimungal HJB Target Inventory &amp; Adverse Selection</option>
                 <option value="esn_reservoir">Echo State Network Reservoir (ESN Microstructure)</option>
                 <option value="spot_perp_basis">Spot-Perp Basis Arbitrage (Welford Z-Score)</option>
+                <option value="triangular_arb">Triangular Cross-Rate Synthetic Arbitrage (Leg A/B/C)</option>
               </select>
             </div>
 
@@ -646,6 +648,7 @@ const indexHTML = `<!doctype html>
               <option value="cartea_jaimungal">Cartea-Jaimungal HJB Target Inventory &amp; Adverse Selection</option>
               <option value="esn_reservoir">Echo State Network Reservoir (ESN Microstructure)</option>
               <option value="spot_perp_basis">Spot-Perp Basis Arbitrage (Welford Z-Score)</option>
+              <option value="triangular_arb">Triangular Cross-Rate Synthetic Arbitrage (Leg A/B/C)</option>
             </select>
           </div>
           <div class="form-group">

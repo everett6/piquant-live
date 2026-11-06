@@ -663,3 +663,45 @@ func TestPaperBlotterL2DepthBasisHawkes(t *testing.T) {
 		t.Errorf("expected cascade_risk bool in hawkes_online")
 	}
 }
+
+func TestPaperReportsEndpoints(t *testing.T) {
+	s := newTestServer(t, nil)
+	authHdr := map[string]string{"Authorization": "Bearer " + peerToken}
+
+	// 1. GET /api/paper/reports
+	recList := get(t, s.Handler(), http.MethodGet, "/api/paper/reports", authHdr, nil)
+	if recList.Code != http.StatusOK {
+		t.Fatalf("/api/paper/reports status = %d: %s", recList.Code, recList.Body.String())
+	}
+	var listResp map[string]any
+	if err := json.Unmarshal(recList.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("failed to decode reports list: %v", err)
+	}
+	reports, ok := listResp["reports"].([]any)
+	if !ok || len(reports) == 0 {
+		t.Fatalf("expected non-empty reports list: %v", listResp)
+	}
+
+	// 2. GET /api/paper/reports/latest (JSON)
+	recLatest := get(t, s.Handler(), http.MethodGet, "/api/paper/reports/latest", authHdr, nil)
+	if recLatest.Code != http.StatusOK {
+		t.Fatalf("/api/paper/reports/latest status = %d: %s", recLatest.Code, recLatest.Body.String())
+	}
+	var latestResp map[string]any
+	if err := json.Unmarshal(recLatest.Body.Bytes(), &latestResp); err != nil {
+		t.Fatalf("failed to decode latest report: %v", err)
+	}
+	reportStr, ok := latestResp["report"].(string)
+	if !ok || !strings.Contains(reportStr, "PiQuant Institutional Daily Risk") {
+		t.Fatalf("unexpected latest report content: %v", latestResp)
+	}
+
+	// 3. GET /api/paper/reports/latest?format=raw (Markdown)
+	recRaw := get(t, s.Handler(), http.MethodGet, "/api/paper/reports/latest?format=raw", authHdr, nil)
+	if recRaw.Code != http.StatusOK {
+		t.Fatalf("/api/paper/reports/latest?format=raw status = %d", recRaw.Code)
+	}
+	if !strings.Contains(recRaw.Body.String(), "PiQuant Institutional Daily Risk") {
+		t.Fatalf("raw report did not contain header: %s", recRaw.Body.String())
+	}
+}
