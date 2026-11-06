@@ -600,3 +600,66 @@ func TestPWAManifestIconAndTearSheetEndpoints(t *testing.T) {
 		t.Errorf("expected tearsheet field in /api/paper/tearsheet")
 	}
 }
+
+func TestPaperBlotterL2DepthBasisHawkes(t *testing.T) {
+	srv := newTestServer(t, nil)
+	h := srv.Handler()
+
+	rec := get(t, h, http.MethodGet, "/api/paper/blotter", map[string]string{"Authorization": "Bearer " + peerToken}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/api/paper/blotter status = %d, want 200", rec.Code)
+	}
+
+	var blotter map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &blotter); err != nil {
+		t.Fatalf("failed to decode /api/paper/blotter: %v", err)
+	}
+
+	// Verify l2_depth
+	l2Depth, ok := blotter["l2_depth"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected l2_depth in /api/paper/blotter")
+	}
+	bids, ok := l2Depth["bids"].([]any)
+	if !ok || len(bids) < 10 {
+		t.Fatalf("expected at least 10 bids in l2_depth, got %d", len(bids))
+	}
+	asks, ok := l2Depth["asks"].([]any)
+	if !ok || len(asks) < 10 {
+		t.Fatalf("expected at least 10 asks in l2_depth, got %d", len(asks))
+	}
+	resting, ok := l2Depth["resting_orders"].([]any)
+	if !ok || len(resting) < 2 {
+		t.Fatalf("expected resting maker orders in l2_depth, got %d", len(resting))
+	}
+
+	// Verify basis_arb
+	basisArb, ok := blotter["basis_arb"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected basis_arb in /api/paper/blotter")
+	}
+	if _, ok := basisArb["basis_bps"].(float64); !ok {
+		t.Errorf("expected basis_bps in basis_arb")
+	}
+	if _, ok := basisArb["z_score"].(float64); !ok {
+		t.Errorf("expected z_score in basis_arb")
+	}
+	if action, ok := basisArb["action"].(string); !ok || action == "" {
+		t.Errorf("expected action string in basis_arb")
+	}
+
+	// Verify hawkes_online
+	hawkes, ok := blotter["hawkes_online"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected hawkes_online in /api/paper/blotter")
+	}
+	if intensity, ok := hawkes["intensity"].(float64); !ok || intensity <= 0 {
+		t.Errorf("expected positive intensity in hawkes_online, got %v", hawkes["intensity"])
+	}
+	if br, ok := hawkes["branching_ratio"].(float64); !ok || br <= 0 {
+		t.Errorf("expected positive branching_ratio in hawkes_online, got %v", hawkes["branching_ratio"])
+	}
+	if _, ok := hawkes["cascade_risk"].(bool); !ok {
+		t.Errorf("expected cascade_risk bool in hawkes_online")
+	}
+}

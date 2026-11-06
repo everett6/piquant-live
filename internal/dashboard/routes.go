@@ -1100,6 +1100,40 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 	drState := s.resolveDryRunState()
 	tearSheet := paper.ComputeDryRunTearSheet(drState)
 
+	// Spot vs. Perpetual Basis Arbitrage
+	basisModel := common.NewSpotPerpBasisModel(1e-3, 0.65, 1.5)
+	spotPrice := 49995.00
+	perpPrice := 50000.00
+	basisDec := basisModel.Evaluate(spotPrice, perpPrice, quote.HalfSpreadBps*2.0)
+
+	// Online Self-Calibrating Hawkes Point-Process
+	hawkesEst := common.NewOnlineHawkesEstimator(5.0, 13.5, 20.0)
+	hawkesEst.Update(nowNs-320_000_000, true, 0.85)
+	hawkesEst.Update(nowNs-180_000_000, false, 1.20)
+	hawkesEst.Update(nowNs-30_000_000, true, 0.45)
+
+	// L2 Depth: top 10 bids and top 10 asks with sizes and cumulative depth
+	bidLevels := []struct{ p, s float64 }{
+		{49999.50, 1.45}, {49999.00, 2.10}, {49998.50, 3.80}, {49998.00, 4.25}, {49997.50, 5.60},
+		{49997.00, 6.80}, {49996.50, 8.10}, {49996.00, 9.50}, {49995.50, 11.20}, {49995.00, 13.50},
+	}
+	askLevels := []struct{ p, s float64 }{
+		{50000.50, 1.20}, {50001.00, 2.30}, {50001.50, 3.40}, {50002.00, 4.80}, {50002.50, 5.90},
+		{50003.00, 7.10}, {50003.50, 8.60}, {50004.00, 10.20}, {50004.50, 12.00}, {50005.00, 14.10},
+	}
+	bids10 := make([]map[string]float64, len(bidLevels))
+	var cumBid float64
+	for i, l := range bidLevels {
+		cumBid += l.s
+		bids10[i] = map[string]float64{"price": l.p, "size": l.s, "cum": cumBid}
+	}
+	asks10 := make([]map[string]float64, len(askLevels))
+	var cumAsk float64
+	for i, l := range askLevels {
+		cumAsk += l.s
+		asks10[i] = map[string]float64{"price": l.p, "size": l.s, "cum": cumAsk}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"mid_price":               50000.00,
 		"stoikov_price":           50000.08,
@@ -1114,6 +1148,35 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 			"stat_arb": kellyVec[2],
 		},
 		"kelly_array": kellyVec,
+		"l2_depth": map[string]any{
+			"mid_price": 50000.00,
+			"bids":      bids10,
+			"asks":      asks10,
+			"resting_orders": []map[string]any{
+				{"id": "piquant_maker_bid_l1", "side": "BID", "price": 49999.62, "size": 0.15, "type": "GLFT_MAKER_L1", "status": "RESTING"},
+				{"id": "piquant_maker_ask_l1", "side": "ASK", "price": 50000.44, "size": 0.20, "type": "GLFT_MAKER_L1", "status": "RESTING"},
+			},
+		},
+		"basis_arb": map[string]any{
+			"spot_price": spotPrice,
+			"perp_price": perpPrice,
+			"basis_bps":  basisDec.BasisBps,
+			"z_score":    basisDec.ZScore,
+			"alpha_bps":  basisDec.AlphaBps,
+			"spread_bps": basisDec.SpreadBps,
+			"action":     string(basisDec.Action),
+		},
+		"hawkes_online": map[string]any{
+			"intensity":       hawkesEst.Intensity(),
+			"branching_ratio": hawkesEst.BranchingRatio(),
+			"cascade_risk":    hawkesEst.IsCascadeRisk(),
+			"mu":              hawkesEst.Mu,
+			"alpha":           hawkesEst.Alpha,
+			"beta":            hawkesEst.Beta,
+			"buy_intensity":   hawkesEst.BuyIntensity(),
+			"sell_intensity":  hawkesEst.SellIntensity(),
+			"imbalance":       hawkesEst.FlowImbalance(),
+		},
 		"conformal": map[string]any{
 			"lower_bps":   confLower,
 			"upper_bps":   confUpper,

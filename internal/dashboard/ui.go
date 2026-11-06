@@ -332,6 +332,8 @@ const indexHTML = `<!doctype html>
             <span class="pill info" id="blotterEvtPill">EVT 99.9% ES: 4.82 bps</span>
             <span class="pill ok" id="blotterRegimePill">Regime: Calm Maker</span>
             <span class="pill info" id="blotterVpinPill">VPIN Toxicity: 0.28</span>
+            <span class="pill ok" id="blotterBasisPill">Basis: +1.0 bps (Z = +1.42)</span>
+            <span class="pill ok" id="blotterHawkesPill">Hawkes n: 0.68 (Stable)</span>
             <span class="pill" id="blotterQueuePill">Queue Fill (5s): 85%</span>
             <span class="pill" id="blotterKalmanPill">BTC&rarr;ETH &beta;: 1.18 (Z = -0.82)</span>
           </div>
@@ -377,6 +379,63 @@ const indexHTML = `<!doctype html>
             <div>
               <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--info);margin-bottom:4px">Dry-Run Tear-Sheet (Sortino, Calmar &amp; Maker Fill Ratio)</div>
               <div id="mmTearSheetSummary" class="mono" style="font-size:12px;color:var(--text)">Sortino: 3.38 &bull; Calmar: 38.0 &bull; Profit Factor: 2.12 &bull; Maker Ratio: 83.3%</div>
+            </div>
+          </div>
+        </div>
+        <!-- Visual Order Book Depth Chart & Live Microstructure Tape -->
+        <div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--accent)">
+              Live Order Book L2 Cumulative Depth &amp; Resting Maker Orders
+            </div>
+            <div style="font-size:11px;color:var(--muted)">
+              Mid: <b id="depthMidPrice" style="color:var(--info)">50,000.00</b> &bull;
+              Basis: <b id="depthBasisBps" style="color:var(--accent)">+1.00 bps</b> &bull;
+              Hawkes &lambda;: <b id="depthHawkesLambda" style="color:var(--text)">18.4/s</b>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 280px;gap:14px;align-items:start">
+            <!-- Cumulative Depth SVG Chart -->
+            <div style="position:relative;background:var(--bg);border:1px solid var(--line-subtle);border-radius:8px;padding:8px 10px;height:180px">
+              <svg id="depthChartSvg" viewBox="0 0 540 160" preserveAspectRatio="none" style="width:100%;height:100%;overflow:visible">
+                <line x1="270" y1="15" x2="270" y2="145" stroke="var(--line)" stroke-dasharray="3,3" />
+                <path d="M 270 145 L 246 138 L 222 131 L 198 120 L 174 108 L 150 94 L 126 78 L 102 60 L 78 40 L 54 20 L 30 145 Z" fill="rgba(0, 229, 163, 0.22)" stroke="#00e5a3" stroke-width="2" />
+                <path d="M 270 145 L 294 139 L 318 132 L 342 121 L 366 109 L 390 95 L 414 79 L 438 61 L 462 41 L 486 21 L 510 145 Z" fill="rgba(255, 77, 109, 0.22)" stroke="#ff4d6d" stroke-width="2" />
+                <line x1="20" y1="145" x2="520" y2="145" stroke="var(--line)" stroke-width="1" />
+                <text x="270" y="12" fill="var(--info)" font-size="9" font-family="var(--font-mono)" text-anchor="middle">MID: 50,000.00</text>
+                <polygon points="245,104 251,110 245,116 239,110" fill="var(--accent)" stroke="var(--ok)" stroke-width="1.5" />
+                <text x="245" y="101" fill="var(--text)" font-size="8" font-family="var(--font-mono)" text-anchor="middle" font-weight="700">BID 49999.62</text>
+                <polygon points="295,104 301,110 295,116 289,110" fill="var(--accent)" stroke="var(--bad)" stroke-width="1.5" />
+                <text x="295" y="101" fill="var(--text)" font-size="8" font-family="var(--font-mono)" text-anchor="middle" font-weight="700">ASK 50000.44</text>
+              </svg>
+              <div style="position:absolute;bottom:6px;left:14px;font-size:10px;color:var(--ok);font-weight:600">&larr; Cumulative Bids (Total: <span id="depthTotalBidCum">66.3</span>)</div>
+              <div style="position:absolute;bottom:6px;right:14px;font-size:10px;color:var(--bad);font-weight:600">Cumulative Asks (Total: <span id="depthTotalAskCum">69.6</span>) &rarr;</div>
+              <div style="position:absolute;top:6px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--muted);background:rgba(0,0,0,0.5);padding:2px 8px;border-radius:4px">
+                <span style="color:var(--accent)">&diams; Resting PiQuant Maker Orders</span>
+              </div>
+            </div>
+            <!-- Top 10 Depth Ladder / Microstructure Tape -->
+            <div style="background:var(--bg);border:1px solid var(--line-subtle);border-radius:8px;padding:6px 10px;font-size:11px;font-family:var(--font-mono)">
+              <div style="display:flex;justify-content:space-between;border-bottom:1px solid var(--line-subtle);padding-bottom:3px;font-size:10px;color:var(--muted);font-weight:700">
+                <span>SIZE</span><span>PRICE</span><span>CUM</span>
+              </div>
+              <div id="depthLadderAsks" style="margin-top:2px;max-height:70px;overflow-y:hidden">
+                <div style="display:flex;justify-content:space-between;color:var(--bad);padding:1px 0"><span>5.90</span><span style="font-weight:700">50,002.50</span><span style="color:var(--muted)">17.6</span></div>
+                <div style="display:flex;justify-content:space-between;color:var(--bad);padding:1px 0"><span>4.80</span><span style="font-weight:700">50,002.00</span><span style="color:var(--muted)">11.7</span></div>
+                <div style="display:flex;justify-content:space-between;color:var(--bad);padding:1px 0"><span>3.40</span><span style="font-weight:700">50,001.50</span><span style="color:var(--muted)">6.9</span></div>
+                <div style="display:flex;justify-content:space-between;color:var(--bad);padding:1px 0"><span>2.30</span><span style="font-weight:700">50,001.00</span><span style="color:var(--muted)">3.5</span></div>
+                <div style="display:flex;justify-content:space-between;color:var(--bad);padding:1px 0"><span>1.20</span><span style="font-weight:700">50,000.50</span><span style="color:var(--muted)">1.2</span></div>
+              </div>
+              <div style="text-align:center;padding:2px 0;background:var(--panel);border-top:1px dashed var(--line);border-bottom:1px dashed var(--line);font-size:10px;font-weight:700;color:var(--info)" id="depthLadderSpread">
+                SPREAD: 1.00 (0.20 bps)
+              </div>
+              <div id="depthLadderBids" style="margin-top:2px;max-height:70px;overflow-y:hidden">
+                <div style="display:flex;justify-content:space-between;color:var(--ok);padding:1px 0"><span>1.45</span><span style="font-weight:700">49,999.50</span><span style="color:var(--muted)">1.5</span></div>
+                <div style="display:flex;justify-content:space-between;color:var(--ok);padding:1px 0"><span>2.10</span><span style="font-weight:700">49,999.00</span><span style="color:var(--muted)">3.6</span></div>
+                <div style="display:flex;justify-content:space-between;color:var(--ok);padding:1px 0"><span>3.80</span><span style="font-weight:700">49,998.50</span><span style="color:var(--muted)">7.4</span></div>
+                <div style="display:flex;justify-content:space-between;color:var(--ok);padding:1px 0"><span>4.25</span><span style="font-weight:700">49,998.00</span><span style="color:var(--muted)">11.6</span></div>
+                <div style="display:flex;justify-content:space-between;color:var(--ok);padding:1px 0"><span>5.60</span><span style="font-weight:700">49,997.50</span><span style="color:var(--muted)">17.2</span></div>
+              </div>
             </div>
           </div>
         </div>
@@ -436,12 +495,14 @@ const indexHTML = `<!doctype html>
                 <option value="rough_signature_ofi">Rough Path Signature OFI &amp; Kyle Lambda</option>
                 <option value="cartea_jaimungal">Cartea-Jaimungal HJB Target Inventory &amp; Adverse Selection</option>
                 <option value="esn_reservoir">Echo State Network Reservoir (ESN Microstructure)</option>
+                <option value="spot_perp_basis">Spot-Perp Basis Arbitrage (Welford Z-Score)</option>
               </select>
               <select id="exp-model" style="display:none" aria-hidden="true">
                 <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
                 <option value="rough_signature_ofi">Rough Path Signature OFI &amp; Kyle Lambda</option>
                 <option value="cartea_jaimungal">Cartea-Jaimungal HJB Target Inventory &amp; Adverse Selection</option>
                 <option value="esn_reservoir">Echo State Network Reservoir (ESN Microstructure)</option>
+                <option value="spot_perp_basis">Spot-Perp Basis Arbitrage (Welford Z-Score)</option>
               </select>
             </div>
 
@@ -584,6 +645,7 @@ const indexHTML = `<!doctype html>
               <option value="rough_signature_ofi">Rough Path Signature OFI &amp; Kyle Lambda</option>
               <option value="cartea_jaimungal">Cartea-Jaimungal HJB Target Inventory &amp; Adverse Selection</option>
               <option value="esn_reservoir">Echo State Network Reservoir (ESN Microstructure)</option>
+              <option value="spot_perp_basis">Spot-Perp Basis Arbitrage (Welford Z-Score)</option>
             </select>
           </div>
           <div class="form-group">
@@ -948,6 +1010,104 @@ const indexHTML = `<!doctype html>
     }).join("");
   }
 
+  // L2 Order Book Depth Chart & Microstructure Tape Renderer
+  function renderDepthChart(depth) {
+    if (!depth || !$("depthChartSvg")) return;
+    var bids = depth.bids || [];
+    var asks = depth.asks || [];
+    var resting = depth.resting_orders || [];
+    var mid = depth.mid_price || 50000.0;
+
+    if ($("depthMidPrice")) $("depthMidPrice").textContent = num(mid, 2);
+
+    var maxCum = 1.0;
+    if (bids.length > 0 && bids[bids.length - 1].cum > maxCum) maxCum = bids[bids.length - 1].cum;
+    if (asks.length > 0 && asks[asks.length - 1].cum > maxCum) maxCum = asks[asks.length - 1].cum;
+
+    if ($("depthTotalBidCum") && bids.length > 0) $("depthTotalBidCum").textContent = num(bids[bids.length - 1].cum, 1);
+    if ($("depthTotalAskCum") && asks.length > 0) $("depthTotalAskCum").textContent = num(asks[asks.length - 1].cum, 1);
+
+    var midX = 270;
+    var baseY = 145;
+    var topY = 25;
+    var usableH = baseY - topY;
+
+    // Build Bid cumulative path (going left from midX)
+    var bidPoints = [[midX, baseY]];
+    for (var i = 0; i < bids.length; i++) {
+      var b = bids[i];
+      var x = midX - (i + 1) * (240 / bids.length);
+      var y = baseY - (b.cum / maxCum) * usableH;
+      bidPoints.push([x, y]);
+    }
+    bidPoints.push([midX - 240, baseY]);
+
+    var bidD = "M " + bidPoints[0][0] + " " + bidPoints[0][1];
+    for (var j = 1; j < bidPoints.length; j++) {
+      bidD += " L " + Math.round(bidPoints[j][0]) + " " + Math.round(bidPoints[j][1]);
+    }
+    bidD += " Z";
+
+    // Build Ask cumulative path (going right from midX)
+    var askPoints = [[midX, baseY]];
+    for (var k = 0; k < asks.length; k++) {
+      var a = asks[k];
+      var ax = midX + (k + 1) * (240 / asks.length);
+      var ay = baseY - (a.cum / maxCum) * usableH;
+      askPoints.push([ax, ay]);
+    }
+    askPoints.push([midX + 240, baseY]);
+
+    var askD = "M " + askPoints[0][0] + " " + askPoints[0][1];
+    for (var m = 1; m < askPoints.length; m++) {
+      askD += " L " + Math.round(askPoints[m][0]) + " " + Math.round(askPoints[m][1]);
+    }
+    askD += " Z";
+
+    // Resting maker order markers
+    var restingSvg = "";
+    for (var r = 0; r < resting.length; r++) {
+      var ord = resting[r];
+      var isBid = ord.side === "BID";
+      var rx = isBid ? (midX - 25) : (midX + 25);
+      var ry = 110;
+      var strokeCol = isBid ? "var(--ok)" : "var(--bad)";
+      restingSvg += '<polygon points="' + rx + ',' + (ry-6) + ' ' + (rx+6) + ',' + ry + ' ' + rx + ',' + (ry+6) + ' ' + (rx-6) + ',' + ry + '" fill="var(--accent)" stroke="' + strokeCol + '" stroke-width="1.5" />' +
+        '<text x="' + rx + '" y="' + (ry - 9) + '" fill="var(--text)" font-size="8" font-family="var(--font-mono)" text-anchor="middle" font-weight="700">' + esc(ord.side) + ' ' + num(ord.price, 2) + '</text>';
+    }
+
+    $("depthChartSvg").innerHTML =
+      '<line x1="' + midX + '" y1="15" x2="' + midX + '" y2="' + baseY + '" stroke="var(--line)" stroke-dasharray="3,3" />' +
+      '<path d="' + bidD + '" fill="rgba(0, 229, 163, 0.22)" stroke="#00e5a3" stroke-width="2" />' +
+      '<path d="' + askD + '" fill="rgba(255, 77, 109, 0.22)" stroke="#ff4d6d" stroke-width="2" />' +
+      '<line x1="20" y1="' + baseY + '" x2="520" y2="' + baseY + '" stroke="var(--line)" stroke-width="1" />' +
+      '<text x="' + midX + '" y="12" fill="var(--info)" font-size="9" font-family="var(--font-mono)" text-anchor="middle">MID: ' + num(mid, 2) + '</text>' +
+      restingSvg;
+
+    // Render Depth Ladder (microstructure tape)
+    if ($("depthLadderAsks")) {
+      var askRows = [];
+      for (var ai = Math.min(asks.length, 5) - 1; ai >= 0; ai--) {
+        var aitem = asks[ai];
+        askRows.push('<div style="display:flex;justify-content:space-between;color:var(--bad);padding:1px 0"><span>' + num(aitem.size, 2) + '</span><span style="font-weight:700">' + num(aitem.price, 2) + '</span><span style="color:var(--muted)">' + num(aitem.cum, 1) + '</span></div>');
+      }
+      $("depthLadderAsks").innerHTML = askRows.join("");
+    }
+    if ($("depthLadderBids")) {
+      var bidRows = [];
+      for (var bi = 0; bi < Math.min(bids.length, 5); bi++) {
+        var bitem = bids[bi];
+        bidRows.push('<div style="display:flex;justify-content:space-between;color:var(--ok);padding:1px 0"><span>' + num(bitem.size, 2) + '</span><span style="font-weight:700">' + num(bitem.price, 2) + '</span><span style="color:var(--muted)">' + num(bitem.cum, 1) + '</span></div>');
+      }
+      $("depthLadderBids").innerHTML = bidRows.join("");
+    }
+    if ($("depthLadderSpread") && bids.length > 0 && asks.length > 0) {
+      var spread = asks[0].price - bids[0].price;
+      var spreadBps = (spread / mid) * 10000.0;
+      $("depthLadderSpread").textContent = "SPREAD: " + num(spread, 2) + " (" + num(spreadBps, 2) + " bps)";
+    }
+  }
+
   // GLFT Market-Making & BOCPD Regime Blotter Real-Time Updater
   var lastBlotterFetch = 0;
   function updatePaperBlotter() {
@@ -992,6 +1152,25 @@ const indexHTML = `<!doctype html>
         }
         if ($("blotterVpinPill")) $("blotterVpinPill").textContent = "VPIN Toxicity: " + num(d.vpin, 2);
         if ($("blotterKalmanPill")) $("blotterKalmanPill").textContent = "BTC\u2192ETH \u03b2: " + num(ll.kalman_beta, 2) + " (Z = " + num(ll.spread_z_score, 2) + ")";
+
+        if ($("blotterBasisPill") && d.basis_arb) {
+          var b = d.basis_arb;
+          var bsign = b.basis_bps >= 0 ? "+" : "";
+          $("blotterBasisPill").textContent = "Basis: " + bsign + num(b.basis_bps, 1) + " bps (Z = " + (b.z_score >= 0 ? "+" : "") + num(b.z_score, 2) + ")";
+          $("blotterBasisPill").className = "pill " + (Math.abs(b.z_score) >= 1.5 ? "warn" : "ok");
+          if ($("depthBasisBps")) $("depthBasisBps").textContent = bsign + num(b.basis_bps, 2) + " bps (Z=" + num(b.z_score, 2) + ")";
+        }
+        if ($("blotterHawkesPill") && d.hawkes_online) {
+          var hk = d.hawkes_online;
+          var statusText = hk.cascade_risk ? "CASCADE RISK" : "Stable";
+          $("blotterHawkesPill").textContent = "Hawkes n: " + num(hk.branching_ratio, 2) + " (" + statusText + ")";
+          $("blotterHawkesPill").className = "pill " + (hk.cascade_risk ? "bad" : (hk.branching_ratio >= 0.85 ? "warn" : "ok"));
+          if ($("depthHawkesLambda")) $("depthHawkesLambda").textContent = num(hk.intensity, 1) + "/s (n=" + num(hk.branching_ratio, 2) + ")";
+        }
+
+        if (d.l2_depth) {
+          renderDepthChart(d.l2_depth);
+        }
 
         if (d.almgren_chriss_schedule && d.almgren_chriss_schedule.length && $("mmAlmgrenSchedule")) {
           $("mmAlmgrenSchedule").innerHTML = d.almgren_chriss_schedule.map(function(s, idx){

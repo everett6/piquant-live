@@ -190,6 +190,20 @@ func Registry() []ModelSpec {
 			Limitations: "Fixed reservoir topology does not adapt recurrent weights online; relies on regularized readout calibration.",
 			Calibration: "Solved in closed form via L2-regularized Gauss-Jordan normal equations over standardized reservoir states and skip residuals.",
 		},
+		// 12. Minutes Horizon: Spot vs. Perpetual Futures Multi-Stream Basis Arbitrage
+		{
+			ID:          "spot_perp_basis",
+			Name:        "Spot-Perp Basis Arbitrage & Mean Reversion",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "micro_dev", "spread_bps", "ofi_1s", "ofi_5s", "vol_30s_bps", "ret_1s_bps", "trade_imb_5s"},
+			Algorithm:   "Spot-Perp Basis Tracker + Welford EWMA Z-Score + Mean-Reverting Basis Alpha",
+			Version:     "v1.0.0",
+			Description: "Tracks spot vs. perpetual futures price divergence, standardized basis Z-score, and executes statistical basis convergence arbitrage with maker inventory skew.",
+			Assumptions: "Basis dislocations revert to cost-of-carry equilibrium over intraday horizons; cointegrated spot and perpetual liquidity.",
+			Limitations: "Under extreme funding rate regimes or venue disconnections, basis divergence may widen before converging.",
+			Calibration: "Welford EWMA variance with adaptive mean-reversion speed theta.",
+		},
 		// 8. Hours Horizon: Volatility Regime Filter
 		{
 			ID:          "vol_regime_ridge",

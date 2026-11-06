@@ -115,6 +115,16 @@ func InstantiateModel(modelName string, lambda float64, params map[string]any) C
 		return common.NewCarteaJaimungalMM(gamma, 1.5, 2.0, 0.001, 0.01, 0.5, 60.0)
 	case "esn_reservoir":
 		return &esnWrapper{mod: common.NewESNReservoirModel(lambda)}
+	case "spot_perp_basis":
+		theta := 0.65
+		if th, ok := params["theta"].(float64); ok && th > 0 {
+			theta = th
+		}
+		zThresh := 1.5
+		if z, ok := params["z_threshold"].(float64); ok && z > 0 {
+			zThresh = z
+		}
+		return common.NewSpotPerpBasisModel(lambda, theta, zThresh)
 	default:
 		return &common.Ridge{Lam: lambda}
 	}
