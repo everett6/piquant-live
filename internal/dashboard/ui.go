@@ -336,6 +336,8 @@ const indexHTML = `<!doctype html>
             <span class="pill ok" id="blotterHawkesPill">Hawkes n: 0.68 (Stable)</span>
             <span class="pill" id="blotterQueuePill">Queue Fill (5s): 85%</span>
             <span class="pill" id="blotterKalmanPill">BTC&rarr;ETH &beta;: 1.18 (Z = -0.82)</span>
+            <span class="pill ok" id="blotterLeadLagPill">Cross-Venue Lead: Binance &rarr; Bybit (+2.6 bps)</span>
+            <span class="pill ok" id="blotterAgingPill">Inventory Age: 18s (Decay: 0.7 bps)</span>
           </div>
         </div>
         <div class="stats" style="grid-template-columns:repeat(6,1fr);margin-bottom:12px">
@@ -497,6 +499,7 @@ const indexHTML = `<!doctype html>
                 <option value="esn_reservoir">Echo State Network Reservoir (ESN Microstructure)</option>
                 <option value="spot_perp_basis">Spot-Perp Basis Arbitrage (Welford Z-Score)</option>
                 <option value="triangular_arb">Triangular Cross-Rate Synthetic Arbitrage (Leg A/B/C)</option>
+                <option value="cross_venue_leadlag">Cross-Venue Lead-Lag Arbitrage (Binance/Bybit)</option>
               </select>
               <select id="exp-model" style="display:none" aria-hidden="true">
                 <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
@@ -505,6 +508,7 @@ const indexHTML = `<!doctype html>
                 <option value="esn_reservoir">Echo State Network Reservoir (ESN Microstructure)</option>
                 <option value="spot_perp_basis">Spot-Perp Basis Arbitrage (Welford Z-Score)</option>
                 <option value="triangular_arb">Triangular Cross-Rate Synthetic Arbitrage (Leg A/B/C)</option>
+                <option value="cross_venue_leadlag">Cross-Venue Lead-Lag Arbitrage (Binance/Bybit)</option>
               </select>
             </div>
 
@@ -649,6 +653,7 @@ const indexHTML = `<!doctype html>
               <option value="esn_reservoir">Echo State Network Reservoir (ESN Microstructure)</option>
               <option value="spot_perp_basis">Spot-Perp Basis Arbitrage (Welford Z-Score)</option>
               <option value="triangular_arb">Triangular Cross-Rate Synthetic Arbitrage (Leg A/B/C)</option>
+              <option value="cross_venue_leadlag">Cross-Venue Lead-Lag Arbitrage (Binance/Bybit)</option>
             </select>
           </div>
           <div class="form-group">
@@ -1169,6 +1174,18 @@ const indexHTML = `<!doctype html>
           $("blotterHawkesPill").textContent = "Hawkes n: " + num(hk.branching_ratio, 2) + " (" + statusText + ")";
           $("blotterHawkesPill").className = "pill " + (hk.cascade_risk ? "bad" : (hk.branching_ratio >= 0.85 ? "warn" : "ok"));
           if ($("depthHawkesLambda")) $("depthHawkesLambda").textContent = num(hk.intensity, 1) + "/s (n=" + num(hk.branching_ratio, 2) + ")";
+        }
+        if ($("blotterLeadLagPill") && d.lead_lag_venue) {
+          var ll = d.lead_lag_venue;
+          var llsign = ll.lead_lag_spread_bps >= 0 ? "+" : "";
+          $("blotterLeadLagPill").textContent = "Cross-Venue Lead: " + (ll.leader_venue || "Binance") + " -> " + (ll.follower_venue || "Bybit") + " (" + llsign + num(ll.lead_lag_spread_bps, 1) + " bps)";
+          $("blotterLeadLagPill").className = "pill " + (Math.abs(ll.lead_lag_spread_bps) >= 2.0 ? "warn" : "ok");
+        }
+        if ($("blotterAgingPill") && d.inventory_aging) {
+          var ia = d.inventory_aging;
+          $("blotterAgingPill").textContent = "Inventory Age: " + Math.round(ia.holding_age_sec || 0) + "s (Decay: " + num(ia.decay_penalty_bps || 0, 1) + " bps)";
+          var ageCls = (ia.holding_age_sec > 60) ? "bad" : ((ia.holding_age_sec > 30) ? "warn" : "ok");
+          $("blotterAgingPill").className = "pill " + ageCls;
         }
 
         if (d.l2_depth) {

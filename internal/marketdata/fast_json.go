@@ -73,6 +73,21 @@ func internDynamic(b []byte) string {
 	return interned
 }
 
+// ParseFastFloat converts ASCII numeric bytes into a float64 with 0 allocations.
+func ParseFastFloat(b []byte) (float64, bool) {
+	return parseFastFloat(b)
+}
+
+// ParseFastUint parses an unsigned integer from ASCII bytes with 0 allocations.
+func ParseFastUint(b []byte) (uint64, bool) {
+	return parseFastUint(b)
+}
+
+// ParseFastInt parses a signed integer from ASCII bytes with 0 allocations.
+func ParseFastInt(b []byte) (int64, bool) {
+	return parseFastInt(b)
+}
+
 // parseFastFloat converts ASCII numeric bytes into a float64 with 0 allocations.
 func parseFastFloat(b []byte) (float64, bool) {
 	if len(b) >= 2 && b[0] == '"' && b[len(b)-1] == '"' {

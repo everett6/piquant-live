@@ -662,6 +662,39 @@ func TestPaperBlotterL2DepthBasisHawkes(t *testing.T) {
 	if _, ok := hawkes["cascade_risk"].(bool); !ok {
 		t.Errorf("expected cascade_risk bool in hawkes_online")
 	}
+
+	// Verify lead_lag_venue
+	leadLag, ok := blotter["lead_lag_venue"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected lead_lag_venue in /api/paper/blotter")
+	}
+	if leader, ok := leadLag["leader_venue"].(string); !ok || leader == "" {
+		t.Errorf("expected leader_venue in lead_lag_venue, got %v", leadLag["leader_venue"])
+	}
+	if follower, ok := leadLag["follower_venue"].(string); !ok || follower == "" {
+		t.Errorf("expected follower_venue in lead_lag_venue, got %v", leadLag["follower_venue"])
+	}
+	if _, ok := leadLag["lead_lag_spread_bps"].(float64); !ok {
+		t.Errorf("expected lead_lag_spread_bps in lead_lag_venue")
+	}
+	if _, ok := leadLag["predicted_drift_bps"].(float64); !ok {
+		t.Errorf("expected predicted_drift_bps in lead_lag_venue")
+	}
+
+	// Verify inventory_aging
+	invAging, ok := blotter["inventory_aging"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected inventory_aging in /api/paper/blotter")
+	}
+	if age, ok := invAging["holding_age_sec"].(float64); !ok || age <= 0 {
+		t.Errorf("expected positive holding_age_sec, got %v", invAging["holding_age_sec"])
+	}
+	if _, ok := invAging["decay_penalty_bps"].(float64); !ok {
+		t.Errorf("expected decay_penalty_bps in inventory_aging")
+	}
+	if state, ok := invAging["urgency_state"].(string); !ok || state == "" {
+		t.Errorf("expected urgency_state in inventory_aging, got %v", invAging["urgency_state"])
+	}
 }
 
 func TestPaperReportsEndpoints(t *testing.T) {

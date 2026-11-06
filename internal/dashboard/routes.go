@@ -1108,6 +1108,32 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 	perpPrice := 50000.00
 	basisDec := basisModel.Evaluate(spotPrice, perpPrice, quote.HalfSpreadBps*2.0)
 
+	// Cross-Venue Lead-Lag Arbitrage Engine (Binance vs. Bybit)
+	llTracker := common.NewCrossVenueLeadLagTracker("Binance", "Bybit")
+	llTracker.UpdatePrices(50000.00, 49999.50, nowNs-50_000_000, nowNs-60_000_000)
+	llSig := llTracker.UpdatePrices(50001.20, 49999.90, nowNs, nowNs-15_000_000)
+
+	// Dynamic Inventory Aging & Alpha-Decay Liquidation Policy
+	agingPolicy := common.NewInventoryAgingPolicy(1.5, 30.0, 1.5)
+	holdingAgeSec := 18.5
+	midPrice := 50000.00
+	bidPrice := midPrice * (1.0 - quote.BidOffsetBps/10000.0)
+	askPrice := midPrice * (1.0 + quote.AskOffsetBps/10000.0)
+	resPrice := midPrice * (1.0 + quote.ReservationBps/10000.0)
+	adjBid, adjAsk, adjRes, decayPenaltyBps := agingPolicy.AdjustQuotes(
+		bidPrice,
+		askPrice,
+		resPrice,
+		0.35,
+		holdingAgeSec,
+	)
+	urgencyState := "Nominal"
+	if holdingAgeSec > 60.0 {
+		urgencyState = "Critical Liquidation"
+	} else if holdingAgeSec > 30.0 {
+		urgencyState = "Elevated Decay"
+	}
+
 	// Online Self-Calibrating Hawkes Point-Process
 	hawkesEst := common.NewOnlineHawkesEstimator(5.0, 13.5, 20.0)
 	hawkesEst.Update(nowNs-320_000_000, true, 0.85)
@@ -1234,6 +1260,24 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 			CrossFlowCorr:   0.64,
 			SpreadZScore:    -0.82,
 			HalfLifeSamples: 14.5,
+		},
+		"lead_lag_venue": map[string]any{
+			"leader_venue":        llSig.LeaderVenue,
+			"follower_venue":      llSig.FollowerVenue,
+			"lead_lag_spread_bps": llSig.LeadLagSpreadBps,
+			"predicted_drift_bps": llSig.PredictedDriftBps,
+			"confidence":          llSig.Confidence,
+			"urgency_bps":         llSig.UrgencyBps,
+			"info_share_a":        llSig.InfoShareA,
+			"info_share_b":        llSig.InfoShareB,
+		},
+		"inventory_aging": map[string]any{
+			"holding_age_sec":      holdingAgeSec,
+			"decay_penalty_bps":    decayPenaltyBps,
+			"urgency_state":        urgencyState,
+			"adjusted_bid":         adjBid,
+			"adjusted_ask":         adjAsk,
+			"adjusted_reservation": adjRes,
 		},
 		"paper_fills": []map[string]any{
 			{"time": "00:02s ago", "symbol": "BTCUSDT", "side": "BID (Maker L1)", "price": 49999.62, "qty": 0.15, "edge_bps": 1.18, "adverse_bps": 0.14},

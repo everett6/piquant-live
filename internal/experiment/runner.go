@@ -143,6 +143,16 @@ func InstantiateModel(modelName string, lambda float64, params map[string]any) C
 			thresh = th
 		}
 		return common.NewTriangularArbModel(lambda, feeA, feeB, feeC, thresh)
+	case "cross_venue_leadlag":
+		venueA := "Binance"
+		venueB := "Bybit"
+		if va, ok := params["venue_a"].(string); ok && va != "" {
+			venueA = va
+		}
+		if vb, ok := params["venue_b"].(string); ok && vb != "" {
+			venueB = vb
+		}
+		return common.NewCrossVenueLeadLagModel(lambda, venueA, venueB)
 	default:
 		return &common.Ridge{Lam: lambda}
 	}

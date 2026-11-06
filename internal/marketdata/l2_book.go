@@ -38,6 +38,13 @@ func (d *OrderBookDelta) PrevUpdateID() uint64 {
 	return d.pu
 }
 
+// SetUpdateIDs sets the sequencing IDs on the delta.
+func (d *OrderBookDelta) SetUpdateIDs(firstUpdateID, finalUpdateID, prevFinalUpdateID uint64) {
+	d.U = firstUpdateID
+	d.u = finalUpdateID
+	d.pu = prevFinalUpdateID
+}
+
 // L2OrderBook maintains an institutional sorted in-memory top-20 L2 order book
 // with continuous sequence gap and out-of-order frame detection.
 //

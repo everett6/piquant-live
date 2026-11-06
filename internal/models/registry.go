@@ -218,6 +218,20 @@ func Registry() []ModelSpec {
 			Limitations: "Simultaneous execution risk (leg risk) across 3 distinct order books during high volatility.",
 			Calibration: "Maker/taker fee schedule and divergence threshold calibrated per venue fee tiers.",
 		},
+		// 14. Minutes Horizon: Cross-Venue Lead-Lag Arbitrage Engine
+		{
+			ID:          "cross_venue_leadlag",
+			Name:        "Cross-Venue Lead-Lag Arbitrage Engine",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "micro_dev", "spread_bps", "ofi_1s", "ofi_5s", "vol_30s_bps", "ret_1s_bps", "ret_5s_bps"},
+			Algorithm:   "High-Frequency Hasbrouck Information Share + Microsecond Tick Lead-Lag Drift",
+			Version:     "v1.0.0",
+			Description: "Monitors cross-venue price discovery (e.g. Binance vs. Bybit), computes Hasbrouck Information Share and tick-lead correlation, forecasting immediate follower price drift.",
+			Assumptions: "Permanent price innovations originate first on the leader venue; follower venue order book reflects innovations with microsecond to millisecond latency.",
+			Limitations: "Subject to cross-venue latency spikes, WebSocket reconnection jitter, and exchange downtime.",
+			Calibration: "EWMA innovation covariance with adaptive Hasbrouck information share bounds.",
+		},
 		// 8. Hours Horizon: Volatility Regime Filter
 		{
 			ID:          "vol_regime_ridge",
