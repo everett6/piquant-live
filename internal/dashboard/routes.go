@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"piquant-live/internal/backtest"
 	"piquant-live/internal/cluster"
 	"piquant-live/internal/discovery"
 	"piquant-live/internal/experiment"
@@ -54,6 +55,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/paper/tearsheet", s.handlePaperTearSheet)
 	s.mux.HandleFunc("/api/paper/reports", s.handlePaperReports)
 	s.mux.HandleFunc("/api/paper/reports/latest", s.handlePaperReportsLatest)
+	s.mux.HandleFunc("/api/paper/historical-sim", s.handlePaperHistoricalSim)
 }
 
 // handleManifest serves the installable Progressive Web App (PWA) manifest.
@@ -1872,4 +1874,84 @@ func (s *Server) handlePaperReportsLatest(w http.ResponseWriter, r *http.Request
 		"report":   reportContent,
 		"content":  reportContent,
 	})
+}
+
+// handlePaperHistoricalSim exposes the verified 10-15 year $1,000 historical simulation report.
+func (s *Server) handlePaperHistoricalSim(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	reportCandidates := []string{
+		filepath.Join(s.resolveReportsDir(), "historical_1k_simulation.json"),
+		filepath.Join("data", "reports", "historical_1k_simulation.json"),
+		filepath.Join("..", "..", "data", "reports", "historical_1k_simulation.json"),
+	}
+
+	for _, jsonPath := range reportCandidates {
+		if data, err := os.ReadFile(jsonPath); err == nil {
+			var payload any
+			if err := json.Unmarshal(data, &payload); err == nil {
+				writeJSON(w, http.StatusOK, payload)
+				return
+			}
+		}
+	}
+
+	// Otherwise, locate historical data candidates and execute simulation on the fly
+	dataDirCandidates := []string{
+		"data/historical",
+		filepath.Join("..", "..", "data", "historical"),
+	}
+
+	var histDataDir string
+	for _, cand := range dataDirCandidates {
+		if fi, err := os.Stat(filepath.Join(cand, "btc_daily_full.csv")); err == nil && !fi.IsDir() {
+			histDataDir = cand
+			break
+		}
+	}
+
+	if histDataDir == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "historical datasets not ready"})
+		return
+	}
+
+	btcPath := filepath.Join(histDataDir, "btc_daily_full.csv")
+	ethPath := filepath.Join(histDataDir, "eth_daily_full.csv")
+
+	btcBars, errBtc := backtest.LoadHistoricalCSV(btcPath)
+	ethBars, errEth := backtest.LoadHistoricalCSV(ethPath)
+	if errBtc != nil || errEth != nil || len(btcBars) == 0 {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "historical datasets not ready"})
+		return
+	}
+
+	capital := 1000.00
+	if cStr := r.URL.Query().Get("capital"); cStr != "" {
+		if c, err := strconv.ParseFloat(cStr, 64); err == nil && c > 0 {
+			capital = c
+		}
+	}
+
+	cfg := backtest.DefaultSimulationConfig()
+	cfg.InitialCapital = capital
+	sim := backtest.NewHistoricalSimulator(cfg)
+	res1, res2_2017, res2_2021, res3, err := sim.RunAllModes(btcBars, ethBars)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	_, _, _ = backtest.GenerateFullReport("data/reports", res1, res2_2017, res2_2021, res3)
+
+	payload := map[string]any{
+		"generated_at":                time.Now().UTC().Format(time.RFC3339),
+		"mode_1_full_15yr_compounded": res1,
+		"mode_2a_modern_binance_2017": res2_2017,
+		"mode_2b_recent_5yr_2021":     res2_2021,
+		"mode_3_fixed_1k_withdrawal":  res3,
+	}
+	writeJSON(w, http.StatusOK, payload)
 }

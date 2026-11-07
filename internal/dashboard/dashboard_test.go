@@ -886,3 +886,38 @@ func TestClusterTopologyAndEnrichedBlotter(t *testing.T) {
 		t.Fatalf("blotter cluster_link expected COOPERATIVE_DUAL_PI, got %v", cl["delegation_mode"])
 	}
 }
+
+func TestHistoricalSimEndpoint(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	// 1. Unauthenticated request should be rejected
+	rec401 := get(t, s.Handler(), http.MethodGet, "/api/paper/historical-sim", nil, nil)
+	if rec401.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated GET /api/paper/historical-sim, got %d", rec401.Code)
+	}
+
+	// 2. Authenticated request
+	authHdr := map[string]string{"Authorization": "Bearer " + peerToken}
+	rec200 := get(t, s.Handler(), http.MethodGet, "/api/paper/historical-sim", authHdr, nil)
+	if rec200.Code != http.StatusOK {
+		t.Fatalf("GET /api/paper/historical-sim status = %d: %s", rec200.Code, rec200.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec200.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode historical sim JSON: %v", err)
+	}
+
+	if _, ok := payload["mode_1_full_15yr_compounded"]; !ok {
+		t.Fatalf("missing mode_1_full_15yr_compounded in payload: %v", payload)
+	}
+	if _, ok := payload["mode_2a_modern_binance_2017"]; !ok {
+		t.Fatalf("missing mode_2a_modern_binance_2017 in payload: %v", payload)
+	}
+	if _, ok := payload["mode_2b_recent_5yr_2021"]; !ok {
+		t.Fatalf("missing mode_2b_recent_5yr_2021 in payload: %v", payload)
+	}
+	if _, ok := payload["mode_3_fixed_1k_withdrawal"]; !ok {
+		t.Fatalf("missing mode_3_fixed_1k_withdrawal in payload: %v", payload)
+	}
+}
