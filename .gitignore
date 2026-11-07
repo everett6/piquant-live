@@ -1,0 +1,31 @@
+# Binaries
+bin/
+*.exe
+*.test
+*.prof
+
+# Logs and runtime data
+*.log
+logs/
+data/*
+!data/historical/
+!data/reports/
+data/historical/ticks/*.zip
+data/historical/ticks/*.csv
+!data/historical/ticks/samples/
+!data/historical/ticks/*.pqbin
+piquant-data/
+.local/
+
+# OS and Editor artifacts
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+
+# Build & Agent Artifacts
+.agents/
+graphify-out/
+antigravity-add-model/
+
