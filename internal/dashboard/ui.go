@@ -248,6 +248,12 @@ const indexHTML = `<!doctype html>
             <div class="meta" style="margin-top:2px">Avellaneda-Stoikov GLFT market making &bull; Microsecond Binance WebSocket stream &bull; Automated Dynamic Leverage</div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <!-- Capital Selector Quick Input -->
+            <div style="display:flex;align-items:center;gap:4px;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:2px 8px">
+              <span style="font-size:11px;color:var(--muted)">Fund:</span>
+              <span style="font-size:11px;font-weight:700;color:var(--text)">$</span>
+              <input id="inputCustomCapital" type="number" value="2000" min="100" max="1000000" step="100" style="width:75px;background:transparent;border:none;color:var(--accent);font-size:12px;font-weight:700;font-family:monospace;outline:none" onchange="applyCustomCapital(this.value)">
+            </div>
             <!-- Window Preset Selector -->
             <div style="display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--panel2)">
               <button id="btnWinWeek" class="btn" style="padding:4px 10px;font-size:11px;font-weight:700;border:none;border-radius:0;background:var(--accent);color:#090d14;cursor:pointer" onclick="selectEvaluationWindow('7d')">Last Week (7d)</button>
@@ -2746,7 +2752,11 @@ const indexHTML = `<!doctype html>
 
   // Window Preset Switching helper
   window.selectEvaluationWindow = function(preset) {
-    fetch("/api/paper/recent-windows", {credentials:"same-origin"})
+    var cap = 2000;
+    if ($("inputCustomCapital") && parseFloat($("inputCustomCapital").value) > 0) {
+      cap = parseFloat($("inputCustomCapital").value);
+    }
+    fetch("/api/paper/recent-windows?capital=" + cap, {credentials:"same-origin"})
       .then(function(r){ return r.json(); })
       .then(function(data){
         var winData = preset === "7d" ? data.last_week : (preset === "30d" ? data.last_month : data.two_weeks);
@@ -2783,6 +2793,12 @@ const indexHTML = `<!doctype html>
       }).catch(function(err){
         console.error("Failed to load window preset:", err);
       });
+  };
+
+  window.applyCustomCapital = function(val) {
+    var cap = parseFloat(val);
+    if (!cap || cap <= 0) cap = 2000;
+    selectEvaluationWindow("7d");
   };
 
   loadModels();
