@@ -142,14 +142,16 @@ type DryRunEngine struct {
 	lastTickTime time.Time
 
 	// Models & Quantitative guards
-	conformal  *common.SplitConformalCalibrator
-	glftMM     *common.GLFTMarketMaker
-	carteaMM   *common.CarteaJaimungalMM
-	adaHedge   *common.AdaHedgeEnsemble
-	circuitBrk *experiment.MicrostructureCircuitBreaker
-	driftGuard *experiment.PageHinkleyDriftGuard
-	vpinCalc   *common.VPINCalculator
-	sor        common.SmartOrderRouter
+	conformal     *common.SplitConformalCalibrator
+	glftMM        *common.GLFTMarketMaker
+	carteaMM      *common.CarteaJaimungalMM
+	adaHedge      *common.AdaHedgeEnsemble
+	circuitBrk    *experiment.MicrostructureCircuitBreaker
+	driftGuard    *experiment.PageHinkleyDriftGuard
+	vpinCalc      *common.VPINCalculator
+	riskSafeguard *CircuitBreaker
+	kyleEst       *common.KylesLambdaEstimator
+	sor           common.SmartOrderRouter
 
 	// Online tick tracking
 	recentFills []TradeRecord
@@ -184,20 +186,22 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	}
 
 	e := &DryRunEngine{
-		cfg:          cfg,
-		ring:         ring,
-		stream:       stream,
-		stopCh:       make(chan struct{}),
-		conformal:    common.NewSplitConformalCalibrator(0.10),
-		glftMM:       common.NewGLFTMarketMaker(1e-3, 0.05, cfg.MakerFeeBps),
-		carteaMM:     common.NewCarteaJaimungalMM(0.05, 1.5, 2.0, 0.001, 0.01, 0.5, 60.0),
-		adaHedge:     common.NewAdaHedgeEnsemble(7, 0.985),
-		circuitBrk:   experiment.NewMicrostructureCircuitBreaker(1.0),
-		driftGuard:   experiment.NewPageHinkleyDriftGuard(0.15, 12.0),
-		vpinCalc:     common.NewVPINCalculator(10.0, 50),
-		sor:          common.NewSmartOrderRouter(),
-		activeOrders: make(map[string][]*ActiveMakerOrder),
-		recentFills:  make([]TradeRecord, 0, 32),
+		cfg:           cfg,
+		ring:          ring,
+		stream:        stream,
+		stopCh:        make(chan struct{}),
+		conformal:     common.NewSplitConformalCalibrator(0.10),
+		glftMM:        common.NewGLFTMarketMaker(1e-3, 0.05, cfg.MakerFeeBps),
+		carteaMM:      common.NewCarteaJaimungalMM(0.05, 1.5, 2.0, 0.001, 0.01, 0.5, 60.0),
+		adaHedge:      common.NewAdaHedgeEnsemble(7, 0.985),
+		circuitBrk:    experiment.NewMicrostructureCircuitBreaker(1.0),
+		driftGuard:    experiment.NewPageHinkleyDriftGuard(0.15, 12.0),
+		vpinCalc:      common.NewVPINCalculator(5.0, 50),
+		riskSafeguard: NewCircuitBreaker(DefaultCircuitBreakerConfig()),
+		kyleEst:       common.NewKylesLambdaEstimator(0.05, cfg.KylesLambda),
+		sor:           common.NewSmartOrderRouter(),
+		activeOrders:  make(map[string][]*ActiveMakerOrder),
+		recentFills:   make([]TradeRecord, 0, 32),
 	}
 
 	// Attempt to restore existing state from checkpoint
@@ -510,6 +514,13 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 	// A resting maker order fills only when observed trades at or through its price
 	// consume the queue ahead (hftbacktest fill realism).
 	if ev.Kind == 0 {
+		isBuyerMaker := (ev.Side == 1)
+		if e.vpinCalc != nil {
+			e.vpinCalc.UpdateTrade(price, ev.Size, isBuyerMaker)
+		}
+		if e.kyleEst != nil {
+			e.kyleEst.UpdateTrade(price, ev.Size, isBuyerMaker)
+		}
 		e.matchMakerOrders(symbol, price, ev.Size, ev.Side, now)
 		return
 	}
@@ -610,9 +621,16 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		}
 	}
 
-	// Microstructure Circuit Breaker Check
+	// Microstructure Circuit Breaker & Dynamic Risk Safeguard Check
 	liveVpin := e.vpinCalc.VPIN()
 	halted, haltReason := e.circuitBrk.Check(spreadBps, top5Depth, liveVpin)
+	if e.riskSafeguard != nil {
+		rState, rReason := e.riskSafeguard.OnTick(e.state.Equity, spreadBps, liveVpin, now)
+		if rState == StateTripped {
+			halted = true
+			haltReason = rReason
+		}
+	}
 	if halted {
 		e.mu.Lock()
 		e.state.CircuitHalted = true
@@ -810,6 +828,9 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 	pos.TotalTrades++
 	pos.MakerTrades++
 	pos.TotalVolumeUSDT += valUSDT
+	if e.riskSafeguard != nil {
+		e.riskSafeguard.OnFill(realizedPnL, pos.Size)
+	}
 
 	e.state.RealizedPnL += realizedPnL
 	e.state.TotalTrades++
@@ -907,6 +928,9 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 	pos.TotalTrades++
 	pos.TakerTrades++
 	pos.TotalVolumeUSDT += valUSDT
+	if e.riskSafeguard != nil {
+		e.riskSafeguard.OnFill(realizedPnL, pos.Size)
+	}
 
 	e.state.RealizedPnL += realizedPnL
 	e.state.TotalTrades++
@@ -957,4 +981,19 @@ func (e *DryRunEngine) appendTradeRecord(rec TradeRecord) {
 			_, _ = e.journal.Write(append(line, '\n'))
 		}
 	}
+}
+
+// RiskSafeguard returns the dynamic circuit breaker engine.
+func (e *DryRunEngine) RiskSafeguard() *CircuitBreaker {
+	return e.riskSafeguard
+}
+
+// KylesLambda returns the real-time Kyle's Lambda estimator.
+func (e *DryRunEngine) KylesLambda() *common.KylesLambdaEstimator {
+	return e.kyleEst
+}
+
+// VPIN returns the online VPIN toxicity estimator.
+func (e *DryRunEngine) VPIN() *common.VPINCalculator {
+	return e.vpinCalc
 }

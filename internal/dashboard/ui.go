@@ -328,10 +328,10 @@ const indexHTML = `<!doctype html>
           </div>
           <div class="pills">
             <span class="pill ok" id="blotterWatchdogPill">Watchdog: NOMINAL</span>
-            <span class="pill ok" id="blotterBreakerPill">Circuit Breaker: Normal</span>
+            <span class="pill ok" id="blotterBreakerPill">Risk State: NORMAL (DD: 0.00%)</span>
             <span class="pill info" id="blotterEvtPill">EVT 99.9% ES: 4.82 bps</span>
             <span class="pill ok" id="blotterRegimePill">Regime: Calm Maker</span>
-            <span class="pill info" id="blotterVpinPill">VPIN Toxicity: 0.28</span>
+            <span class="pill ok" id="blotterVpinPill">VPIN: 0.28 (Normal)</span>
             <span class="pill ok" id="blotterBasisPill">Basis: +1.0 bps (Z = +1.42)</span>
             <span class="pill ok" id="blotterHawkesPill">Hawkes n: 0.68 (Stable)</span>
             <span class="pill" id="blotterQueuePill">Queue Fill (5s): 85%</span>
@@ -500,6 +500,8 @@ const indexHTML = `<!doctype html>
                 <option value="spot_perp_basis">Spot-Perp Basis Arbitrage (Welford Z-Score)</option>
                 <option value="triangular_arb">Triangular Cross-Rate Synthetic Arbitrage (Leg A/B/C)</option>
                 <option value="cross_venue_leadlag">Cross-Venue Lead-Lag Arbitrage (Binance/Bybit)</option>
+                <option value="vpin_toxicity">Online VPIN Toxicity Filter (Volume-Clock)</option>
+                <option value="kyles_lambda">Kyle's Lambda &amp; Market Impact Sizer</option>
               </select>
               <select id="exp-model" style="display:none" aria-hidden="true">
                 <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
@@ -509,6 +511,8 @@ const indexHTML = `<!doctype html>
                 <option value="spot_perp_basis">Spot-Perp Basis Arbitrage (Welford Z-Score)</option>
                 <option value="triangular_arb">Triangular Cross-Rate Synthetic Arbitrage (Leg A/B/C)</option>
                 <option value="cross_venue_leadlag">Cross-Venue Lead-Lag Arbitrage (Binance/Bybit)</option>
+                <option value="vpin_toxicity">Online VPIN Toxicity Filter (Volume-Clock)</option>
+                <option value="kyles_lambda">Kyle's Lambda &amp; Market Impact Sizer</option>
               </select>
             </div>
 
@@ -654,6 +658,8 @@ const indexHTML = `<!doctype html>
               <option value="spot_perp_basis">Spot-Perp Basis Arbitrage (Welford Z-Score)</option>
               <option value="triangular_arb">Triangular Cross-Rate Synthetic Arbitrage (Leg A/B/C)</option>
               <option value="cross_venue_leadlag">Cross-Venue Lead-Lag Arbitrage (Binance/Bybit)</option>
+              <option value="vpin_toxicity">Online VPIN Toxicity Filter (Volume-Clock)</option>
+              <option value="kyles_lambda">Kyle's Lambda &amp; Market Impact Sizer</option>
             </select>
           </div>
           <div class="form-group">
@@ -1144,8 +1150,10 @@ const indexHTML = `<!doctype html>
         }
         if ($("blotterBreakerPill") && d.circuit_breaker) {
           var cb = d.circuit_breaker;
-          $("blotterBreakerPill").textContent = "Circuit Breaker: " + cb.state;
-          $("blotterBreakerPill").className = "pill " + (cb.halted ? "bad" : (cb.state === "Caution" ? "warn" : "ok"));
+          var st = (cb.state || "NORMAL").toUpperCase();
+          var ddPct = typeof cb.drawdown_bps === "number" ? (cb.drawdown_bps / 100.0) : (cb.current_drawdown_pct || 0);
+          $("blotterBreakerPill").textContent = "Risk State: " + st + " (DD: " + num(ddPct, 2) + "%)";
+          $("blotterBreakerPill").className = "pill " + (st === "TRIPPED" || cb.halted ? "bad" : (st === "WARNING" || st === "REDUCE_ONLY" ? "warn" : "ok"));
         }
         if ($("blotterEvtPill") && d.evt_risk) {
           $("blotterEvtPill").textContent = "EVT 99.9% ES: " + num(d.evt_risk.es_999_bps, 2) + " bps";
@@ -1158,7 +1166,13 @@ const indexHTML = `<!doctype html>
           $("blotterRegimePill").textContent = "Regime: " + rName;
           $("blotterRegimePill").className = "pill " + (reg.regime === "toxic_cascade" ? "bad" : (reg.regime === "calm_maker" ? "ok" : "info"));
         }
-        if ($("blotterVpinPill")) $("blotterVpinPill").textContent = "VPIN Toxicity: " + num(d.vpin, 2);
+        if ($("blotterVpinPill") && d.vpin) {
+          var vVal = typeof d.vpin === 'object' ? (d.vpin.vpin || 0) : d.vpin;
+          var vStatus = typeof d.vpin === 'object' && d.vpin.status ? d.vpin.status : (vVal >= 0.70 ? "TOXIC" : "NORMAL");
+          var isToxic = String(vStatus).toUpperCase() === "TOXIC";
+          $("blotterVpinPill").textContent = "VPIN: " + num(vVal, 2) + " (" + (isToxic ? "Toxic" : "Normal") + ")";
+          $("blotterVpinPill").className = "pill " + (isToxic ? "bad" : (vVal >= 0.50 ? "warn" : "ok"));
+        }
         if ($("blotterKalmanPill")) $("blotterKalmanPill").textContent = "BTC\u2192ETH \u03b2: " + num(ll.kalman_beta, 2) + " (Z = " + num(ll.spread_z_score, 2) + ")";
 
         if ($("blotterBasisPill") && d.basis_arb) {

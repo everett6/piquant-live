@@ -1036,11 +1036,23 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// Volume-Synchronized Probability of Toxicity (VPIN)
-	vpinCalc := common.NewVPINCalculator(10.0, 50)
-	vpinCalc.Update(50000.0, 4.5, false)
-	vpinCalc.Update(49999.5, 3.2, true)
-	vpinCalc.Update(50000.5, 5.0, false)
+	vpinCalc := common.NewVPINCalculator(5.0, 50)
+	vpinCalc.UpdateTrade(50000.0, 4.5, false)
+	vpinCalc.UpdateTrade(49999.5, 3.2, true)
+	vpinCalc.UpdateTrade(50000.5, 5.0, false)
 	liveVpin := vpinCalc.VPIN()
+	vpinStatus := "NORMAL"
+	if vpinCalc.IsToxic() {
+		vpinStatus = "TOXIC"
+	}
+	_, _, vpinWidenedBps := vpinCalc.AdjustQuote(50000.0-quote.BidOffsetBps*5.0, 50000.0+quote.AskOffsetBps*5.0)
+
+	// Real-time Kyle's Lambda & Market Impact Sizer
+	kyleEst := common.NewKylesLambdaEstimator(0.05, 0.25)
+	kyleEst.UpdateTrade(50000.0, 1.25, false)
+	kyleEst.UpdateTrade(50000.5, 2.10, false)
+	kyleEst.UpdateTrade(49999.8, 1.80, true)
+	kyleLambda := kyleEst.Lambda()
 
 	// Cont-de Larrard Markovian Queue Position & Depletion Dynamics
 	cdlQueue := common.NewContDeLarrardQueue(14.0, 1.25, 3.10, x[0])
@@ -1057,10 +1069,17 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 	var999 := evtEngine.VaR(0.001)
 	es999 := evtEngine.ExpectedShortfall(0.001)
 
-	// Microstructure Circuit Breaker
+	// Microstructure Circuit Breaker & Dynamic Risk Safeguard
 	spreadBps := quote.HalfSpreadBps * 2.0
 	breaker := experiment.NewMicrostructureCircuitBreaker(spreadBps)
 	halted, haltReason := breaker.Check(spreadBps, 150000.0, liveVpin)
+	drState := s.resolveDryRunState()
+	riskBreaker := paper.NewCircuitBreaker(paper.DefaultCircuitBreakerConfig())
+	riskState, riskReason := riskBreaker.OnTick(drState.Equity, spreadBps, liveVpin, time.Now())
+	finalReason := riskReason
+	if halted && finalReason == paper.ReasonNormal {
+		finalReason = haltReason
+	}
 
 	// Conformal prediction interval & certitude on live reservation signal
 	conformalCal := common.NewSplitConformalCalibrator(0.10)
@@ -1099,7 +1118,6 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 	wdReport := wd.Check(nowNs, nowNs-45_000_000, 64, 1024, tempC, throttled)
 
 	// Live Dry-Run Tear-Sheet
-	drState := s.resolveDryRunState()
 	tearSheet := paper.ComputeDryRunTearSheet(drState)
 
 	// Spot vs. Perpetual Basis Arbitrage
@@ -1163,11 +1181,22 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"mid_price":               50000.00,
-		"stoikov_price":           50000.08,
-		"quote":                   quote,
-		"regime":                  regime,
-		"vpin":                    liveVpin,
+		"mid_price":     50000.00,
+		"stoikov_price": 50000.08,
+		"quote":         quote,
+		"regime":        regime,
+		"vpin": map[string]any{
+			"vpin":        liveVpin,
+			"threshold":   vpinCalc.ToxicThreshold,
+			"status":      vpinStatus,
+			"widened_bps": vpinWidenedBps,
+		},
+		"vpin_value":   liveVpin,
+		"kyles_lambda": kyleLambda,
+		"kyles_lambda_details": map[string]any{
+			"lambda_bps_per_btc": kyleLambda,
+			"optimal_size_btc":   kyleEst.OptimalSize(1.0, 50000.00),
+		},
 		"hawkes_imb":              0.31,
 		"almgren_chriss_schedule": acSchedule,
 		"kelly_weights": map[string]float64{
@@ -1240,9 +1269,13 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 			"scale_beta":    evtEngine.Params.Beta,
 		},
 		"circuit_breaker": map[string]any{
-			"state":  breaker.State.String(),
-			"halted": halted,
-			"reason": haltReason,
+			"state":              riskState.String(),
+			"current_state":      riskState.String(),
+			"drawdown_bps":       riskBreaker.DrawdownBps,
+			"peak_equity":        riskBreaker.PeakEquity,
+			"consecutive_losses": riskBreaker.ConsecutiveLosses,
+			"halted":             riskState == paper.StateTripped || halted,
+			"reason":             finalReason,
 		},
 		"drift_guard": map[string]any{
 			"drift_detected": driftDetected,

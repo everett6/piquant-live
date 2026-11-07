@@ -153,6 +153,18 @@ func InstantiateModel(modelName string, lambda float64, params map[string]any) C
 			venueB = vb
 		}
 		return common.NewCrossVenueLeadLagModel(lambda, venueA, venueB)
+	case "vpin_toxicity":
+		threshold := 0.70
+		if t, ok := params["threshold"].(float64); ok && t > 0 {
+			threshold = t
+		}
+		return common.NewVPINToxicityModel(lambda, threshold)
+	case "kyles_lambda":
+		alpha := 0.05
+		if a, ok := params["alpha"].(float64); ok && a > 0 {
+			alpha = a
+		}
+		return common.NewKylesLambdaModel(lambda, alpha)
 	default:
 		return &common.Ridge{Lam: lambda}
 	}

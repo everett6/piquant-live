@@ -695,6 +695,44 @@ func TestPaperBlotterL2DepthBasisHawkes(t *testing.T) {
 	if state, ok := invAging["urgency_state"].(string); !ok || state == "" {
 		t.Errorf("expected urgency_state in inventory_aging, got %v", invAging["urgency_state"])
 	}
+
+	// Verify vpin enrichment
+	vpinObj, ok := blotter["vpin"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected vpin map in /api/paper/blotter, got %T", blotter["vpin"])
+	}
+	if _, ok := vpinObj["vpin"].(float64); !ok {
+		t.Errorf("expected vpin numeric value in vpin object")
+	}
+	if status, ok := vpinObj["status"].(string); !ok || (status != "NORMAL" && status != "TOXIC") {
+		t.Errorf("expected valid status ('NORMAL'/'TOXIC') in vpin object, got %v", vpinObj["status"])
+	}
+	if _, ok := vpinObj["widened_bps"].(float64); !ok {
+		t.Errorf("expected widened_bps in vpin object")
+	}
+
+	// Verify circuit_breaker enrichment
+	cbObj, ok := blotter["circuit_breaker"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected circuit_breaker map in /api/paper/blotter")
+	}
+	if state, ok := cbObj["state"].(string); !ok || state == "" {
+		t.Errorf("expected state in circuit_breaker, got %v", cbObj["state"])
+	}
+	if _, ok := cbObj["drawdown_bps"].(float64); !ok {
+		t.Errorf("expected drawdown_bps in circuit_breaker")
+	}
+	if _, ok := cbObj["peak_equity"].(float64); !ok {
+		t.Errorf("expected peak_equity in circuit_breaker")
+	}
+	if _, ok := cbObj["consecutive_losses"].(float64); !ok {
+		t.Errorf("expected consecutive_losses in circuit_breaker")
+	}
+
+	// Verify kyles_lambda enrichment
+	if kyleLam, ok := blotter["kyles_lambda"].(float64); !ok || kyleLam <= 0 {
+		t.Errorf("expected positive kyles_lambda in /api/paper/blotter, got %v", blotter["kyles_lambda"])
+	}
 }
 
 func TestPaperReportsEndpoints(t *testing.T) {

@@ -232,6 +232,34 @@ func Registry() []ModelSpec {
 			Limitations: "Subject to cross-venue latency spikes, WebSocket reconnection jitter, and exchange downtime.",
 			Calibration: "EWMA innovation covariance with adaptive Hasbrouck information share bounds.",
 		},
+		// 15. Minutes Horizon: Online VPIN Toxicity Model
+		{
+			ID:          "vpin_toxicity",
+			Name:        "Volume-Synchronized Probability of Toxicity (VPIN)",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "micro_dev", "spread_bps", "ofi_1s", "ofi_5s", "vol_30s_bps", "ret_1s_bps", "trade_imb_5s", "trade_cnt_1s"},
+			Algorithm:   "Easley-López de Prado-O'Hara (2012) Volume-Clock Toxicity Estimator + Adverse Selection Damping",
+			Version:     "v1.0.0",
+			Description: "Measures informed flow toxicity via rolling volume-clock order imbalance buckets and widens quotes or dampens alpha to prevent adverse selection.",
+			Assumptions: "Informed traders trade with high urgency and directional clustering, skewing order imbalance within fixed volume buckets.",
+			Limitations: "Bucket volume V must be calibrated to venue turnover; sensitive to high-frequency wash trading or iceberg fragmentation.",
+			Calibration: "Calibrated volume bucket V=5.0 BTC over N=50 rolling buckets with 0.70 toxicity threshold.",
+		},
+		// 16. Minutes Horizon: Real-time Kyle's Lambda & Market Impact Sizer
+		{
+			ID:          "kyles_lambda",
+			Name:        "Kyle's Lambda & Market Impact Sizer",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "micro_dev", "spread_bps", "ofi_1s", "ofi_5s", "vol_30s_bps", "ret_1s_bps", "trade_imb_5s"},
+			Algorithm:   "Kyle (1985) Microstructural Price Impact Coefficient via Recursive Online EWMA Covariance",
+			Version:     "v1.0.0",
+			Description: "Estimates marginal price impact per unit volume in real time and sizes maker/taker orders under an adverse selection impact budget.",
+			Assumptions: "Linear price response to net signed order flow; noise traders provide inelastic counterparty liquidity.",
+			Limitations: "Assumes symmetric impact between buy and sell flow; square-root law dominates for very large block trades.",
+			Calibration: "Recursive EWMA covariance and variance estimation with forgetting factor alpha=0.05 and epsilon=1e-6.",
+		},
 		// 8. Hours Horizon: Volatility Regime Filter
 		{
 			ID:          "vol_regime_ridge",
