@@ -32,6 +32,7 @@ type DryRunConfig struct {
 	OrderLatency     time.Duration // Feed + order placement latency before maker order is active (default: 50ms)
 	EnableAllModels  bool          // Re-enable models disabled by ablation gate in the ensemble (default: false)
 	ExtendOnShutdown bool          // Automatically extend target end time by offline duration upon shutdown/power-cycle recovery (default: true)
+	WindowPreset     string        // Window preset: "7d" (last week), "30d" (last month), "14d" (2 weeks)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -123,6 +124,8 @@ type DryRunState struct {
 	Positions         map[string]*Position `json:"positions"`
 	DailyReturns      []float64            `json:"daily_returns"`
 	DaysElapsed       int                  `json:"days_elapsed"`
+	TargetDays        int                  `json:"target_days"`              // Total days in target evaluation window (e.g. 7, 14, 30)
+	WindowPreset      string               `json:"window_preset"`            // "7d" (last week), "30d" (last month), "14d" (2 weeks)
 	HoursRemaining    float64              `json:"hours_remaining"`
 	DataSource             string               `json:"data_source"`              // "live" or "fallback"
 	FeedDownSeconds        float64              `json:"feed_down_seconds"`        // Cumulative duration market feed was disconnected
@@ -169,13 +172,34 @@ type DryRunEngine struct {
 	wg          sync.WaitGroup
 }
 
-// NewDryRunEngine constructs and recovers or initializes the 14-day paper trading engine.
+// NewDryRunEngine constructs and recovers or initializes the paper trading engine.
 func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStreamIngestor) (*DryRunEngine, error) {
 	if cfg.InitialCapital <= 0 {
 		cfg.InitialCapital = 1000.00
 	}
-	if cfg.TargetDuration <= 0 {
+	switch strings.ToLower(strings.TrimSpace(cfg.WindowPreset)) {
+	case "7d", "1w", "week", "last_week", "last-week":
+		cfg.TargetDuration = 7 * 24 * time.Hour
+		cfg.WindowPreset = "7d"
+	case "30d", "1m", "month", "last_month", "last-month":
+		cfg.TargetDuration = 30 * 24 * time.Hour
+		cfg.WindowPreset = "30d"
+	case "14d", "2w", "2week", "two_weeks":
 		cfg.TargetDuration = 14 * 24 * time.Hour
+		cfg.WindowPreset = "14d"
+	default:
+		if cfg.TargetDuration <= 0 {
+			cfg.TargetDuration = 14 * 24 * time.Hour
+		}
+		if cfg.WindowPreset == "" {
+			if cfg.TargetDuration == 7*24*time.Hour {
+				cfg.WindowPreset = "7d"
+			} else if cfg.TargetDuration == 30*24*time.Hour {
+				cfg.WindowPreset = "30d"
+			} else {
+				cfg.WindowPreset = "14d"
+			}
+		}
 	}
 	if cfg.MaxDrawdownPct <= 0 {
 		cfg.MaxDrawdownPct = 2.0
@@ -224,6 +248,10 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	if err := e.loadCheckpoint(); err != nil {
 		// Initialize fresh state if no checkpoint exists
 		now := time.Now()
+		targetDays := int(cfg.TargetDuration.Hours() / 24.0)
+		if targetDays <= 0 {
+			targetDays = 14
+		}
 		e.state = DryRunState{
 			StartTime:      now,
 			TargetEndTime:  now.Add(cfg.TargetDuration),
@@ -233,7 +261,9 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 			Equity:         cfg.InitialCapital,
 			PeakEquity:     cfg.InitialCapital,
 			Positions:      make(map[string]*Position, len(cfg.Symbols)),
-			DailyReturns:   make([]float64, 0, 14),
+			DailyReturns:   make([]float64, 0, targetDays),
+			TargetDays:     targetDays,
+			WindowPreset:   cfg.WindowPreset,
 			DataSource:     "live",
 			Leverage:       levCtrl.Compute(10.0, 0.20, 0.50, 0.0, false),
 		}
@@ -246,6 +276,15 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	} else {
 		if e.state.DataSource == "" {
 			e.state.DataSource = "live"
+		}
+		if e.state.TargetDays <= 0 {
+			e.state.TargetDays = int(cfg.TargetDuration.Hours() / 24.0)
+			if e.state.TargetDays <= 0 {
+				e.state.TargetDays = 14
+			}
+		}
+		if e.state.WindowPreset == "" {
+			e.state.WindowPreset = cfg.WindowPreset
 		}
 	}
 
@@ -304,9 +343,20 @@ func (e *DryRunEngine) State() DryRunState {
 	// Update computed timing fields
 	now := time.Now()
 	elapsed := now.Sub(cp.StartTime)
+	totalDays := cp.TargetDays
+	if totalDays <= 0 {
+		totalDays = int(e.cfg.TargetDuration.Hours() / 24.0)
+		if totalDays <= 0 {
+			totalDays = 14
+		}
+		cp.TargetDays = totalDays
+	}
+	if cp.WindowPreset == "" {
+		cp.WindowPreset = e.cfg.WindowPreset
+	}
 	cp.DaysElapsed = int(elapsed.Hours()/24.0) + 1
-	if cp.DaysElapsed > 14 {
-		cp.DaysElapsed = 14
+	if cp.DaysElapsed > totalDays {
+		cp.DaysElapsed = totalDays
 	}
 	remaining := cp.TargetEndTime.Sub(now)
 	if remaining < 0 {

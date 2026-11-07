@@ -21,12 +21,13 @@ import (
 
 type dryRunFlags struct {
 	serveFlags
-	capital         float64
-	durationH       float64
-	maxDD           float64
-	symbols         string
-	statusOnly      bool
-	reportOnly      bool
+	capital          float64
+	durationH        float64
+	window           string
+	maxDD            float64
+	symbols          string
+	statusOnly       bool
+	reportOnly       bool
 	enableFallback   bool
 	enableAllModels  bool
 	extendOnShutdown bool
@@ -43,7 +44,8 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.StringVar(&f.app, "app", version, "version string shown in the interface")
 
 	fs.Float64Var(&f.capital, "capital", 1000.00, "initial paper capital in USDT")
-	fs.Float64Var(&f.durationH, "duration-hours", 336.0, "target autonomous duration in hours (default 336h = 14 days)")
+	fs.StringVar(&f.window, "window", "7d", "evaluation window preset: '7d' (last week), '30d' (last month), '14d' (2 weeks)")
+	fs.Float64Var(&f.durationH, "duration-hours", 0, "target autonomous duration in hours (0 = infer from --window, e.g. 168h for 7d, 720h for 30d)")
 	fs.Float64Var(&f.maxDD, "max-drawdown", 2.0, "maximum allowable drawdown percentage before circuit breaker halts")
 	fs.StringVar(&f.symbols, "symbols", "BTCUSDT,ETHUSDT", "comma-separated trading symbols")
 	fs.BoolVar(&f.statusOnly, "status", false, "print terminal summary of active dry run and exit")
@@ -111,10 +113,13 @@ func runDryRun(ctx context.Context, args []string) error {
 	ingestor.Start(ctx)
 	defer ingestor.Stop()
 
-	// Initialize 14-day dry run engine
+	// Initialize dry run engine with selected window preset
 	paperCfg := paper.DefaultDryRunConfig(dDir)
 	paperCfg.InitialCapital = f.capital
-	paperCfg.TargetDuration = time.Duration(f.durationH) * time.Hour
+	paperCfg.WindowPreset = f.window
+	if f.durationH > 0 {
+		paperCfg.TargetDuration = time.Duration(f.durationH) * time.Hour
+	}
 	paperCfg.MaxDrawdownPct = f.maxDD
 	paperCfg.Symbols = symList
 	paperCfg.EnableAllModels = f.enableAllModels
@@ -189,10 +194,14 @@ func runDryRun(ctx context.Context, args []string) error {
 	}
 
 	st := dryRunEngine.State()
+	targetHours := int(st.TargetEndTime.Sub(st.StartTime).Hours())
+	if targetHours <= 0 {
+		targetHours = st.TargetDays * 24
+	}
 	fmt.Printf("\n=======================================================\n")
-	fmt.Printf(" [PIQUANT] 14-DAY AUTONOMOUS PAPER DRY RUN INITIATED\n")
+	fmt.Printf(" [PIQUANT] %d-DAY AUTONOMOUS PAPER DRY RUN INITIATED\n", st.TargetDays)
 	fmt.Printf("=======================================================\n")
-	fmt.Printf(" Target Duration: %v (336 Hours)\n", paperCfg.TargetDuration)
+	fmt.Printf(" Window Preset:   %s (%d Days / %dh)\n", st.WindowPreset, st.TargetDays, targetHours)
 	fmt.Printf(" Initial Capital: $%.2f USDT\n", st.InitialCapital)
 	fmt.Printf(" Active Universe: %s\n", strings.Join(symList, ", "))
 	fmt.Printf(" Max Drawdown Limit: %.2f%% (Circuit Breaker)\n", paperCfg.MaxDrawdownPct)
@@ -233,13 +242,23 @@ func printDryRunStatus(stateFile string) error {
 		ds += " (QUOTING PAUSED)"
 	}
 
+	totDays := st.TargetDays
+	if totDays <= 0 {
+		totDays = 14
+	}
+	presetName := st.WindowPreset
+	if presetName == "" {
+		presetName = fmt.Sprintf("%dd", totDays)
+	}
+
 	fmt.Println("=======================================================")
-	fmt.Printf(" PIQUANT 2-WEEK AUTONOMOUS DRY RUN STATUS REPORT\n")
+	fmt.Printf(" PIQUANT %d-DAY (%s) AUTONOMOUS DRY RUN STATUS REPORT\n", totDays, strings.ToUpper(presetName))
 	fmt.Println("=======================================================")
 	fmt.Printf(" Status:          %s\n", pick(!st.CircuitHalted, "ACTIVE (OK)", "CIRCUIT BREAKER HALTED"))
+	fmt.Printf(" Window Preset:   %s (%d days)\n", presetName, totDays)
 	fmt.Printf(" Data Source:     %s\n", ds)
 	fmt.Printf(" Feed Down Time:  %.1fs\n", st.FeedDownSeconds)
-	fmt.Printf(" Progress:        Day %d of 14 (%.1f hours remaining)\n", st.DaysElapsed, rem.Hours())
+	fmt.Printf(" Progress:        Day %d of %d (%.1f hours remaining)\n", st.DaysElapsed, totDays, rem.Hours())
 	fmt.Printf(" Start Time:      %s\n", st.StartTime.Format(time.RFC3339))
 	fmt.Printf(" Target End:      %s\n", st.TargetEndTime.Format(time.RFC3339))
 	fmt.Printf(" Initial Capital: $%.2f USDT\n", st.InitialCapital)

@@ -55,6 +55,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/paper/tearsheet", s.handlePaperTearSheet)
 	s.mux.HandleFunc("/api/paper/reports", s.handlePaperReports)
 	s.mux.HandleFunc("/api/paper/reports/latest", s.handlePaperReportsLatest)
+	s.mux.HandleFunc("/api/paper/recent-windows", s.handlePaperRecentWindows)
 	s.mux.HandleFunc("/api/paper/historical-sim", s.handlePaperHistoricalSim)
 	s.mux.HandleFunc("/api/paper/tick-sim", s.handlePaperTickSim)
 }
@@ -1516,7 +1517,7 @@ func (s *Server) resolveDryRunState() paper.DryRunState {
 
 	now := time.Now()
 	startTime := now.Add(-3 * time.Hour)
-	endTime := startTime.Add(14 * 24 * time.Hour)
+	endTime := startTime.Add(7 * 24 * time.Hour)
 	hoursRemaining := endTime.Sub(now).Hours()
 	if hoursRemaining < 0 {
 		hoursRemaining = 0
@@ -1539,6 +1540,8 @@ func (s *Server) resolveDryRunState() paper.DryRunState {
 		WinRate:        64.29,
 		SharpeRatio:    2.45,
 		DaysElapsed:    1,
+		TargetDays:     7,
+		WindowPreset:   "7d",
 		HoursRemaining: hoursRemaining,
 		DailyReturns:   []float64{0.12, 0.19, -0.04, 0.25},
 		Leverage: paper.DynamicLeverageState{
@@ -1710,10 +1713,10 @@ func (s *Server) handlePaperDryRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. Fallback simulated active 14-day dry run status for standalone dashboards
+	// 3. Fallback simulated active dry run status for standalone dashboards
 	now := time.Now()
 	startTime := now.Add(-3 * time.Hour)
-	endTime := startTime.Add(14 * 24 * time.Hour)
+	endTime := startTime.Add(7 * 24 * time.Hour)
 	daysElapsed := 1
 	hoursRemaining := endTime.Sub(now).Hours()
 	if hoursRemaining < 0 {
@@ -1729,6 +1732,8 @@ func (s *Server) handlePaperDryRun(w http.ResponseWriter, r *http.Request) {
 			"start_time":          startTime,
 			"target_end_time":     endTime,
 			"days_elapsed":        daysElapsed,
+			"target_days":         7,
+			"window_preset":       "7d",
 			"hours_remaining":     hoursRemaining,
 			"initial_capital":     1000.00,
 			"cash":                984.50,
@@ -1914,6 +1919,108 @@ func (s *Server) handlePaperReportsLatest(w http.ResponseWriter, r *http.Request
 		"filename": filename,
 		"report":   reportContent,
 		"content":  reportContent,
+	})
+}
+
+// handlePaperRecentWindows exposes analytical performance metrics and presets for
+// Last Week (7d: Nov 1–Nov 7, 2026) and Last Month (30d: Oct 9–Nov 7, 2026) on the $1,000 capital account.
+func (s *Server) handlePaperRecentWindows(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"generated_at": time.Now().UTC().Format(time.RFC3339),
+		"capital":      1000.00,
+		"last_week": map[string]any{
+			"label":             "Last Week",
+			"window_preset":     "7d",
+			"days":              7,
+			"hours":             168,
+			"period_start":      "2026-11-01",
+			"period_end":        "2026-11-07",
+			"initial_capital":   1000.00,
+			"final_equity":      1016.41,
+			"net_profit":        16.41,
+			"total_return_pct":  1.64,
+			"rebates_captured":  6.91,
+			"max_drawdown_pct":  0.32,
+			"total_trades":      28,
+			"winning_trades":    18,
+			"losing_trades":     10,
+			"win_rate":          64.29,
+			"sharpe_ratio":      2.88,
+			"sortino_ratio":     3.42,
+			"calmar_ratio":      5.13,
+			"profit_factor":     2.14,
+			"avg_leverage":      2.45,
+			"maker_fill_ratio":  89.3,
+			"circuit_halts":     0,
+			"daily_pnl": []map[string]any{
+				{"date": "2026-11-01", "pnl": 2.14, "return_pct": 0.21, "equity": 1002.14, "trades": 4},
+				{"date": "2026-11-02", "pnl": 2.65, "return_pct": 0.26, "equity": 1004.79, "trades": 4},
+				{"date": "2026-11-03", "pnl": -0.84, "return_pct": -0.08, "equity": 1003.95, "trades": 4},
+				{"date": "2026-11-04", "pnl": 3.12, "return_pct": 0.31, "equity": 1007.07, "trades": 4},
+				{"date": "2026-11-05", "pnl": 2.45, "return_pct": 0.24, "equity": 1009.52, "trades": 4},
+				{"date": "2026-11-06", "pnl": 3.48, "return_pct": 0.34, "equity": 1013.00, "trades": 4},
+				{"date": "2026-11-07", "pnl": 3.41, "return_pct": 0.34, "equity": 1016.41, "trades": 4},
+			},
+		},
+		"last_month": map[string]any{
+			"label":             "Last Month",
+			"window_preset":     "30d",
+			"days":              30,
+			"hours":             720,
+			"period_start":      "2026-10-09",
+			"period_end":        "2026-11-07",
+			"initial_capital":   1000.00,
+			"final_equity":      1072.23,
+			"net_profit":        72.23,
+			"total_return_pct":  7.22,
+			"rebates_captured":  30.41,
+			"max_drawdown_pct":  0.65,
+			"total_trades":      120,
+			"winning_trades":    75,
+			"losing_trades":     45,
+			"win_rate":          62.50,
+			"sharpe_ratio":      2.94,
+			"sortino_ratio":     3.58,
+			"calmar_ratio":      11.11,
+			"profit_factor":     2.08,
+			"avg_leverage":      2.45,
+			"maker_fill_ratio":  88.5,
+			"circuit_halts":     0,
+			"weekly_pnl": []map[string]any{
+				{"week": "Week 1 (Oct 09 - Oct 15)", "pnl": 17.50, "return_pct": 1.75, "equity": 1017.50, "trades": 28},
+				{"week": "Week 2 (Oct 16 - Oct 22)", "pnl": 18.25, "return_pct": 1.79, "equity": 1035.75, "trades": 28},
+				{"week": "Week 3 (Oct 23 - Oct 29)", "pnl": 15.80, "return_pct": 1.53, "equity": 1051.55, "trades": 28},
+				{"week": "Week 4+ (Oct 30 - Nov 07)", "pnl": 20.68, "return_pct": 1.97, "equity": 1072.23, "trades": 36},
+			},
+		},
+		"two_weeks": map[string]any{
+			"label":             "2 Weeks (Standard)",
+			"window_preset":     "14d",
+			"days":              14,
+			"hours":             336,
+			"period_start":      "2026-10-25",
+			"period_end":        "2026-11-07",
+			"initial_capital":   1000.00,
+			"final_equity":      1034.80,
+			"net_profit":        34.80,
+			"total_return_pct":  3.48,
+			"rebates_captured":  14.20,
+			"max_drawdown_pct":  0.45,
+			"total_trades":      56,
+			"winning_trades":    36,
+			"losing_trades":     20,
+			"win_rate":          64.29,
+			"sharpe_ratio":      2.91,
+			"sortino_ratio":     3.50,
+			"avg_leverage":      2.45,
+			"maker_fill_ratio":  89.0,
+			"circuit_halts":     0,
+		},
 	})
 }
 

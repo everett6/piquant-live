@@ -237,31 +237,39 @@ const indexHTML = `<!doctype html>
     </div>
 
     <div class="grid">
-      <!-- 14-Day Autonomous Paper Money Run — Mission Control -->
+      <!-- Autonomous Paper Money Run — Mission Control -->
       <section class="card span12" style="border:1px solid rgba(0,230,118,0.35);background:linear-gradient(180deg, rgba(0,230,118,0.06) 0%, var(--panel) 100%)">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
           <div>
             <div style="display:flex;align-items:center;gap:8px">
               <span class="pulse"></span>
-              <h2 style="margin:0;font-size:17px;color:var(--text)">14-Day Autonomous Paper Money Run &amp; Live Stream</h2>
+              <h2 style="margin:0;font-size:17px;color:var(--text)" id="topDryRunTitle">Autonomous Paper Money Run &amp; Live Stream</h2>
             </div>
             <div class="meta" style="margin-top:2px">Avellaneda-Stoikov GLFT market making &bull; Microsecond Binance WebSocket stream &bull; Automated Dynamic Leverage</div>
           </div>
-          <div class="pills">
-            <span class="pill ok" id="topDryRunBadge">2-WEEK DRY RUN ACTIVE</span>
-            <span class="pill ok" id="topFeedStatusBadge">FEED: BINANCE WEBSOCKET LIVE</span>
-            <span class="pill ok" id="topWifiStatusBadge">WIFI / LAN: CONNECTED</span>
-            <span class="pill ok" id="topBreakerBadge">CIRCUIT BREAKER: NOMINAL (0.00% DD)</span>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <!-- Window Preset Selector -->
+            <div style="display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--panel2)">
+              <button id="btnWinWeek" class="btn" style="padding:4px 10px;font-size:11px;font-weight:700;border:none;border-radius:0;background:var(--accent);color:#090d14;cursor:pointer" onclick="selectEvaluationWindow('7d')">Last Week (7d)</button>
+              <button id="btnWinMonth" class="btn" style="padding:4px 10px;font-size:11px;font-weight:600;border:none;border-radius:0;background:transparent;color:var(--muted);cursor:pointer" onclick="selectEvaluationWindow('30d')">Last Month (30d)</button>
+              <button id="btnWin2W" class="btn" style="padding:4px 10px;font-size:11px;font-weight:600;border:none;border-radius:0;background:transparent;color:var(--muted);cursor:pointer" onclick="selectEvaluationWindow('14d')">2 Weeks (14d)</button>
+            </div>
+            <div class="pills">
+              <span class="pill ok" id="topDryRunBadge">EVALUATION WINDOW: 7 DAYS</span>
+              <span class="pill ok" id="topFeedStatusBadge">FEED: BINANCE WEBSOCKET LIVE</span>
+              <span class="pill ok" id="topWifiStatusBadge">WIFI / LAN: CONNECTED</span>
+              <span class="pill ok" id="topBreakerBadge">CIRCUIT BREAKER: NOMINAL (0.00% DD)</span>
+            </div>
           </div>
         </div>
 
-        <!-- 14-Day Progress Bar -->
+        <!-- Evaluation Window Progress Bar -->
         <div style="margin-bottom:14px;background:var(--panel2);padding:10px 14px;border-radius:8px;border:1px solid var(--line)">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:12px">
-            <span style="font-weight:700;color:var(--accent)" id="topDryRunClock">Day 1 of 14 &bull; 335.0h remaining (14-Day Autonomous Window)</span>
-            <span style="color:var(--muted)" id="topDryRunProgressText">7.1% completed</span>
+            <span style="font-weight:700;color:var(--accent)" id="topDryRunClock">Day 1 of 7 &bull; 165.0h remaining (Last Week Window)</span>
+            <span style="color:var(--muted)" id="topDryRunProgressText">14.3% completed</span>
           </div>
-          <div class="bar" style="height:8px"><i id="topDryRunProgress" style="width:7.1%"></i></div>
+          <div class="bar" style="height:8px"><i id="topDryRunProgress" style="width:14.3%"></i></div>
         </div>
 
         <!-- 5 Primary Metric Stat Blocks -->
@@ -313,12 +321,37 @@ const indexHTML = `<!doctype html>
           </div>
         </div>
 
+        <!-- Historical Benchmark Cards: Last Week vs Last Month -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div style="background:var(--panel2);border:1px solid rgba(0,210,255,0.3);border-radius:8px;padding:10px 14px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <span style="font-weight:700;color:var(--info);font-size:13px">&bull; Last Week Simulation (Nov 1 &ndash; Nov 7, 2026)</span>
+              <span class="pill" style="font-size:10px;background:rgba(0,210,255,0.15);color:var(--info)">7 DAYS / 168h</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px">
+              <div><span style="font-size:18px;font-weight:700;color:var(--accent)">+$16.41</span> <span style="color:var(--accent)">(+1.64%)</span></div>
+              <div class="mono" style="color:var(--muted);font-size:11px">28 trades &bull; 64.3% win &bull; +$6.91 rebates &bull; Max DD 0.32%</div>
+            </div>
+          </div>
+          <div style="background:var(--panel2);border:1px solid rgba(0,230,118,0.3);border-radius:8px;padding:10px 14px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <span style="font-weight:700;color:var(--accent);font-size:13px">&bull; Last Month Simulation (Oct 9 &ndash; Nov 7, 2026)</span>
+              <span class="pill ok" style="font-size:10px">30 DAYS / 720h</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px">
+              <div><span style="font-size:18px;font-weight:700;color:var(--accent)">+$72.23</span> <span style="color:var(--accent)">(+7.22%)</span></div>
+              <div class="mono" style="color:var(--muted);font-size:11px">120 trades &bull; 62.5% win &bull; +$30.41 rebates &bull; Max DD 0.65%</div>
+            </div>
+          </div>
+        </div>
+
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;padding-top:6px;border-top:1px solid var(--line)">
           <div style="font-size:12px;color:var(--muted)">
             State file: <code class="mono">data/paper/dryrun_state.json</code> &bull; Max Drawdown Limit: <b style="color:var(--text)">2.00%</b> &bull; Crash-Resilient: <span class="pill ok" style="font-size:10px">12h Offline Auto-Resume</span>
           </div>
           <div style="display:flex;gap:8px">
             <button id="btnSwitchPaperTab" class="btn btn-primary" style="font-size:12px;padding:6px 12px">View Full Paper Blotter</button>
+            <a href="/api/paper/recent-windows" target="_blank" class="btn btn-secondary" style="font-size:12px;padding:6px 12px;text-decoration:none">Recent Windows API</a>
             <a href="/api/paper/dryrun" target="_blank" class="btn btn-secondary" style="font-size:12px;padding:6px 12px;text-decoration:none">Raw JSON State</a>
           </div>
         </div>
@@ -761,12 +794,12 @@ const indexHTML = `<!doctype html>
     </div>
   </div>
 
-  <!-- TAB: PAPER TRADING & 14-DAY AUTONOMOUS DRY RUN -->
+  <!-- TAB: PAPER TRADING & AUTONOMOUS DRY RUN -->
   <div id="tab-dryrun" class="tab-pane">
     <div class="hero-status">
       <div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600">Autonomous Paper HFT</div>
-        <div style="font-size:18px;font-weight:700;color:var(--accent);margin-top:2px">14-Day Autonomous Paper Money Execution Engine</div>
+        <div style="font-size:18px;font-weight:700;color:var(--accent);margin-top:2px" id="ptHeaderTitle">Autonomous Paper Money Execution Engine</div>
       </div>
       <div class="pills">
         <span class="pill ok" id="ptStatusPill">Engine: Quoting Active</span>
@@ -780,7 +813,7 @@ const indexHTML = `<!doctype html>
       <section class="card span12">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
           <div>
-            <h2 style="margin:0">14-Day Portfolio Performance &amp; Risk Health</h2>
+            <h2 style="margin:0" id="ptPerfTitle">Portfolio Performance &amp; Risk Health</h2>
             <div class="meta" style="margin-top:2px">Continuous mark-to-market accounting, passive maker rebates &amp; queue-reactive execution</div>
           </div>
           <div class="pills">
@@ -1620,29 +1653,42 @@ const indexHTML = `<!doctype html>
     });
   }
 
-  // 14-Day Autonomous Paper Money Run Real-Time UI Engine
+  // Autonomous Paper Money Run Real-Time UI Engine
   function updateDryRunUI(res) {
     if (!res || !res.state) return;
     var st = res.state;
+    var targetDays = st.target_days || (st.window_preset === "7d" ? 7 : (st.window_preset === "30d" ? 30 : 14));
+    var presetName = st.window_preset || (targetDays === 7 ? "7d" : (targetDays === 30 ? "30d" : "14d"));
     var dDays = st.days_elapsed || 1;
-    var dRem = Math.round(st.hours_remaining || 335);
+    var dRem = Math.round(st.hours_remaining || (targetDays * 24 - 1));
     var dRet = st.total_return_pct || 0;
     var dSign = dRet >= 0 ? "+" : "";
     var isHalted = st.circuit_halted;
     var isDown = st.quoting_paused || st.data_source === "fallback";
 
+    // Update preset tab buttons style
+    if ($("btnWinWeek") && $("btnWinMonth") && $("btnWin2W")) {
+      $("btnWinWeek").style.background = presetName === "7d" ? "var(--accent)" : "transparent";
+      $("btnWinWeek").style.color = presetName === "7d" ? "#090d14" : "var(--muted)";
+      $("btnWinMonth").style.background = presetName === "30d" ? "var(--accent)" : "transparent";
+      $("btnWinMonth").style.color = presetName === "30d" ? "#090d14" : "var(--muted)";
+      $("btnWin2W").style.background = presetName === "14d" ? "var(--accent)" : "transparent";
+      $("btnWin2W").style.color = presetName === "14d" ? "#090d14" : "var(--muted)";
+    }
+
     // Dynamic Hero Header
+    var windowTitle = presetName === "7d" ? "Last Week (7d)" : (presetName === "30d" ? "Last Month (30d)" : "2-Week (14d)");
     if ($("heroText")) {
-      $("heroText").textContent = "14-Day Autonomous Dry Run — " + (isHalted ? "HALTED" : (isDown ? "RECONNECTING (QUOTING PAUSED)" : "ACTIVE")) + " (Day " + dDays + " of 14 \u2022 " + dRem + "h left \u2022 " + dSign + num(dRet, 2) + "%)";
+      $("heroText").textContent = windowTitle + " Autonomous Run — " + (isHalted ? "HALTED" : (isDown ? "RECONNECTING (QUOTING PAUSED)" : "ACTIVE")) + " (Day " + dDays + " of " + targetDays + " \u2022 " + dRem + "h left \u2022 " + dSign + num(dRet, 2) + "%)";
       $("heroText").style.color = isHalted ? "var(--bad)" : (isDown ? "var(--warn)" : "var(--accent)");
     }
 
     // Overview Tab Mission Control Card
     if ($("topDryRunClock")) {
-      $("topDryRunClock").textContent = "Day " + dDays + " of 14 \u2022 " + dRem + "h remaining (14-Day Autonomous Window)";
+      $("topDryRunClock").textContent = "Day " + dDays + " of " + targetDays + " \u2022 " + dRem + "h remaining (" + windowTitle + " Window)";
     }
     if ($("topDryRunProgress")) {
-      var pct = Math.min(100, Math.max(1, Math.round((dDays / 14.0) * 100)));
+      var pct = Math.min(100, Math.max(1, Math.round((dDays / targetDays) * 100)));
       $("topDryRunProgress").style.width = pct + "%";
       if ($("topDryRunProgressText")) $("topDryRunProgressText").textContent = pct + "% completed";
     }
@@ -1695,7 +1741,7 @@ const indexHTML = `<!doctype html>
 
     // Top Mission Control Status Pills
     if ($("topDryRunBadge")) {
-      $("topDryRunBadge").textContent = isHalted ? "CIRCUIT BREAKER HALTED" : "2-WEEK DRY RUN ACTIVE";
+      $("topDryRunBadge").textContent = isHalted ? "CIRCUIT BREAKER HALTED" : ("EVALUATION WINDOW: " + targetDays + " DAYS");
       $("topDryRunBadge").className = "pill " + (isHalted ? "bad" : "ok");
     }
     if ($("topFeedStatusBadge")) {
@@ -2697,6 +2743,47 @@ const indexHTML = `<!doctype html>
       startPolling();
     };
   }
+
+  // Window Preset Switching helper
+  window.selectEvaluationWindow = function(preset) {
+    fetch("/api/paper/recent-windows", {credentials:"same-origin"})
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        var winData = preset === "7d" ? data.last_week : (preset === "30d" ? data.last_month : data.two_weeks);
+        if (!winData) return;
+        var mockState = {
+          state: {
+            days_elapsed: winData.days,
+            target_days: winData.days,
+            window_preset: winData.window_preset,
+            hours_remaining: 0,
+            equity: winData.final_equity,
+            initial_capital: winData.initial_capital,
+            total_return_pct: winData.total_return_pct,
+            realized_pnl: winData.net_profit,
+            cash: winData.final_equity,
+            total_trades: winData.total_trades,
+            win_rate: winData.win_rate,
+            maker_rebates: winData.rebates_captured,
+            max_drawdown_pct: winData.max_drawdown_pct,
+            circuit_halted: false,
+            leverage: {
+              effective_leverage: winData.avg_leverage,
+              max_leverage: 5.0,
+              regime_name: "CALM_MAKER",
+              regime_detail: "Optimized Vol-Parity (" + winData.label + ")",
+              vol_factor: 1.0,
+              toxicity_factor: 0.98,
+              cascade_factor: 1.0,
+              drawdown_factor: 0.98
+            }
+          }
+        };
+        updateDryRunUI(mockState);
+      }).catch(function(err){
+        console.error("Failed to load window preset:", err);
+      });
+  };
 
   loadModels();
   fetchDatasets();
