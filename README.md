@@ -328,25 +328,81 @@ PiQuant provides a comprehensive quantitative trading, statistical arbitrage, an
   - `ToxicFillRatio`: Percentage of fills suffering adverse 1s markout $< -2.0\text{ bps}$.
 - 100% zero heap allocations across `RecordFill`, `OnTick`, and `Snapshot`.
 
-### 10. Dual-Pi Inter-Node Binary Protocol (`PQLK`) & Asymmetric Work-Stealing Delegation (`internal/cluster/`)
-- **64-Byte Cache-Line Aligned Binary Wire Protocol (`internal/cluster/fastlink.go`)**:
-  - `PQLK` wire framing (Magic `0x50514C4B`, Version `1`) operating over a fixed 64-byte payload (`[64]byte`).
-  - Naturally aligned field layout: `Magic` (4B), `Version` (1B), `FrameType` (1B), `Flags` (2B), `SeqNum` (8B), `SendTimestampNs` (8B), `AckTimestampNs` (8B), `CPUUtilPermille` (2B), `MemAvailMB` (2B), `TempDeciC` (2B), `ActiveTasks` (2B), `PayloadFloat1` (8B), `PayloadFloat2` (8B), `HMACTag64` (8B).
-  - Built-in keyed SipHash-2-4 64-bit authenticating tag (`HMACTag64`) guarding link integrity.
-  - Microsecond NTP 4-timestamp RTT estimator and RFC 3550 EWMA jitter tracking.
-  - Socket low-latency tuning: `TCP_NODELAY`, `SO_KEEPALIVE` (5s), and 256 KiB socket read/write buffers.
-  - Zero-allocation hot path: Encode (`2.56 ns/op, 0 B/op, 0 allocs/op`) & Decode (`2.46 ns/op, 0 B/op, 0 allocs/op`) delivering **143x–163x speedup vs standard JSON**.
-- **Asymmetric Dual-Pi Task Delegation & Dynamic Failover Scheduler (`internal/cluster/delegator.go`)**:
-  - **Pi 5 Primary (`RoleEngine`, `arm64` Cortex-A76 @ 2.4GHz, 8GB RAM)**: Dedicated to ultra-low-latency hot path (`TaskMarketIngest`, `TaskL2OrderBook`, `TaskSIMDFeatures`, `TaskHFTQuoting`, `TaskMicrostructureAlpha`). Never offloaded.
-  - **Pi 3B Auxiliary (`RoleDashboard`, `armv7` Cortex-A53 @ 1.2GHz, 1GB RAM)**: Eligible for delegated background/auxiliary workloads when link is healthy (`RTT < 10ms`) and Pi 3B has headroom (`CPU < 70%`, `MemAvail > 200MB`, `Temp < 75°C`):
-    - `TaskWebUIDashboard` (Web UI session & HTML rendering)
-    - `TaskTelemetryAggregation` (System & peer health rollup)
-    - `TaskDailyTearSheet` (EOD Markdown/JSON reporting)
-    - `TaskArchiveVerification` (Background `.pqbin` checksum verification)
-    - `TaskParameterSweepShard` (Walk-forward grid evaluation shard)
-  - **Dynamic Failover & Thermal Shedding**:
-    - Automatic $O(1)$ failback to Pi 5 (`STANDALONE_PI5_FAILOVER`) if Pi 3B disconnects or memory drops below 180MB.
-    - Aggressive thermal shedding to Pi 3B when Pi 5 exceeds 75°C.
-    - Zero allocations across hot paths (`DecideTarget` `2.93 ns/op, 0 B/op`, `Snapshot` `6.71 ns/op, 0 B/op`).
+### 11. High-Resolution 2-Year Microsecond Tick-by-Tick Simulation Engine (`cmd/piquant/backtest_ticks.go`)
+- Replays actual microsecond trade ticks directly into PiQuant's `EventArena`, `SPSCRing`, `L2OrderBook`, `HawkesOnlineTracker`, `VPIN`, `KylesLambda`, `GLFT`, `FundingCarry`, and `TCAMarkoutTracker`.
+- Replays true order queue dynamics (FIFO queue priority, queue survival probability, adverse selection on market orders, and post-fill markouts at +1s, +5s, +10s).
+- Run high-resolution 2-year simulation:
+  ```bash
+  piquant backtest-ticks --symbol BTCUSDT --capital 1000 --months 24
+  ```
+- Evaluates VIP Maker Rebate (-0.50 bps) capture vs Taker fee hedging costs, volatility-adjusted fractional Kelly leverage (strictly bounded to 0.5x–3.0x), and generates verified Markdown/JSON performance reports in `data/reports/tick_simulation_2yr.md`.
+
+---
+
+## Standalone Single-Pi 5 Mode (`cluster_mode: pi5_only`)
+
+> **You do NOT need a Raspberry Pi 3B right now.**
+> A single Raspberry Pi 5 has 4 high-performance Cortex-A76 cores and easily runs **both** the quantitative quoting engine and the web dashboard concurrently with zero configuration.
+
+```bash
+# Start standalone mode on a single Pi 5:
+piquant dry-run --capital 1000 --addr :8080
+```
+- Cores 0 & 1 handle Linux OS housekeeping, web dashboard HTTP serving, and telemetry.
+- Cores 2 & 3 run the isolated real-time market data ingestion, Hawkes point-process, VPIN toxicity, and GLFT quoting loops.
+
+---
+
+## Headless Setup (No Monitor Required)
+
+To run your Raspberry Pi 5 24/7 in a closet or desk without a monitor, keyboard, or mouse:
+
+1. **Flash OS**: Flash **Raspberry Pi OS Lite (64-bit)** via Raspberry Pi Imager. Set hostname (`piquant.local`), enable SSH, and set your WiFi credentials under OS customization settings (`Ctrl+Shift+X`).
+2. **Connect via SSH**:
+   ```bash
+   ssh everett@piquant.local
+   ```
+3. **Prevent Sleep, CPU Throttling & WiFi Spikes (`/boot/firmware/config.txt`)**:
+   Add to `/boot/firmware/config.txt`:
+   ```ini
+   arm_boost=1
+   temp_limit=80
+   ```
+   Apply performance governor and disable WiFi power-saving:
+   ```bash
+   echo "performance" | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+   sudo iwconfig wlan0 power off
+   ```
+4. **Deploy Autonomous 24/7 Background Service (`piquant-dryrun.service`)**:
+   ```bash
+   sudo cp deploy/piquant-dryrun.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now piquant-dryrun.service
+   ```
+   The engine now starts automatically on boot, restarts on failure, and serves the dashboard continuously at `http://piquant.local:8080`.
+
+---
+
+## API Keys & Security Architecture: Public vs Live Capital
+
+### Does having an API key make market data faster?
+**NO.** Public market data WebSockets (Binance `data-stream.binance.vision:9443` and Bybit Linear WebSocket) broadcast to all participants simultaneously on the same multicast push engine. An API key does not give your packets higher physical priority.
+- **What API Keys Provide:** Private order placement, order cancellation, and account balance queries with dedicated rate limit weights.
+
+### Zero-API-Key Paper Dry Run
+PiQuant requires **ZERO API keys** to run autonomous paper money dry runs (`piquant dry-run`) and historical backtests (`piquant backtest-ticks`, `piquant backtest-history`). It runs out of the box on live public exchange feeds.
+
+### Security Blueprint for Live Real-Money Trading
+When connecting real exchange accounts:
+1. **Exchange Key Permissions:**
+   - [x] Enable Reading
+   - [x] Enable Spot & Margin Trading (or Futures Trading)
+   - [ ] **NEVER Enable Withdrawals** (Unchecked by default. Never enable withdrawal permissions on trading API keys.)
+2. **IP Whitelisting:** Lock keys to your static home IP or VPS IP address.
+3. **Sub-Accounts:** Always trade on an isolated sub-account funded with test capital ($10–$50).
+4. **Encrypted Storage:** Use `piquant setup` to store keys in `~/.config/piquant/secrets` with strict `0600` root-only read permissions.
+
+For the complete quantitative and mathematical architecture guide, see [docs/TRADING_EXPLAINED.md](docs/TRADING_EXPLAINED.md).
+
 
 

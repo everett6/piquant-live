@@ -56,6 +56,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/paper/reports", s.handlePaperReports)
 	s.mux.HandleFunc("/api/paper/reports/latest", s.handlePaperReportsLatest)
 	s.mux.HandleFunc("/api/paper/historical-sim", s.handlePaperHistoricalSim)
+	s.mux.HandleFunc("/api/paper/tick-sim", s.handlePaperTickSim)
 }
 
 // handleManifest serves the installable Progressive Web App (PWA) manifest.
@@ -1954,4 +1955,32 @@ func (s *Server) handlePaperHistoricalSim(w http.ResponseWriter, r *http.Request
 		"mode_3_fixed_1k_withdrawal":  res3,
 	}
 	writeJSON(w, http.StatusOK, payload)
+}
+
+// handlePaperTickSim exposes the verified 2-year microsecond tick simulation report.
+func (s *Server) handlePaperTickSim(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	reportCandidates := []string{
+		filepath.Join(s.resolveReportsDir(), "tick_simulation_2yr.json"),
+		filepath.Join("data", "reports", "tick_simulation_2yr.json"),
+		filepath.Join("..", "..", "data", "reports", "tick_simulation_2yr.json"),
+	}
+
+	for _, jsonPath := range reportCandidates {
+		if data, err := os.ReadFile(jsonPath); err == nil {
+			var payload any
+			if err := json.Unmarshal(data, &payload); err == nil {
+				writeJSON(w, http.StatusOK, payload)
+				return
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+		"error": "tick simulation report not generated yet. Run: piquant backtest-ticks",
+	})
 }

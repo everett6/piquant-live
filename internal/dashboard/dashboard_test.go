@@ -921,3 +921,35 @@ func TestHistoricalSimEndpoint(t *testing.T) {
 		t.Fatalf("missing mode_3_fixed_1k_withdrawal in payload: %v", payload)
 	}
 }
+
+func TestTickSimEndpoint(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	// 1. Unauthenticated request should be rejected
+	rec401 := get(t, s.Handler(), http.MethodGet, "/api/paper/tick-sim", nil, nil)
+	if rec401.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated GET /api/paper/tick-sim, got %d", rec401.Code)
+	}
+
+	// 2. Authenticated request
+	authHdr := map[string]string{"Authorization": "Bearer " + peerToken}
+	rec200 := get(t, s.Handler(), http.MethodGet, "/api/paper/tick-sim", authHdr, nil)
+	if rec200.Code != http.StatusOK {
+		t.Fatalf("GET /api/paper/tick-sim status = %d: %s", rec200.Code, rec200.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec200.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode tick sim JSON: %v", err)
+	}
+
+	if payload["symbol"] != "BTCUSDT" {
+		t.Errorf("expected symbol BTCUSDT, got %v", payload["symbol"])
+	}
+	if _, ok := payload["final_equity"].(float64); !ok {
+		t.Errorf("expected final_equity in payload")
+	}
+	if _, ok := payload["monthly_breakdown"].([]any); !ok {
+		t.Errorf("expected monthly_breakdown in payload")
+	}
+}
