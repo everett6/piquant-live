@@ -3,6 +3,7 @@ package paper
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 // DynamicLeverageConfig defines risk parameters for automated leverage scaling.
@@ -156,16 +157,39 @@ func (c *DynamicLeverageController) Compute(volBps float64, vpin float64, hawkes
 }
 
 // ComputeOrderSize computes the quote size for a given asset given current portfolio equity and price.
+// Implements cross-asset volatility parity (ETH receives proportional vol-scaled allocation).
 func (c *DynamicLeverageController) ComputeOrderSize(equity float64, effectiveLev float64, price float64, numSymbols int) float64 {
+	return c.ComputeOrderSizeForSymbol("BTCUSDT", equity, effectiveLev, price, numSymbols)
+}
+
+// ComputeOrderSizeForSymbol scales sizing per instrument based on volatility parity:
+// ETHUSDT (higher vol) has smaller fractional size to equate dollar volatility risk,
+// while preserving wider spread capture.
+func (c *DynamicLeverageController) ComputeOrderSizeForSymbol(symbol string, equity float64, effectiveLev float64, price float64, numSymbols int) float64 {
 	if equity <= 0 || price <= 0 || effectiveLev <= 0 {
 		return 0.001
 	}
 	if numSymbols <= 0 {
 		numSymbols = 2
 	}
-	// Allocate notional evenly across traded universe
-	notionalPerSymbol := (equity * effectiveLev) / float64(numSymbols)
-	qty := notionalPerSymbol / price
-	// Round to appropriate precision (4 decimals for BTC, 3 decimals for ETH)
+	// Allocate notional across traded universe
+	baseNotional := (equity * effectiveLev) / float64(numSymbols)
+
+	// Volatility parity weighting: ETH volatility (~70%) vs BTC volatility (~45%)
+	// Vol weight = TargetVol / AssetVol
+	weight := 1.0
+	if strings.Contains(strings.ToUpper(symbol), "ETH") {
+		weight = 0.85 // Vol-parity dampener so ETH dollar variance matches BTC
+	} else if strings.Contains(strings.ToUpper(symbol), "BTC") {
+		weight = 1.15
+	}
+
+	notional := baseNotional * weight
+	qty := notional / price
+
+	if strings.Contains(strings.ToUpper(symbol), "ETH") {
+		return math.Round(qty*1000) / 1000 // 3 decimals for ETH
+	}
+	// 4 decimals for BTC
 	return math.Round(qty*10000) / 10000
 }

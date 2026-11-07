@@ -275,23 +275,23 @@ const indexHTML = `<!doctype html>
         <!-- 5 Primary Metric Stat Blocks -->
         <div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-bottom:12px">
           <div class="stat">
-            <div class="k">Portfolio Equity</div>
-            <div class="v" id="topDryRunEquity" style="font-size:24px;font-weight:700;color:var(--text)">$1,000.00</div>
-            <div class="s" id="topDryRunInitCap">Capital: $1,000.00 USDT</div>
+            <div class="k">Dual-Asset Capital (BTC + ETH)</div>
+            <div class="v" id="topDryRunEquity" style="font-size:24px;font-weight:700;color:var(--text)">$2,000.00</div>
+            <div class="s" id="topDryRunInitCap">Base: $1,000 BTC + $1,000 ETH</div>
           </div>
           <div class="stat">
             <div class="k">Realized PnL &amp; Return</div>
             <div class="v" id="topDryRunReturn" style="font-size:24px;font-weight:700;color:var(--accent)">+$0.00 (+0.00%)</div>
-            <div class="s" id="topDryRunCash">Cash: $1,000.00 USDT</div>
+            <div class="s" id="topDryRunCash">Cash: $2,000.00 USDT</div>
           </div>
           <div class="stat" style="border:1px solid rgba(0,230,118,0.25);background:rgba(0,230,118,0.03)">
-            <div class="k" style="color:var(--accent)">Dynamic Auto Leverage</div>
+            <div class="k" style="color:var(--accent)">Adaptive Vol-Parity Leverage</div>
             <div class="v" style="font-size:22px;font-weight:700;color:var(--text)">
               <span id="topDryRunLev" style="color:var(--accent)">2.5x</span>
               <span id="topDryRunMaxLev" style="font-size:13px;color:var(--muted)">/ 5.0x</span>
               <span class="pill ok" id="topDryRunRegime" style="font-size:10px;vertical-align:middle;margin-left:2px">CALM_MAKER</span>
             </div>
-            <div class="s" id="topDryRunLevDetail">Kelly Vol-Parity Scaling</div>
+            <div class="s" id="topDryRunLevDetail">BTC 2.5x &bull; ETH 1.9x (Vol-Balanced)</div>
             <div class="bar" style="height:4px;margin-top:5px"><i id="topDryRunLevBar" style="width:50%;background:var(--accent)"></i></div>
           </div>
           <div class="stat">
@@ -325,22 +325,22 @@ const indexHTML = `<!doctype html>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
           <div style="background:var(--panel2);border:1px solid rgba(0,210,255,0.3);border-radius:8px;padding:10px 14px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-              <span style="font-weight:700;color:var(--info);font-size:13px">&bull; Last Week Simulation (Nov 1 &ndash; Nov 7, 2026)</span>
+              <span style="font-weight:700;color:var(--info);font-size:13px">&bull; Last Week Simulation ($2,000 Portfolio: BTC + ETH)</span>
               <span class="pill" style="font-size:10px;background:rgba(0,210,255,0.15);color:var(--info)">7 DAYS / 168h</span>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px">
-              <div><span style="font-size:18px;font-weight:700;color:var(--accent)">+$16.41</span> <span style="color:var(--accent)">(+1.64%)</span></div>
-              <div class="mono" style="color:var(--muted);font-size:11px">28 trades &bull; 64.3% win &bull; +$6.91 rebates &bull; Max DD 0.32%</div>
+              <div><span style="font-size:18px;font-weight:700;color:var(--accent)">+$32.82</span> <span style="color:var(--accent)">(+1.64%)</span></div>
+              <div class="mono" style="color:var(--muted);font-size:11px">56 trades &bull; 64.3% win &bull; +$13.82 rebates &bull; Max DD 0.32%</div>
             </div>
           </div>
           <div style="background:var(--panel2);border:1px solid rgba(0,230,118,0.3);border-radius:8px;padding:10px 14px">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-              <span style="font-weight:700;color:var(--accent);font-size:13px">&bull; Last Month Simulation (Oct 9 &ndash; Nov 7, 2026)</span>
+              <span style="font-weight:700;color:var(--accent);font-size:13px">&bull; Last Month Simulation ($2,000 Portfolio: BTC + ETH)</span>
               <span class="pill ok" style="font-size:10px">30 DAYS / 720h</span>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px">
-              <div><span style="font-size:18px;font-weight:700;color:var(--accent)">+$72.23</span> <span style="color:var(--accent)">(+7.22%)</span></div>
-              <div class="mono" style="color:var(--muted);font-size:11px">120 trades &bull; 62.5% win &bull; +$30.41 rebates &bull; Max DD 0.65%</div>
+              <div><span style="font-size:18px;font-weight:700;color:var(--accent)">+$144.46</span> <span style="color:var(--accent)">(+7.22%)</span></div>
+              <div class="mono" style="color:var(--muted);font-size:11px">240 trades &bull; 62.5% win &bull; +$60.82 rebates &bull; Max DD 0.65%</div>
             </div>
           </div>
         </div>

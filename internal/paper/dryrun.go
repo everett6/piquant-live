@@ -815,8 +815,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	levState := e.leverageCtrl.Compute(spreadBps, liveVpin, hkRatio, ddPct, e.state.CircuitHalted)
 	e.state.Leverage = levState
 
-	// Dynamic institutional order sizing bounded by effective leverage and capital
-	qty := e.leverageCtrl.ComputeOrderSize(e.state.Equity, levState.EffectiveLeverage, midPrice, len(e.cfg.Symbols))
+	// Dynamic institutional order sizing bounded by effective leverage and capital (symbol-specific vol parity)
+	qty := e.leverageCtrl.ComputeOrderSizeForSymbol(symbol, e.state.Equity, levState.EffectiveLeverage, midPrice, len(e.cfg.Symbols))
 	if qty <= 0 {
 		qty = 0.001
 	}
