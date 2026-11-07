@@ -269,3 +269,62 @@ PiQuant doctor: OK (all checks passed)
   Memory Lock:      Unlimited (mlockall enabled)
   Secrets File:     /etc/piquant/secrets (mode 0600)
 ```
+
+---
+
+## Complete Institutional Quantitative Model Suite
+
+PiQuant provides a comprehensive quantitative trading, statistical arbitrage, and microstructure risk framework engineered specifically for zero-allocation ARM64 Cortex-A76 performance:
+
+### 1. Bybit V5 Dual-Venue Market Streaming (`internal/paper/bybit_stream.go`)
+- Ingests high-frequency Bybit V5 Linear WebSocket feeds (`orderbook.50.BTCUSDT`, `publicTrade.BTCUSDT`) concurrently with Binance.
+- Custom zero-allocation byte scanner (`FastExtractBybitOrderbook`, `FastExtractBybitTrades`) parsing JSON payload byte streams directly into ring buffer memory without heap escaping.
+
+### 2. Cross-Venue Lead-Lag Arbitrage Engine (`internal/models/common/cross_venue_leadlag.go`)
+- High-frequency price discovery monitor across Binance (leader) and Bybit (follower).
+- Computes Hasbrouck Information Share and tick-lead correlation via recursive online innovation covariance tracking, predicting immediate follower price drift $\Delta \hat{P}_{\text{follower}}$.
+
+### 3. Dynamic Inventory Aging & Alpha-Decay Liquidation Policy (`internal/models/common/inventory_decay.go`)
+- Multi-tier inventory decay policy applying quadratic reservation skew penalties $r_{\text{aging}}(q, \tau)$ as position holding duration increases.
+- Automatic transition through `Nominal`, `Elevated Decay`, and `Critical Liquidation` states to eliminate stale inventory risk.
+
+### 4. Volume-Synchronized Probability of Toxicity (VPIN) (`internal/models/common/vpin.go`)
+- Easley-López de Prado-O'Hara (2012) volume-clock toxicity estimator tracking order imbalance in constant-volume buckets ($V = 5.0\text{ BTC}$, $N = 50$).
+- Normal CDF percentile mapping with Bulk Volume Classification (BVC) and dynamic quote widening (`AdjustQuote`) to preempt adverse selection shocks.
+
+### 5. Kyle's Lambda & Market Impact Sizer (`internal/models/common/kyles_lambda.go`)
+- Kyle (1985) microstructural price impact coefficient $\lambda_{\text{Kyle}} = \frac{\operatorname{Cov}(\Delta P, Q_{\text{signed}})}{\operatorname{Var}(Q_{\text{signed}}) + \epsilon}$ tracked via recursive online EWMA covariance.
+- Sizes passive maker quotes and aggressive taker orders under an explicit adverse selection impact budget in $0\text{ B/op}$.
+
+### 6. Dynamic Risk Safeguard & Circuit Breaker Engine (`internal/paper/circuit_breaker.go`)
+- 4-state finite risk state machine (`Normal`, `Warning`, `ReduceOnly`, `Tripped`).
+- Real-time gating on portfolio drawdown, inventory exposure caps, consecutive loss streaks, spread blowout ratios, and toxicity alerts with automatic cooldown recovery.
+
+### 7. Regime-Switching Adaptive Meta-Ensemble (`internal/models/common/adaptive_ensemble.go`)
+- Online Multiplicative Weights / Discounted Hedge Meta-Learner combining 6 distinct alpha families:
+  1. `glft_queue`: Queue-reactive L1 imbalance & microprice deviation.
+  2. `obi_momentum`: Multi-horizon order flow imbalance momentum.
+  3. `lead_lag`: Cross-venue lead-lag innovation signal.
+  4. `mean_reversion`: Microprice deviation and short-term return reversal.
+  5. `vpin_defense`: Order flow toxicity adverse selection damping.
+  6. `hawkes_cascade`: Self-exciting point-process cascade momentum.
+- Classifies microstructure state into 3 regimes (`RegimeLowVolRange`, `RegimeTrending`, `RegimeHighVolCascade`) based on realized volatility, jump ratio, and Hawkes branching ratio.
+- Maintains per-regime discounted expert weights updated online via exponential updates:
+  $$w_{r,i}^{(t+1)} = \frac{w_{r,i}^{(t)\gamma} \cdot \exp(\eta \cdot R_{i,t})}{Z_t}$$
+- Zero-allocation hot paths for `Predict`, `UpdateEdge`, `Regime`, and `TopExpert`.
+
+### 8. Perpetual Funding Rate & Carry Harvesting Engine (`internal/models/common/funding_carry.go`)
+- Tracks spot-perpetual premium divergence $P_{\text{premium}} = \frac{P_{\text{perp}} - P_{\text{spot}}}{P_{\text{spot}}}$ with exchange damping clamp $\text{clamp}(I - P, -0.05\%, +0.05\%)$.
+- Predicts 8h EWMA funding rate $F_{\text{pred}}$ and annualized carry yield APR %.
+- Computes funding-aware reservation price skew (`FundingSkewBps(inventory, timeToSettlementSec)`) that harvests positive funding rebates while aggressively penalizing inventory held on the paying side as settlement approaches.
+
+### 9. Post-Trade TCA & Multi-Horizon Markout Engine (`internal/paper/tca_markout.go`)
+- Fixed-capacity ring buffer (`[256]PendingMarkout`) evaluating post-fill execution quality at **+1s**, **+5s**, **+10s**, and **+60s** horizons:
+  $$\text{Markout}_{\tau} = \operatorname{side} \cdot \frac{\text{Mid}_{t+\tau} - \text{FillPrice}_t}{\text{FillPrice}_t} \times 10,000\text{ bps}$$
+- Decomposes execution performance into:
+  - `MeanSpreadCaptureBps`: Half-spread captured at fill time.
+  - `MeanMarkout1sBps`, `MeanMarkout5sBps`, `MeanMarkout10sBps`, `MeanMarkout60sBps`.
+  - `AdverseSelectionBps`: Execution edge degradation from fill to +10s.
+  - `ToxicFillRatio`: Percentage of fills suffering adverse 1s markout $< -2.0\text{ bps}$.
+- 100% zero heap allocations across `RecordFill`, `OnTick`, and `Snapshot`.
+

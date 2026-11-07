@@ -151,6 +151,7 @@ type DryRunEngine struct {
 	vpinCalc      *common.VPINCalculator
 	riskSafeguard *CircuitBreaker
 	kyleEst       *common.KylesLambdaEstimator
+	tcaTracker    *TCAMarkoutTracker
 	sor           common.SmartOrderRouter
 
 	// Online tick tracking
@@ -199,6 +200,7 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		vpinCalc:      common.NewVPINCalculator(5.0, 50),
 		riskSafeguard: NewCircuitBreaker(DefaultCircuitBreakerConfig()),
 		kyleEst:       common.NewKylesLambdaEstimator(0.05, cfg.KylesLambda),
+		tcaTracker:    NewTCAMarkoutTracker(),
 		sor:           common.NewSmartOrderRouter(),
 		activeOrders:  make(map[string][]*ActiveMakerOrder),
 		recentFills:   make([]TradeRecord, 0, 32),
@@ -503,6 +505,11 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 		e.state.TotalReturnPct = (e.state.Equity - e.state.InitialCapital) / e.state.InitialCapital * 100.0
 	}
 	e.mu.Unlock()
+
+	// Update TCA multi-horizon markouts on incoming live market tick
+	if e.tcaTracker != nil {
+		e.tcaTracker.OnTick(symbol, price, now.UnixNano())
+	}
 
 	// 2. Microstructure Circuit Breaker Check
 	if e.state.CircuitHalted {
@@ -831,6 +838,17 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 	if e.riskSafeguard != nil {
 		e.riskSafeguard.OnFill(realizedPnL, pos.Size)
 	}
+	if e.tcaTracker != nil {
+		sideInt := int8(1)
+		if side == "SELL" {
+			sideInt = -1
+		}
+		mid := pos.MarkPrice
+		if mid <= 0 {
+			mid = orderPrice
+		}
+		e.tcaTracker.RecordFill(uint64(e.state.TotalTrades), symbol, sideInt, orderPrice, mid, time.Now().UnixNano())
+	}
 
 	e.state.RealizedPnL += realizedPnL
 	e.state.TotalTrades++
@@ -931,6 +949,13 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 	if e.riskSafeguard != nil {
 		e.riskSafeguard.OnFill(realizedPnL, pos.Size)
 	}
+	if e.tcaTracker != nil {
+		sideInt := int8(1)
+		if side == "SELL" {
+			sideInt = -1
+		}
+		e.tcaTracker.RecordFill(uint64(e.state.TotalTrades), symbol, sideInt, execPrice, midPrice, time.Now().UnixNano())
+	}
 
 	e.state.RealizedPnL += realizedPnL
 	e.state.TotalTrades++
@@ -996,4 +1021,9 @@ func (e *DryRunEngine) KylesLambda() *common.KylesLambdaEstimator {
 // VPIN returns the online VPIN toxicity estimator.
 func (e *DryRunEngine) VPIN() *common.VPINCalculator {
 	return e.vpinCalc
+}
+
+// TCAMarkout returns the institutional post-trade transaction cost analysis tracker.
+func (e *DryRunEngine) TCAMarkout() *TCAMarkoutTracker {
+	return e.tcaTracker
 }

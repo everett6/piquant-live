@@ -338,6 +338,9 @@ const indexHTML = `<!doctype html>
             <span class="pill" id="blotterKalmanPill">BTC&rarr;ETH &beta;: 1.18 (Z = -0.82)</span>
             <span class="pill ok" id="blotterLeadLagPill">Cross-Venue Lead: Binance &rarr; Bybit (+2.6 bps)</span>
             <span class="pill ok" id="blotterAgingPill">Inventory Age: 18s (Decay: 0.7 bps)</span>
+            <span class="pill ok" id="blotterAdaptiveEnsemblePill">Regime: LOW_VOL (Top: glft_queue 17%)</span>
+            <span class="pill ok" id="blotterTcaPill">TCA Markout (1s/10s): +0.80 / +1.20 bps</span>
+            <span class="pill ok" id="blotterFundingCarryPill">Funding Carry: +1.00 bps (10.9% APR)</span>
           </div>
         </div>
         <div class="stats" style="grid-template-columns:repeat(6,1fr);margin-bottom:12px">
@@ -502,6 +505,8 @@ const indexHTML = `<!doctype html>
                 <option value="cross_venue_leadlag">Cross-Venue Lead-Lag Arbitrage (Binance/Bybit)</option>
                 <option value="vpin_toxicity">Online VPIN Toxicity Filter (Volume-Clock)</option>
                 <option value="kyles_lambda">Kyle's Lambda &amp; Market Impact Sizer</option>
+                <option value="adaptive_meta_ensemble">Regime-Switching Adaptive Meta-Ensemble</option>
+                <option value="funding_carry">Perpetual Funding Rate &amp; Carry Harvesting</option>
               </select>
               <select id="exp-model" style="display:none" aria-hidden="true">
                 <option value="perp_liquidation_reversion">Perp Basis &amp; Liquidation Cascade Reversion</option>
@@ -513,6 +518,8 @@ const indexHTML = `<!doctype html>
                 <option value="cross_venue_leadlag">Cross-Venue Lead-Lag Arbitrage (Binance/Bybit)</option>
                 <option value="vpin_toxicity">Online VPIN Toxicity Filter (Volume-Clock)</option>
                 <option value="kyles_lambda">Kyle's Lambda &amp; Market Impact Sizer</option>
+                <option value="adaptive_meta_ensemble">Regime-Switching Adaptive Meta-Ensemble</option>
+                <option value="funding_carry">Perpetual Funding Rate &amp; Carry Harvesting</option>
               </select>
             </div>
 
@@ -660,6 +667,8 @@ const indexHTML = `<!doctype html>
               <option value="cross_venue_leadlag">Cross-Venue Lead-Lag Arbitrage (Binance/Bybit)</option>
               <option value="vpin_toxicity">Online VPIN Toxicity Filter (Volume-Clock)</option>
               <option value="kyles_lambda">Kyle's Lambda &amp; Market Impact Sizer</option>
+              <option value="adaptive_meta_ensemble">Regime-Switching Adaptive Meta-Ensemble</option>
+              <option value="funding_carry">Perpetual Funding Rate &amp; Carry Harvesting</option>
             </select>
           </div>
           <div class="form-group">
@@ -1200,6 +1209,27 @@ const indexHTML = `<!doctype html>
           $("blotterAgingPill").textContent = "Inventory Age: " + Math.round(ia.holding_age_sec || 0) + "s (Decay: " + num(ia.decay_penalty_bps || 0, 1) + " bps)";
           var ageCls = (ia.holding_age_sec > 60) ? "bad" : ((ia.holding_age_sec > 30) ? "warn" : "ok");
           $("blotterAgingPill").className = "pill " + ageCls;
+        }
+        if ($("blotterAdaptiveEnsemblePill") && d.adaptive_ensemble) {
+          var ae = d.adaptive_ensemble;
+          var rName = ae.regime || "LOW_VOL";
+          var topExp = ae.top_expert || "glft_queue";
+          var topPct = Math.round((ae.top_weight || 0.167) * 100);
+          $("blotterAdaptiveEnsemblePill").textContent = "Regime: " + rName + " (Top: " + topExp + " " + topPct + "%)";
+          $("blotterAdaptiveEnsemblePill").className = "pill " + (rName === "CASCADE" ? "bad" : (rName === "TRENDING" ? "info" : "ok"));
+        }
+        if ($("blotterTcaPill") && d.tca_markout) {
+          var tca = d.tca_markout;
+          var s1 = (tca.markout_1s_bps >= 0 ? "+" : "") + num(tca.markout_1s_bps, 2);
+          var s10 = (tca.markout_10s_bps >= 0 ? "+" : "") + num(tca.markout_10s_bps, 2);
+          $("blotterTcaPill").textContent = "TCA Markout (1s/10s): " + s1 + " / " + s10 + " bps";
+          $("blotterTcaPill").className = "pill " + (tca.markout_1s_bps >= 0 ? "ok" : "warn");
+        }
+        if ($("blotterFundingCarryPill") && d.funding_carry) {
+          var fc = d.funding_carry;
+          var fsign = fc.predicted_funding_bps >= 0 ? "+" : "";
+          $("blotterFundingCarryPill").textContent = "Funding Carry: " + fsign + num(fc.predicted_funding_bps, 2) + " bps (" + num(fc.annualized_apr_pct, 1) + "% APR)";
+          $("blotterFundingCarryPill").className = "pill ok";
         }
 
         if (d.l2_depth) {

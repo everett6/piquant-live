@@ -165,6 +165,18 @@ func InstantiateModel(modelName string, lambda float64, params map[string]any) C
 			alpha = a
 		}
 		return common.NewKylesLambdaModel(lambda, alpha)
+	case "adaptive_meta_ensemble":
+		gamma := 0.98
+		if g, ok := params["gamma"].(float64); ok && g > 0 && g <= 1.0 {
+			gamma = g
+		}
+		eta := 0.15
+		if e, ok := params["eta"].(float64); ok && e > 0 {
+			eta = e
+		}
+		return common.NewAdaptiveMetaEnsemble(lambda, gamma, eta)
+	case "funding_carry":
+		return common.NewFundingCarryModel(lambda)
 	default:
 		return &common.Ridge{Lam: lambda}
 	}

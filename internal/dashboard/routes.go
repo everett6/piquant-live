@@ -1158,6 +1158,39 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 	hawkesEst.Update(nowNs-180_000_000, false, 1.20)
 	hawkesEst.Update(nowNs-30_000_000, true, 0.45)
 
+	// Zero-Allocation Post-Trade TCA & Multi-Horizon Markout Engine
+	var tcaSnap paper.TCAMarkoutSnapshot
+	if s.opts.DryRun != nil {
+		if eng, ok := s.opts.DryRun.(*paper.DryRunEngine); ok && eng.TCAMarkout() != nil {
+			tcaSnap = eng.TCAMarkout().Snapshot()
+		}
+	}
+	if tcaSnap.TotalFillsAnalyzed == 0 {
+		tcaTracker := paper.NewTCAMarkoutTracker()
+		tcaTracker.RecordFill(1, "BTCUSDT", 1, 49999.62, 50000.00, nowNs-65_000_000_000)
+		tcaTracker.RecordFill(2, "BTCUSDT", -1, 50000.44, 50000.00, nowNs-40_000_000_000)
+		tcaTracker.RecordFill(3, "ETHUSDT", 1, 3400.12, 3400.50, nowNs-15_000_000_000)
+		tcaTracker.OnTick("BTCUSDT", 50000.80, nowNs-64_000_000_000)
+		tcaTracker.OnTick("BTCUSDT", 50001.20, nowNs-55_000_000_000)
+		tcaTracker.OnTick("BTCUSDT", 50001.50, nowNs-5_000_000_000)
+		tcaTracker.OnTick("ETHUSDT", 3400.45, nowNs-14_000_000_000)
+		tcaTracker.OnTick("ETHUSDT", 3400.60, nowNs-5_000_000_000)
+		tcaSnap = tcaTracker.Snapshot()
+	}
+
+	// Regime-Switching Adaptive Meta-Ensemble & Hedge Forecaster
+	adaModel := common.NewAdaptiveMetaEnsemble(1e-3, 0.98, 0.15)
+	adaModel.UpdateSensors(1.20, 0.45, 0.65)
+	_, topExpName, topExpWeight := adaModel.TopExpert(adaModel.Regime())
+	adaEdgeBps := adaModel.Predict(&x)
+
+	// Perpetual Funding Rate & Carry Harvesting Engine
+	carryTracker := common.NewFundingCarryTracker(0.05, 0.0001)
+	carryTracker.UpdatePrices(50005.00, 50000.00, nowNs)
+	carryFundingBps := carryTracker.PredictedFundingBps()
+	carryAPR := carryTracker.AnnualizedAPR()
+	carrySkew := carryTracker.FundingSkewBps(0.35, 14400.0)
+
 	// L2 Depth: top 10 bids and top 10 asks with sizes and cumulative depth
 	bidLevels := []struct{ p, s float64 }{
 		{49999.50, 1.45}, {49999.00, 2.10}, {49998.50, 3.80}, {49998.00, 4.25}, {49997.50, 5.60},
@@ -1303,6 +1336,27 @@ func (s *Server) handlePaperBlotter(w http.ResponseWriter, r *http.Request) {
 			"urgency_bps":         llSig.UrgencyBps,
 			"info_share_a":        llSig.InfoShareA,
 			"info_share_b":        llSig.InfoShareB,
+		},
+		"tca_markout": map[string]any{
+			"spread_capture_bps":    tcaSnap.MeanSpreadCaptureBps,
+			"markout_1s_bps":        tcaSnap.MeanMarkout1sBps,
+			"markout_5s_bps":        tcaSnap.MeanMarkout5sBps,
+			"markout_10s_bps":       tcaSnap.MeanMarkout10sBps,
+			"markout_60s_bps":       tcaSnap.MeanMarkout60sBps,
+			"adverse_selection_bps": tcaSnap.AdverseSelectionBps,
+			"toxic_fill_ratio":      tcaSnap.ToxicFillRatio,
+			"total_fills_analyzed":  tcaSnap.TotalFillsAnalyzed,
+		},
+		"adaptive_ensemble": map[string]any{
+			"regime":             adaModel.Regime().String(),
+			"top_expert":         topExpName,
+			"top_weight":         topExpWeight,
+			"predicted_edge_bps": adaEdgeBps,
+		},
+		"funding_carry": map[string]any{
+			"predicted_funding_bps": carryFundingBps,
+			"annualized_apr_pct":    carryAPR,
+			"funding_skew_bps":      carrySkew,
 		},
 		"inventory_aging": map[string]any{
 			"holding_age_sec":      holdingAgeSec,

@@ -260,6 +260,34 @@ func Registry() []ModelSpec {
 			Limitations: "Assumes symmetric impact between buy and sell flow; square-root law dominates for very large block trades.",
 			Calibration: "Recursive EWMA covariance and variance estimation with forgetting factor alpha=0.05 and epsilon=1e-6.",
 		},
+		// 17. Minutes Horizon: Regime-Switching Adaptive Meta-Ensemble
+		{
+			ID:          "adaptive_meta_ensemble",
+			Name:        "Regime-Switching Adaptive Meta-Ensemble",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "micro_dev", "spread_bps", "ofi_1s", "ofi_5s", "mlofi_1s", "vol_30s_bps", "ret_1s_bps", "ret_5s_bps", "trade_imb_5s", "trade_cnt_1s", "queue_ratio"},
+			Algorithm:   "Multiplicative Weights / Discounted Hedge Online Meta-Learner + 3-Regime Microstructure Classifier",
+			Version:     "v1.0.0",
+			Description: "Dynamically classifies order book state into LowVol, Trending, or Cascade regimes and blends 6 alpha families via online exponential weight updating.",
+			Assumptions: "Alpha efficacy varies systematically across volatility and jump regimes; online discounted hedge bounds cumulative meta-regret.",
+			Limitations: "Sudden regime switching can temporarily misallocate expert weights during transition latency.",
+			Calibration: "Exponential decay gamma=0.98, online learning rate eta=0.15, calibrated on 30s/1m/5m returns.",
+		},
+		// 18. Minutes Horizon: Perpetual Funding Rate & Carry Harvesting Engine
+		{
+			ID:          "funding_carry",
+			Name:        "Perpetual Funding Rate & Carry Harvester",
+			Category:    HorizonMinutes,
+			Horizons:    []string{"30s", "1m", "5m"},
+			Features:    []string{"imb_l1", "micro_dev", "spread_bps", "ofi_1s", "ofi_5s", "vol_30s_bps", "ret_1s_bps", "ret_5s_bps"},
+			Algorithm:   "Mark-Index Premium Tracker + Clamped 8h EWMA Funding + Carry Reservation Skew",
+			Version:     "v1.0.0",
+			Description: "Tracks spot-perpetual premium divergence, predicts 8h funding rates, and skews maker reservation prices to harvest rebates while penalizing paying inventory.",
+			Assumptions: "Funding payments drive systematic basis drift toward settlement; maker inventory on rebate side yields positive carry.",
+			Limitations: "Extreme basis dislocation during liquidation cascades can exceed funding rebate yields.",
+			Calibration: "Exchange damping clamp band +/-0.05%, baseline 0.01% interest, EWMA alpha=0.05.",
+		},
 		// 8. Hours Horizon: Volatility Regime Filter
 		{
 			ID:          "vol_regime_ridge",

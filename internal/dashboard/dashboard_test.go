@@ -733,6 +733,48 @@ func TestPaperBlotterL2DepthBasisHawkes(t *testing.T) {
 	if kyleLam, ok := blotter["kyles_lambda"].(float64); !ok || kyleLam <= 0 {
 		t.Errorf("expected positive kyles_lambda in /api/paper/blotter, got %v", blotter["kyles_lambda"])
 	}
+
+	// Verify tca_markout enrichment
+	tcaObj, ok := blotter["tca_markout"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tca_markout map in /api/paper/blotter, got %T", blotter["tca_markout"])
+	}
+	if _, ok := tcaObj["spread_capture_bps"].(float64); !ok {
+		t.Errorf("missing spread_capture_bps in tca_markout")
+	}
+	if _, ok := tcaObj["markout_1s_bps"].(float64); !ok {
+		t.Errorf("missing markout_1s_bps in tca_markout")
+	}
+	if _, ok := tcaObj["markout_10s_bps"].(float64); !ok {
+		t.Errorf("missing markout_10s_bps in tca_markout")
+	}
+	if _, ok := tcaObj["total_fills_analyzed"].(float64); !ok {
+		t.Errorf("missing total_fills_analyzed in tca_markout")
+	}
+
+	// Verify adaptive_ensemble enrichment
+	aeObj, ok := blotter["adaptive_ensemble"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected adaptive_ensemble map in /api/paper/blotter, got %T", blotter["adaptive_ensemble"])
+	}
+	if reg, ok := aeObj["regime"].(string); !ok || reg == "" {
+		t.Errorf("missing or empty regime in adaptive_ensemble")
+	}
+	if topExp, ok := aeObj["top_expert"].(string); !ok || topExp == "" {
+		t.Errorf("missing or empty top_expert in adaptive_ensemble")
+	}
+
+	// Verify funding_carry enrichment
+	fcObj, ok := blotter["funding_carry"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected funding_carry map in /api/paper/blotter, got %T", blotter["funding_carry"])
+	}
+	if _, ok := fcObj["predicted_funding_bps"].(float64); !ok {
+		t.Errorf("missing predicted_funding_bps in funding_carry")
+	}
+	if _, ok := fcObj["annualized_apr_pct"].(float64); !ok {
+		t.Errorf("missing annualized_apr_pct in funding_carry")
+	}
 }
 
 func TestPaperReportsEndpoints(t *testing.T) {
