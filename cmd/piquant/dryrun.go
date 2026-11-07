@@ -42,7 +42,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.BoolVar(&f.noDiscover, "no-discovery", false, "do not announce or search for the peer board")
 	fs.StringVar(&f.app, "app", version, "version string shown in the interface")
 
-	fs.Float64Var(&f.capital, "capital", 100000.00, "initial paper capital in USDT")
+	fs.Float64Var(&f.capital, "capital", 1000.00, "initial paper capital in USDT")
 	fs.Float64Var(&f.durationH, "duration-hours", 336.0, "target autonomous duration in hours (default 336h = 14 days)")
 	fs.Float64Var(&f.maxDD, "max-drawdown", 2.0, "maximum allowable drawdown percentage before circuit breaker halts")
 	fs.StringVar(&f.symbols, "symbols", "BTCUSDT,ETHUSDT", "comma-separated trading symbols")

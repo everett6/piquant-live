@@ -277,6 +277,17 @@ func New(opts Options) (*Server, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.Manager == nil && (opts.Role != discovery.RoleDashboard || opts.Discover == nil) {
+		dataDir := "data"
+		if len(opts.DataDirs) > 0 && opts.DataDirs[0] != "" {
+			dataDir = opts.DataDirs[0]
+		}
+		_ = os.MkdirAll(dataDir, 0o755)
+		_ = experiment.GenerateStandardDatasets(dataDir)
+		if mgr, err := experiment.NewManager(dataDir, nil); err == nil {
+			opts.Manager = mgr
+		}
+	}
 	mode := opts.Mode
 	if mode == "" {
 		mode = "simple"

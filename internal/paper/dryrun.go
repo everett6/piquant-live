@@ -41,7 +41,7 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 	}
 	paperDir := filepath.Join(dataDir, "paper")
 	return DryRunConfig{
-		InitialCapital:   100000.00,
+		InitialCapital:   1000.00,
 		TargetDuration:   14 * 24 * time.Hour,
 		Symbols:          []string{"BTCUSDT", "ETHUSDT"},
 		MaxDrawdownPct:   2.0,
@@ -130,6 +130,7 @@ type DryRunState struct {
 	OfflineDowntimeSeconds float64              `json:"offline_downtime_seconds"` // Cumulative time system was shut down / offline
 	ShutdownCount          int                  `json:"shutdown_count"`           // Number of power-cycles/resumptions survived
 	LastResumeTime         time.Time            `json:"last_resume_time"`         // Timestamp of latest recovery after shutdown
+	Leverage               DynamicLeverageState `json:"leverage"`                 // Real-time automatic dynamic leverage and regime
 }
 
 // DryRunEngine orchestrates the 14-day autonomous dry run.
@@ -158,6 +159,8 @@ type DryRunEngine struct {
 	kyleEst       *common.KylesLambdaEstimator
 	tcaTracker    *TCAMarkoutTracker
 	sor           common.SmartOrderRouter
+	hawkesEst     *common.OnlineHawkesEstimator
+	leverageCtrl  *DynamicLeverageController
 
 	// Online tick tracking
 	recentFills []TradeRecord
@@ -169,7 +172,7 @@ type DryRunEngine struct {
 // NewDryRunEngine constructs and recovers or initializes the 14-day paper trading engine.
 func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStreamIngestor) (*DryRunEngine, error) {
 	if cfg.InitialCapital <= 0 {
-		cfg.InitialCapital = 100000.00
+		cfg.InitialCapital = 1000.00
 	}
 	if cfg.TargetDuration <= 0 {
 		cfg.TargetDuration = 14 * 24 * time.Hour
@@ -191,6 +194,10 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		cfg.OrderLatency = 50 * time.Millisecond
 	}
 
+	levCfg := DefaultDynamicLeverageConfig()
+	levCfg.MaxDrawdownPct = cfg.MaxDrawdownPct
+	levCtrl := NewDynamicLeverageController(levCfg)
+
 	e := &DryRunEngine{
 		cfg:           cfg,
 		ring:          ring,
@@ -207,6 +214,8 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		kyleEst:       common.NewKylesLambdaEstimator(0.05, cfg.KylesLambda),
 		tcaTracker:    NewTCAMarkoutTracker(),
 		sor:           common.NewSmartOrderRouter(),
+		hawkesEst:     common.NewOnlineHawkesEstimator(5.0, 12.0, 20.0),
+		leverageCtrl:  levCtrl,
 		activeOrders:  make(map[string][]*ActiveMakerOrder),
 		recentFills:   make([]TradeRecord, 0, 32),
 	}
@@ -226,6 +235,7 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 			Positions:      make(map[string]*Position, len(cfg.Symbols)),
 			DailyReturns:   make([]float64, 0, 14),
 			DataSource:     "live",
+			Leverage:       levCtrl.Compute(10.0, 0.20, 0.50, 0.0, false),
 		}
 		for _, s := range cfg.Symbols {
 			upper := strings.ToUpper(s)
@@ -303,6 +313,10 @@ func (e *DryRunEngine) State() DryRunState {
 		remaining = 0
 	}
 	cp.HoursRemaining = remaining.Hours()
+
+	if cp.Leverage.EffectiveLeverage == 0 && e.leverageCtrl != nil {
+		cp.Leverage = e.leverageCtrl.Compute(10.0, 0.20, 0.50, 0.0, cp.CircuitHalted)
+	}
 
 	return cp
 }
@@ -574,6 +588,9 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 		if e.kyleEst != nil {
 			e.kyleEst.UpdateTrade(price, ev.Size, isBuyerMaker)
 		}
+		if e.hawkesEst != nil {
+			e.hawkesEst.Update(ev.Timestamp, !isBuyerMaker, ev.Size)
+		}
 		e.matchMakerOrders(symbol, price, ev.Size, ev.Side, now)
 		return
 	}
@@ -736,9 +753,22 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		targetAsk = midPrice + (qd.AskOffsetBps * midPrice * 1e-4)
 	}
 
-	qty := 0.10
-	if symbol == "ETHUSDT" {
-		qty = 1.0
+	// Dynamic Leverage Controller: automatic regime & exposure scaling
+	hkRatio := 0.60
+	if e.hawkesEst != nil {
+		hkRatio = e.hawkesEst.BranchingRatio()
+	}
+	ddPct := 0.0
+	if e.state.PeakEquity > 0 {
+		ddPct = (e.state.PeakEquity - e.state.Equity) / e.state.PeakEquity * 100.0
+	}
+	levState := e.leverageCtrl.Compute(spreadBps, liveVpin, hkRatio, ddPct, e.state.CircuitHalted)
+	e.state.Leverage = levState
+
+	// Dynamic institutional order sizing bounded by effective leverage and capital
+	qty := e.leverageCtrl.ComputeOrderSize(e.state.Equity, levState.EffectiveLeverage, midPrice, len(e.cfg.Symbols))
+	if qty <= 0 {
+		qty = 0.001
 	}
 
 	e.mu.Lock()
@@ -818,9 +848,16 @@ func (e *DryRunEngine) simulateMakerFill(symbol string, midPrice float64, qd com
 
 	side := "BUY"
 	orderPrice := midPrice - (qd.BidOffsetBps * midPrice * 1e-4)
-	qty := 0.10
-	if symbol == "ETHUSDT" {
-		qty = 1.0
+	effLev := 2.5
+	if e.state.Leverage.EffectiveLeverage > 0 {
+		effLev = e.state.Leverage.EffectiveLeverage
+	}
+	qty := 0.01
+	if e.leverageCtrl != nil && midPrice > 0 {
+		qty = e.leverageCtrl.ComputeOrderSize(e.state.Equity, effLev, midPrice, len(e.cfg.Symbols))
+	}
+	if qty <= 0 {
+		qty = 0.001
 	}
 	if qd.ReservationBps < 0 {
 		side = "SELL"
@@ -935,9 +972,16 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 // simulateTakerFillLocked simulates an aggressive taker order. Caller must hold e.mu.
 func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, alphaBps float64) {
 	side := "BUY"
-	qty := 0.05
-	if symbol == "ETHUSDT" {
-		qty = 0.5
+	effLev := 2.5
+	if e.state.Leverage.EffectiveLeverage > 0 {
+		effLev = e.state.Leverage.EffectiveLeverage
+	}
+	qty := 0.005
+	if e.leverageCtrl != nil && midPrice > 0 {
+		qty = e.leverageCtrl.ComputeOrderSize(e.state.Equity, effLev*0.5, midPrice, len(e.cfg.Symbols))
+	}
+	if qty <= 0 {
+		qty = 0.001
 	}
 	if alphaBps < 0 {
 		side = "SELL"

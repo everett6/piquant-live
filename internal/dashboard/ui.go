@@ -238,14 +238,14 @@ const indexHTML = `<!doctype html>
 
     <div class="grid">
       <!-- 14-Day Autonomous Paper Money Run — Mission Control -->
-      <section class="card span12" style="border:1px solid rgba(74,222,128,0.35);background:linear-gradient(180deg, rgba(74,222,128,0.06) 0%, var(--panel) 100%)">
+      <section class="card span12" style="border:1px solid rgba(0,230,118,0.35);background:linear-gradient(180deg, rgba(0,230,118,0.06) 0%, var(--panel) 100%)">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
           <div>
             <div style="display:flex;align-items:center;gap:8px">
               <span class="pulse"></span>
               <h2 style="margin:0;font-size:17px;color:var(--text)">14-Day Autonomous Paper Money Run &amp; Live Stream</h2>
             </div>
-            <div class="meta" style="margin-top:2px">Avellaneda-Stoikov GLFT market making &bull; Microsecond Binance WebSocket stream &bull; Dynamic circuit breaker</div>
+            <div class="meta" style="margin-top:2px">Avellaneda-Stoikov GLFT market making &bull; Microsecond Binance WebSocket stream &bull; Automated Dynamic Leverage</div>
           </div>
           <div class="pills">
             <span class="pill ok" id="topDryRunBadge">2-WEEK DRY RUN ACTIVE</span>
@@ -264,17 +264,27 @@ const indexHTML = `<!doctype html>
           <div class="bar" style="height:8px"><i id="topDryRunProgress" style="width:7.1%"></i></div>
         </div>
 
-        <!-- 4 Primary Metric Stat Blocks -->
-        <div class="stats" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+        <!-- 5 Primary Metric Stat Blocks -->
+        <div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-bottom:12px">
           <div class="stat">
             <div class="k">Portfolio Equity</div>
-            <div class="v" id="topDryRunEquity" style="font-size:24px;font-weight:700;color:var(--text)">$100,000.00</div>
-            <div class="s" id="topDryRunInitCap">Capital: $100,000.00 USDT</div>
+            <div class="v" id="topDryRunEquity" style="font-size:24px;font-weight:700;color:var(--text)">$1,000.00</div>
+            <div class="s" id="topDryRunInitCap">Capital: $1,000.00 USDT</div>
           </div>
           <div class="stat">
             <div class="k">Realized PnL &amp; Return</div>
             <div class="v" id="topDryRunReturn" style="font-size:24px;font-weight:700;color:var(--accent)">+$0.00 (+0.00%)</div>
-            <div class="s" id="topDryRunCash">Cash: $100,000.00 USDT</div>
+            <div class="s" id="topDryRunCash">Cash: $1,000.00 USDT</div>
+          </div>
+          <div class="stat" style="border:1px solid rgba(0,230,118,0.25);background:rgba(0,230,118,0.03)">
+            <div class="k" style="color:var(--accent)">Dynamic Auto Leverage</div>
+            <div class="v" style="font-size:22px;font-weight:700;color:var(--text)">
+              <span id="topDryRunLev" style="color:var(--accent)">2.5x</span>
+              <span id="topDryRunMaxLev" style="font-size:13px;color:var(--muted)">/ 5.0x</span>
+              <span class="pill ok" id="topDryRunRegime" style="font-size:10px;vertical-align:middle;margin-left:2px">CALM_MAKER</span>
+            </div>
+            <div class="s" id="topDryRunLevDetail">Kelly Vol-Parity Scaling</div>
+            <div class="bar" style="height:4px;margin-top:5px"><i id="topDryRunLevBar" style="width:50%;background:var(--accent)"></i></div>
           </div>
           <div class="stat">
             <div class="k">Market Stream Throughput</div>
@@ -288,9 +298,24 @@ const indexHTML = `<!doctype html>
           </div>
         </div>
 
+        <!-- Automatic Microstructure Risk Multiplier HUD -->
+        <div style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;font-size:12px">
+          <div style="display:flex;align-items:center;gap:6px">
+            <span class="pill ok" style="font-size:10px">AUTO LEVERAGE COCKPIT</span>
+            <span style="color:var(--muted)">Formula:</span>
+            <code class="mono">&lambda;* = &lambda;<sub>0</sub> &times; f<sub>vol</sub> &times; f<sub>vpin</sub> &times; f<sub>hawkes</sub> &times; f<sub>dd</sub></code>
+          </div>
+          <div style="display:flex;gap:12px;align-items:center;font-size:11px" class="mono">
+            <span>Vol Parity: <b id="levVolFactor" style="color:var(--text)">1.00x</b></span>
+            <span>VPIN Dampener: <b id="levToxFactor" style="color:var(--accent)">0.98x</b></span>
+            <span>Hawkes Cascade: <b id="levCascFactor" style="color:var(--info)">1.00x</b></span>
+            <span>Drawdown Taper: <b id="levDdFactor" style="color:var(--text)">0.96x</b></span>
+          </div>
+        </div>
+
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;padding-top:6px;border-top:1px solid var(--line)">
           <div style="font-size:12px;color:var(--muted)">
-            State file: <code class="mono">data/paper/dryrun_state.json</code> &bull; Max Drawdown Limit: <b style="color:var(--text)">2.00%</b>
+            State file: <code class="mono">data/paper/dryrun_state.json</code> &bull; Max Drawdown Limit: <b style="color:var(--text)">2.00%</b> &bull; Crash-Resilient: <span class="pill ok" style="font-size:10px">12h Offline Auto-Resume</span>
           </div>
           <div style="display:flex;gap:8px">
             <button id="btnSwitchPaperTab" class="btn btn-primary" style="font-size:12px;padding:6px 12px">View Full Paper Blotter</button>
@@ -303,7 +328,13 @@ const indexHTML = `<!doctype html>
       <section class="card span8">
         <h2>Active Research Pipeline (RPi 5 Engine)</h2>
         <div id="activePipeline">
-          <div class="empty">Research engine is currently idle. Ready to evaluate models.</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:var(--panel2);border-radius:10px;border:1px solid var(--line)">
+            <div>
+              <div style="font-size:14px;font-weight:700;color:var(--accent)">Research Engine Ready (Local Arm64 Core)</div>
+              <div class="meta" style="margin-top:2px">18 Quantitative Models &bull; Split-Conformal Predictors &bull; SPSC Ring Active</div>
+            </div>
+            <button class="btn btn-primary" onclick="document.querySelector('#mainNav button[data-tab=\'tab-research\']').click()" style="font-size:12px;padding:6px 12px">Launch Evaluation &rarr;</button>
+          </div>
         </div>
       </section>
 
@@ -378,7 +409,7 @@ const indexHTML = `<!doctype html>
             <span id="dryRunClock" style="font-size:13px;font-weight:600;color:var(--text)">Day 1 of 14 &bull; 335h left</span>
           </div>
           <div id="dryRunSummaryStats" style="font-size:13px;color:var(--muted)">
-            Equity: <b id="dryRunEquity" style="color:var(--text)">$100,248.50</b> (<span id="dryRunReturn" style="color:var(--accent)">+0.25%</span>) &bull;
+            Equity: <b id="dryRunEquity" style="color:var(--text)">$1,002.48</b> (<span id="dryRunReturn" style="color:var(--accent)">+0.25%</span>) &bull;
             Max DD: <b id="dryRunMaxDD" style="color:var(--text)">0.08%</b> &bull;
             Win Rate: <b id="dryRunWinRate" style="color:var(--text)">64%</b> &bull;
             Circuit Breaker: <b id="dryRunBreaker" style="color:var(--accent)">OK</b>
@@ -576,6 +607,14 @@ const indexHTML = `<!doctype html>
           </div>
         </div>
 
+        <!-- Toggle Button for Heavy Backtest Tables -->
+        <div style="display:flex;justify-content:center;margin-top:6px;margin-bottom:6px">
+          <button id="btnToggleHistoricalTables" class="btn btn-secondary" style="font-size:12px;padding:7px 16px;cursor:pointer">
+            Show Detailed 15-Year &amp; 2-Year Tick Simulation Tables &darr;
+          </button>
+        </div>
+
+        <div id="historicalTablesContainer" style="display:none;margin-top:12px">
         <!-- Multi-Year Breakdown Table -->
         <div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 14px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -618,6 +657,7 @@ const indexHTML = `<!doctype html>
             </table>
           </div>
         </div>
+        </div> <!-- end historicalTablesContainer -->
       </section>
 
       <!-- 2-Year High-Resolution Microsecond Tick Simulation (2024–2026) -->
@@ -700,6 +740,7 @@ const indexHTML = `<!doctype html>
             </table>
           </div>
         </div>
+        </div> <!-- end historicalTablesContainer -->
       </section>
 
       <!-- Recent Human Activity Log -->
@@ -746,10 +787,11 @@ const indexHTML = `<!doctype html>
             <span class="pill ok" id="ptBreakerPill">Risk Limit: 2.00% Max DD</span>
           </div>
         </div>
-        <div class="stats" style="grid-template-columns:repeat(5,1fr);margin-top:10px">
-          <div class="stat"><div class="k">Current Equity</div><div class="v" id="ptEquity" style="font-size:22px">$100,000.00</div><div class="s" id="ptInitCap">Initial: $100k</div></div>
+        <div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-top:10px">
+          <div class="stat"><div class="k">Current Equity</div><div class="v" id="ptEquity" style="font-size:22px">$1,000.00</div><div class="s" id="ptInitCap">Initial: $1,000.00</div></div>
           <div class="stat"><div class="k">Realized PnL</div><div class="v" id="ptRealized" style="font-size:22px;color:var(--accent)">+$0.00</div><div class="s" id="ptReturnPct">+0.00% Return</div></div>
-          <div class="stat"><div class="k">Unrealized Mark</div><div class="v" id="ptUnrealized" style="font-size:22px">$0.00</div><div class="s" id="ptCash">Cash: $100,000.00</div></div>
+          <div class="stat" style="border:1px solid rgba(0,230,118,0.25);background:rgba(0,230,118,0.03)"><div class="k" style="color:var(--accent)">Auto Leverage</div><div class="v" id="ptLev" style="font-size:22px;color:var(--accent)">2.5x</div><div class="s" id="ptLevRegime">CALM_MAKER</div></div>
+          <div class="stat"><div class="k">Unrealized Mark</div><div class="v" id="ptUnrealized" style="font-size:22px">$0.00</div><div class="s" id="ptCash">Cash: $1,000.00</div></div>
           <div class="stat"><div class="k">Max Drawdown</div><div class="v" id="ptMaxDD" style="font-size:22px">0.00%</div><div class="s">Peak-to-Valley</div></div>
           <div class="stat"><div class="k">Win Rate</div><div class="v" id="ptWinRate" style="font-size:22px">0.0%</div><div class="s" id="ptTradesCount">0 Executed Fills</div></div>
         </div>
@@ -1235,6 +1277,18 @@ const indexHTML = `<!doctype html>
     });
   }
 
+  if ($("btnToggleHistoricalTables")) {
+    $("btnToggleHistoricalTables").addEventListener("click", function(){
+      var el = $("historicalTablesContainer");
+      if (!el) return;
+      var isHidden = (el.style.display === "none" || !el.style.display);
+      el.style.display = isHidden ? "block" : "none";
+      $("btnToggleHistoricalTables").innerHTML = isHidden ?
+        "Hide Detailed 15-Year &amp; 2-Year Tick Simulation Tables &uarr;" :
+        "Show Detailed 15-Year &amp; 2-Year Tick Simulation Tables &darr;";
+    });
+  }
+
   // Cluster Mode Toggle (Pi 5 Standalone vs Pi 5 + 3B Dual-Node)
   function setClusterMode(cm){
     state.cluster_mode = cm;
@@ -1344,7 +1398,11 @@ const indexHTML = `<!doctype html>
         (eng.message ? "<div class='meta' style='margin-top:10px'>" + esc(eng.message) + "</div>" : "");
       $("btnCancelExp").style.display = "inline-flex";
     } else {
-      activeEl.innerHTML = "<div class='empty'>Research engine is idle. Ready to evaluate models or run parameter searches.</div>";
+      activeEl.innerHTML = "<div style='display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:var(--panel2);border-radius:10px;border:1px solid var(--line)'>" +
+        "<div><div style='font-size:14px;font-weight:700;color:var(--accent)'>Research Engine Ready (Local Arm64 Core)</div>" +
+        "<div class='meta' style='margin-top:2px'>18 Quantitative Models &bull; Split-Conformal Predictors &bull; SPSC Ring Active</div></div>" +
+        "<button class='btn btn-primary' onclick='document.querySelector(\"#mainNav button[data-tab=\\\"tab-research\\\"]\").click()' style='font-size:12px;padding:6px 12px'>Launch Evaluation &rarr;</button>" +
+      "</div>";
       $("btnCancelExp").style.display = "none";
     }
 
@@ -1588,13 +1646,41 @@ const indexHTML = `<!doctype html>
       $("topDryRunProgress").style.width = pct + "%";
       if ($("topDryRunProgressText")) $("topDryRunProgressText").textContent = pct + "% completed";
     }
-    if ($("topDryRunEquity")) $("topDryRunEquity").textContent = "$" + num(st.equity || 100000, 2);
-    if ($("topDryRunInitCap")) $("topDryRunInitCap").textContent = "Capital: $" + num(st.initial_capital || 100000, 2) + " USDT";
+    if ($("topDryRunEquity")) $("topDryRunEquity").textContent = "$" + num(st.equity || 1000, 2);
+    if ($("topDryRunInitCap")) $("topDryRunInitCap").textContent = "Capital: $" + num(st.initial_capital || 1000, 2) + " USDT";
     if ($("topDryRunReturn")) {
       $("topDryRunReturn").textContent = dSign + num(dRet, 2) + "% (" + dSign + "$" + num(st.realized_pnl || 0, 2) + ")";
       $("topDryRunReturn").style.color = dRet >= 0 ? "var(--accent)" : "var(--bad)";
     }
-    if ($("topDryRunCash")) $("topDryRunCash").textContent = "Cash: $" + num(st.cash || 100000, 2) + " USDT";
+    if ($("topDryRunCash")) $("topDryRunCash").textContent = "Cash: $" + num(st.cash || 1000, 2) + " USDT";
+
+    // Dynamic Automatic Leverage Cockpit & Breakdown
+    var lev = st.leverage || {};
+    var effLev = lev.effective_leverage || 2.5;
+    var maxLev = lev.max_leverage || 5.0;
+    var regName = lev.regime_name || (isHalted ? "HALTED" : "CALM_MAKER");
+    var regDetail = lev.regime_detail || "Kelly Vol-Parity Scaling";
+
+    if ($("topDryRunLev")) $("topDryRunLev").textContent = num(effLev, 1) + "x";
+    if ($("topDryRunMaxLev")) $("topDryRunMaxLev").textContent = "/ " + num(maxLev, 1) + "x";
+    if ($("topDryRunRegime")) {
+      $("topDryRunRegime").textContent = regName;
+      $("topDryRunRegime").className = "pill " + (regName === "CALM_MAKER" ? "ok" : (regName === "HALTED" ? "bad" : "warn"));
+    }
+    if ($("topDryRunLevDetail")) $("topDryRunLevDetail").textContent = regDetail;
+    if ($("topDryRunLevBar")) {
+      var levPct = Math.min(100, Math.max(5, (effLev / maxLev) * 100));
+      $("topDryRunLevBar").style.width = levPct + "%";
+    }
+
+    if ($("levVolFactor")) $("levVolFactor").textContent = num(lev.vol_factor || 1.0, 2) + "x";
+    if ($("levToxFactor")) $("levToxFactor").textContent = num(lev.toxicity_factor || 1.0, 2) + "x";
+    if ($("levCascFactor")) $("levCascFactor").textContent = num(lev.cascade_factor || 1.0, 2) + "x";
+    if ($("levDdFactor")) $("levDdFactor").textContent = num(lev.drawdown_factor || 1.0, 2) + "x";
+
+    if ($("ptLev")) $("ptLev").textContent = num(effLev, 1) + "x";
+    if ($("ptLevRegime")) $("ptLevRegime").textContent = regName;
+
     if ($("topDryRunThroughput")) {
       if (res.stream_stats && res.stream_stats.total_events) {
         $("topDryRunThroughput").textContent = "BTC ~500 \u2022 ETH ~250 ev/s";
@@ -1636,8 +1722,8 @@ const indexHTML = `<!doctype html>
     }
 
     // Dedicated Tab: Paper Trading Pane
-    if ($("ptEquity")) $("ptEquity").textContent = "$" + num(st.equity || 100000, 2);
-    if ($("ptInitCap")) $("ptInitCap").textContent = "Initial: $" + num(st.initial_capital || 100000, 2);
+    if ($("ptEquity")) $("ptEquity").textContent = "$" + num(st.equity || 1000, 2);
+    if ($("ptInitCap")) $("ptInitCap").textContent = "Initial: $" + num(st.initial_capital || 1000, 2);
     if ($("ptRealized")) {
       $("ptRealized").textContent = dSign + "$" + num(st.realized_pnl || 0, 2);
       $("ptRealized").style.color = (st.realized_pnl || 0) >= 0 ? "var(--accent)" : "var(--bad)";
@@ -1647,7 +1733,7 @@ const indexHTML = `<!doctype html>
       $("ptReturnPct").style.color = dRet >= 0 ? "var(--accent)" : "var(--bad)";
     }
     if ($("ptUnrealized")) $("ptUnrealized").textContent = (st.unrealized_pnl >= 0 ? "+" : "") + "$" + num(st.unrealized_pnl || 0, 2);
-    if ($("ptCash")) $("ptCash").textContent = "Cash: $" + num(st.cash || 100000, 2);
+    if ($("ptCash")) $("ptCash").textContent = "Cash: $" + num(st.cash || 1000, 2);
     if ($("ptMaxDD")) $("ptMaxDD").textContent = num(st.max_drawdown_pct || 0, 2) + "%";
     if ($("ptWinRate")) $("ptWinRate").textContent = num(st.win_rate || 0, 1) + "%";
     if ($("ptTradesCount")) $("ptTradesCount").textContent = (st.total_trades || 0) + " Executed Fills";
@@ -1694,7 +1780,7 @@ const indexHTML = `<!doctype html>
 
     // Existing Banner Sync
     if ($("dryRunClock")) $("dryRunClock").textContent = "Day " + dDays + " of 14 \u2022 " + dRem + "h left";
-    if ($("dryRunEquity")) $("dryRunEquity").textContent = "$" + num(st.equity || 100000, 2);
+    if ($("dryRunEquity")) $("dryRunEquity").textContent = "$" + num(st.equity || 1000, 2);
     if ($("dryRunReturn")) {
       $("dryRunReturn").textContent = dSign + num(dRet, 2) + "%";
       $("dryRunReturn").style.color = dRet >= 0 ? "var(--accent)" : "var(--bad)";
