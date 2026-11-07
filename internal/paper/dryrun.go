@@ -865,14 +865,16 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	currPreds := [common.MaxEnsembleExperts]float64{0.45, 0.38, qd.ReservationBps, 0.44, 0.40, 0.52, carteaSignal, 0}
 	metaPred, _ := e.adaHedge.UpdateAndCombine(0.50, prevPreds, currPreds)
 
-	// Target quotes
-	targetBid := bestBid
-	if targetBid <= 0 || targetBid >= midPrice {
-		targetBid = midPrice - (qd.BidOffsetBps * midPrice * 1e-4)
+	// Avellaneda-Stoikov & GLFT inventory-skewed quoting:
+	targetBid := midPrice - (qd.BidOffsetBps * midPrice * 1e-4)
+	targetAsk := midPrice + (qd.AskOffsetBps * midPrice * 1e-4)
+
+	// Clamp to the touch so resting quotes remain passive maker orders (never cross into taker territory)
+	if bestBid > 0 && targetBid > bestBid {
+		targetBid = bestBid
 	}
-	targetAsk := bestAsk
-	if targetAsk <= 0 || targetAsk <= midPrice {
-		targetAsk = midPrice + (qd.AskOffsetBps * midPrice * 1e-4)
+	if bestAsk > 0 && targetAsk < bestAsk {
+		targetAsk = bestAsk
 	}
 
 	// Dynamic Leverage Controller: automatic regime & exposure scaling

@@ -156,15 +156,33 @@ func (c *DynamicLeverageController) Compute(volBps float64, vpin float64, hawkes
 	}
 }
 
+// SymbolRiskProfile defines volatility weight and exchange order lot precision.
+type SymbolRiskProfile struct {
+	VolWeight float64 // Volatility parity weight (TargetVol / AssetVol)
+	Decimals  int     // Exchange lot size decimal places
+}
+
+// DefaultSymbolProfiles maps major cryptocurrency pairs to quantitative volatility-parity weights.
+var DefaultSymbolProfiles = map[string]SymbolRiskProfile{
+	"BTC":  {VolWeight: 1.15, Decimals: 4}, // ~42% ann vol
+	"ETH":  {VolWeight: 0.85, Decimals: 3}, // ~58% ann vol
+	"SOL":  {VolWeight: 0.65, Decimals: 2}, // ~76% ann vol
+	"BNB":  {VolWeight: 1.05, Decimals: 2}, // ~48% ann vol
+	"DOGE": {VolWeight: 0.45, Decimals: 0}, // ~95% ann vol
+	"XRP":  {VolWeight: 0.75, Decimals: 1}, // ~65% ann vol
+	"AVAX": {VolWeight: 0.60, Decimals: 2}, // ~82% ann vol
+	"LINK": {VolWeight: 0.70, Decimals: 2}, // ~71% ann vol
+}
+
 // ComputeOrderSize computes the quote size for a given asset given current portfolio equity and price.
 // Implements cross-asset volatility parity (ETH receives proportional vol-scaled allocation).
 func (c *DynamicLeverageController) ComputeOrderSize(equity float64, effectiveLev float64, price float64, numSymbols int) float64 {
 	return c.ComputeOrderSizeForSymbol("BTCUSDT", equity, effectiveLev, price, numSymbols)
 }
 
-// ComputeOrderSizeForSymbol scales sizing per instrument based on volatility parity:
-// ETHUSDT (higher vol) has smaller fractional size to equate dollar volatility risk,
-// while preserving wider spread capture.
+// ComputeOrderSizeForSymbol scales sizing per instrument based on inverse volatility parity:
+// Higher-volatility assets (SOL, DOGE, AVAX) receive smaller fractional sizing to equate
+// dollar variance risk, while preserving wider spread capture and fee rebates.
 func (c *DynamicLeverageController) ComputeOrderSizeForSymbol(symbol string, equity float64, effectiveLev float64, price float64, numSymbols int) float64 {
 	if equity <= 0 || price <= 0 || effectiveLev <= 0 {
 		return 0.001
@@ -175,21 +193,23 @@ func (c *DynamicLeverageController) ComputeOrderSizeForSymbol(symbol string, equ
 	// Allocate notional across traded universe
 	baseNotional := (equity * effectiveLev) / float64(numSymbols)
 
-	// Volatility parity weighting: ETH volatility (~70%) vs BTC volatility (~45%)
-	// Vol weight = TargetVol / AssetVol
-	weight := 1.0
-	if strings.Contains(strings.ToUpper(symbol), "ETH") {
-		weight = 0.85 // Vol-parity dampener so ETH dollar variance matches BTC
-	} else if strings.Contains(strings.ToUpper(symbol), "BTC") {
-		weight = 1.15
+	// Volatility parity weighting and decimal precision lookup
+	uSym := strings.ToUpper(symbol)
+	prof := SymbolRiskProfile{VolWeight: 1.0, Decimals: 3}
+	for symPrefix, p := range DefaultSymbolProfiles {
+		if strings.Contains(uSym, symPrefix) {
+			prof = p
+			break
+		}
 	}
 
-	notional := baseNotional * weight
+	notional := baseNotional * prof.VolWeight
 	qty := notional / price
 
-	if strings.Contains(strings.ToUpper(symbol), "ETH") {
-		return math.Round(qty*1000) / 1000 // 3 decimals for ETH
+	p := math.Pow(10, float64(prof.Decimals))
+	rounded := math.Round(qty*p) / p
+	if rounded <= 0 && prof.Decimals > 0 {
+		rounded = 1.0 / p
 	}
-	// 4 decimals for BTC
-	return math.Round(qty*10000) / 10000
+	return rounded
 }

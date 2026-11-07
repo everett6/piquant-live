@@ -55,3 +55,36 @@ func TestDynamicLeverageController_ToxicFlowAndCascade(t *testing.T) {
 		t.Errorf("expected 0.0x leverage when halted, got %.2fx", stHalted.EffectiveLeverage)
 	}
 }
+
+func TestDynamicLeverageController_MultiAssetSizing(t *testing.T) {
+	cfg := DefaultDynamicLeverageConfig()
+	ctrl := NewDynamicLeverageController(cfg)
+
+	equity := 2000.0
+	lev := 2.5
+	numCoins := 4
+
+	// SOL: price = 180.0
+	solQty := ctrl.ComputeOrderSizeForSymbol("SOLUSDT", equity, lev, 180.0, numCoins)
+	if solQty <= 0 {
+		t.Errorf("expected positive SOL qty, got %.4f", solQty)
+	}
+
+	// DOGE: price = 0.165
+	dogeQty := ctrl.ComputeOrderSizeForSymbol("DOGEUSDT", equity, lev, 0.165, numCoins)
+	if dogeQty <= 0 || dogeQty != float64(int(dogeQty)) {
+		t.Errorf("expected positive whole number DOGE qty (0 decimals), got %.2f", dogeQty)
+	}
+
+	// XRP: price = 0.54
+	xrpQty := ctrl.ComputeOrderSizeForSymbol("XRPUSDT", equity, lev, 0.54, numCoins)
+	if xrpQty <= 0 {
+		t.Errorf("expected positive XRP qty, got %.2f", xrpQty)
+	}
+
+	// BNB: price = 580.0
+	bnbQty := ctrl.ComputeOrderSizeForSymbol("BNBUSDT", equity, lev, 580.0, numCoins)
+	if bnbQty <= 0 {
+		t.Errorf("expected positive BNB qty, got %.2f", bnbQty)
+	}
+}
