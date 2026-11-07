@@ -10,9 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"piquant-live/internal/config"
 	"piquant-live/internal/dashboard"
 	"piquant-live/internal/discovery"
 	"piquant-live/internal/engine"
+	"piquant-live/internal/experiment"
 	"piquant-live/internal/paper"
 	"piquant-live/internal/secrets"
 )
@@ -136,20 +138,48 @@ func runDryRun(ctx context.Context, args []string) error {
 		defer a.Stop()
 	}
 
-	// Launch Dashboard Server exposing 2-week paper run and blotter
+	// Initialize local experiment manager so research engine endpoints work co-located
+	_ = os.MkdirAll(dDir, 0o755)
+	_ = experiment.GenerateStandardDatasets(dDir)
+
+	expCfg, err := config.Load("configs/production.yaml")
+	if err != nil {
+		expCfg, _ = config.Load("configs/dev.yaml")
+	}
+	if expCfg == nil {
+		expCfg = &config.Config{
+			Symbols: []config.Symbol{
+				{Name: "BTC", VenueSym: "BTCUSDT", Venue: "binance"},
+				{Name: "ETH", VenueSym: "ETHUSDT", Venue: "binance"},
+			},
+			Targets: map[string][]string{
+				"BTC": {"binance:BTCUSDT"},
+				"ETH": {"binance:ETHUSDT"},
+			},
+		}
+	}
+
+	mgr, err := experiment.NewManager(dDir, expCfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot initialize experiment manager: %v\n", err)
+	}
+
+	// Launch Dashboard Server exposing 2-week paper run, blotter and co-located engine
 	srv, err := dashboard.New(dashboard.Options{
-		Addr:       f.addr,
-		Token:      storeToken(store, secrets.DashboardToken),
-		PeerToken:  storeToken(store, secrets.PeerToken),
-		Keys:       store,
-		LogFiles:   logFiles(logDir),
-		DataDirs:   dataDirs(f.dataDir),
-		Role:       discovery.RoleEngine,
-		App:        f.app,
-		Discover:   browser,
-		Instance:   instance,
-		SessionTTL: 12 * time.Hour,
-		DryRun:     dryRunEngine,
+		Addr:        f.addr,
+		Token:       storeToken(store, secrets.DashboardToken),
+		PeerToken:   storeToken(store, secrets.PeerToken),
+		Keys:        store,
+		LogFiles:    logFiles(logDir),
+		DataDirs:    dataDirs(f.dataDir),
+		Role:        discovery.RoleEngine,
+		App:         f.app,
+		Discover:    browser,
+		Instance:    instance,
+		SessionTTL:  12 * time.Hour,
+		ClusterMode: "pi5_only",
+		Manager:     mgr,
+		DryRun:      dryRunEngine,
 	})
 	if err != nil {
 		return err

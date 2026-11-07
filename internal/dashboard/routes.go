@@ -1644,11 +1644,27 @@ func (s *Server) handlePaperDryRun(w http.ResponseWriter, r *http.Request) {
 			if drySt, ok := st.(paper.DryRunState); ok && drySt.DataSource != "" {
 				ds = drySt.DataSource
 			}
+			var streamStats map[string]any
+			if streamer, ok := s.opts.DryRun.(interface {
+				StreamStats() (uint64, uint64, uint64, uint64, uint64, uint64, int64)
+			}); ok {
+				tot, dep, tr, gaps, reconn, fallb, lastNs := streamer.StreamStats()
+				streamStats = map[string]any{
+					"total_events":      tot,
+					"depth_updates":     dep,
+					"trades":            tr,
+					"gaps":              gaps,
+					"reconnects":        reconn,
+					"fallbacks":         fallb,
+					"last_timestamp_ns": lastNs,
+				}
+			}
 			writeJSON(w, http.StatusOK, map[string]any{
 				"status":       "active",
 				"data_source":  ds,
 				"state":        st,
 				"recent_fills": fills,
+				"stream_stats": streamStats,
 				"tearsheet":    tearSheet,
 				"smart_router": sorDecision,
 				"watchdog":     wdReport,

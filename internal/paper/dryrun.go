@@ -311,6 +311,14 @@ func (e *DryRunEngine) RecentFills() []TradeRecord {
 	return out
 }
 
+// StreamStats returns real-time event counts from the public WebSocket ingestor.
+func (e *DryRunEngine) StreamStats() (total, depths, trades, gaps, reconnects, fallbacks uint64, lastNs int64) {
+	if e.stream != nil {
+		return e.stream.Stats()
+	}
+	return 0, 0, 0, 0, 0, 0, 0
+}
+
 // runCheckpointLoop periodically persists state to dryrun_state.json.
 func (e *DryRunEngine) runCheckpointLoop(ctx context.Context) {
 	defer e.wg.Done()
