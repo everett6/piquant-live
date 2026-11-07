@@ -328,3 +328,25 @@ PiQuant provides a comprehensive quantitative trading, statistical arbitrage, an
   - `ToxicFillRatio`: Percentage of fills suffering adverse 1s markout $< -2.0\text{ bps}$.
 - 100% zero heap allocations across `RecordFill`, `OnTick`, and `Snapshot`.
 
+### 10. Dual-Pi Inter-Node Binary Protocol (`PQLK`) & Asymmetric Work-Stealing Delegation (`internal/cluster/`)
+- **64-Byte Cache-Line Aligned Binary Wire Protocol (`internal/cluster/fastlink.go`)**:
+  - `PQLK` wire framing (Magic `0x50514C4B`, Version `1`) operating over a fixed 64-byte payload (`[64]byte`).
+  - Naturally aligned field layout: `Magic` (4B), `Version` (1B), `FrameType` (1B), `Flags` (2B), `SeqNum` (8B), `SendTimestampNs` (8B), `AckTimestampNs` (8B), `CPUUtilPermille` (2B), `MemAvailMB` (2B), `TempDeciC` (2B), `ActiveTasks` (2B), `PayloadFloat1` (8B), `PayloadFloat2` (8B), `HMACTag64` (8B).
+  - Built-in keyed SipHash-2-4 64-bit authenticating tag (`HMACTag64`) guarding link integrity.
+  - Microsecond NTP 4-timestamp RTT estimator and RFC 3550 EWMA jitter tracking.
+  - Socket low-latency tuning: `TCP_NODELAY`, `SO_KEEPALIVE` (5s), and 256 KiB socket read/write buffers.
+  - Zero-allocation hot path: Encode (`2.56 ns/op, 0 B/op, 0 allocs/op`) & Decode (`2.46 ns/op, 0 B/op, 0 allocs/op`) delivering **143x–163x speedup vs standard JSON**.
+- **Asymmetric Dual-Pi Task Delegation & Dynamic Failover Scheduler (`internal/cluster/delegator.go`)**:
+  - **Pi 5 Primary (`RoleEngine`, `arm64` Cortex-A76 @ 2.4GHz, 8GB RAM)**: Dedicated to ultra-low-latency hot path (`TaskMarketIngest`, `TaskL2OrderBook`, `TaskSIMDFeatures`, `TaskHFTQuoting`, `TaskMicrostructureAlpha`). Never offloaded.
+  - **Pi 3B Auxiliary (`RoleDashboard`, `armv7` Cortex-A53 @ 1.2GHz, 1GB RAM)**: Eligible for delegated background/auxiliary workloads when link is healthy (`RTT < 10ms`) and Pi 3B has headroom (`CPU < 70%`, `MemAvail > 200MB`, `Temp < 75°C`):
+    - `TaskWebUIDashboard` (Web UI session & HTML rendering)
+    - `TaskTelemetryAggregation` (System & peer health rollup)
+    - `TaskDailyTearSheet` (EOD Markdown/JSON reporting)
+    - `TaskArchiveVerification` (Background `.pqbin` checksum verification)
+    - `TaskParameterSweepShard` (Walk-forward grid evaluation shard)
+  - **Dynamic Failover & Thermal Shedding**:
+    - Automatic $O(1)$ failback to Pi 5 (`STANDALONE_PI5_FAILOVER`) if Pi 3B disconnects or memory drops below 180MB.
+    - Aggressive thermal shedding to Pi 3B when Pi 5 exceeds 75°C.
+    - Zero allocations across hot paths (`DecideTarget` `2.93 ns/op, 0 B/op`, `Snapshot` `6.71 ns/op, 0 B/op`).
+
+

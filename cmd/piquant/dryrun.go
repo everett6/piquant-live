@@ -132,7 +132,7 @@ func runDryRun(ctx context.Context, args []string) error {
 		}
 	}
 	port := parsePort(f.addr)
-	if a := startAnnouncer(discovery.RoleEngine, port, storeToken(store, secrets.PeerToken), instance, f.app); a != nil {
+	if a := startAnnouncer(discovery.RoleEngine, port, storeToken(store, secrets.PeerToken), instance, f.app, browser); a != nil {
 		defer a.Stop()
 	}
 

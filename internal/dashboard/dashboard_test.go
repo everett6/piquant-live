@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"piquant-live/internal/cluster"
 	"piquant-live/internal/discovery"
 	"piquant-live/internal/secrets"
 )
@@ -816,5 +817,72 @@ func TestPaperReportsEndpoints(t *testing.T) {
 	}
 	if !strings.Contains(recRaw.Body.String(), "PiQuant Institutional Daily Risk") {
 		t.Fatalf("raw report did not contain header: %s", recRaw.Body.String())
+	}
+}
+
+func TestClusterTopologyAndEnrichedBlotter(t *testing.T) {
+	s := newTestServer(t, nil)
+	authHdr := map[string]string{"Authorization": "Bearer " + peerToken}
+
+	// 1. Initial Standalone Pi 5 Failover state (no peer connected)
+	rec := get(t, s.Handler(), http.MethodGet, "/api/cluster/topology", authHdr, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/cluster/topology returned status %d: %s", rec.Code, rec.Body.String())
+	}
+	var topo map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &topo); err != nil {
+		t.Fatalf("failed to parse /api/cluster/topology: %v", err)
+	}
+	if proto, ok := topo["link_protocol"].(string); !ok || proto != "PQLK-Binary-64B" {
+		t.Fatalf("expected link_protocol 'PQLK-Binary-64B', got %v", topo["link_protocol"])
+	}
+	if mode, ok := topo["delegation_mode"].(string); !ok || mode != "STANDALONE_PI5_FAILOVER" {
+		t.Fatalf("expected initial mode 'STANDALONE_PI5_FAILOVER', got %v", mode)
+	}
+
+	// 2. Connect Pi 3B peer and verify transition to COOPERATIVE_DUAL_PI
+	s.Delegator().UpdateNodeState(cluster.TargetPi3B, cluster.NodeHealth{
+		Online:      true,
+		CPUPermille: 300,
+		MemAvailMB:  500,
+		TempDeciC:   520,
+	})
+	s.Delegator().UpdateLinkStats(850.0, 35.0, true)
+
+	recCoop := get(t, s.Handler(), http.MethodGet, "/api/cluster/topology", authHdr, nil)
+	if recCoop.Code != http.StatusOK {
+		t.Fatalf("GET /api/cluster/topology status = %d", recCoop.Code)
+	}
+	var topoCoop map[string]any
+	if err := json.Unmarshal(recCoop.Body.Bytes(), &topoCoop); err != nil {
+		t.Fatalf("failed to parse cooperative topology: %v", err)
+	}
+	if mode, ok := topoCoop["delegation_mode"].(string); !ok || mode != "COOPERATIVE_DUAL_PI" {
+		t.Fatalf("expected cooperative mode, got %v", mode)
+	}
+	pi5Tasks, ok1 := topoCoop["pi5_tasks"].([]any)
+	pi3bTasks, ok2 := topoCoop["pi3b_delegated_tasks"].([]any)
+	if !ok1 || !ok2 || len(pi5Tasks) != 5 || len(pi3bTasks) != 5 {
+		t.Fatalf("expected 5 Pi5 tasks and 5 Pi3B tasks, got %v and %v", topoCoop["pi5_tasks"], topoCoop["pi3b_delegated_tasks"])
+	}
+
+	// 3. GET /api/paper/blotter contains enriched cluster_link
+	recBlotter := get(t, s.Handler(), http.MethodGet, "/api/paper/blotter", authHdr, nil)
+	if recBlotter.Code != http.StatusOK {
+		t.Fatalf("GET /api/paper/blotter returned status %d: %s", recBlotter.Code, recBlotter.Body.String())
+	}
+	var blotter map[string]any
+	if err := json.Unmarshal(recBlotter.Body.Bytes(), &blotter); err != nil {
+		t.Fatalf("failed to parse /api/paper/blotter: %v", err)
+	}
+	cl, ok := blotter["cluster_link"].(map[string]any)
+	if !ok {
+		t.Fatalf("blotter response missing cluster_link: %v", blotter)
+	}
+	if cl["link_protocol"] != "PQLK-Binary-64B" {
+		t.Fatalf("blotter cluster_link has wrong link_protocol: %v", cl["link_protocol"])
+	}
+	if cl["delegation_mode"] != "COOPERATIVE_DUAL_PI" {
+		t.Fatalf("blotter cluster_link expected COOPERATIVE_DUAL_PI, got %v", cl["delegation_mode"])
 	}
 }
