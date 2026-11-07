@@ -27,9 +27,10 @@ type dryRunFlags struct {
 	symbols         string
 	statusOnly      bool
 	reportOnly      bool
-	enableFallback  bool
-	enableAllModels bool
-	wsURL           string
+	enableFallback   bool
+	enableAllModels  bool
+	extendOnShutdown bool
+	wsURL            string
 }
 
 func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
@@ -49,6 +50,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.BoolVar(&f.reportOnly, "report", false, "generate and print institutional EOD risk & tear-sheet report and exit")
 	fs.BoolVar(&f.enableFallback, "fallback", false, "opt-in to local synthetic feed generation when offline (default false)")
 	fs.BoolVar(&f.enableAllModels, "enable-all-models", false, "re-enable all registered models in ensemble regardless of ablation gate")
+	fs.BoolVar(&f.extendOnShutdown, "extend-on-shutdown", true, "automatically extend target end time by offline duration upon shutdown/power-cycle recovery (default true)")
 	fs.StringVar(&f.wsURL, "ws-url", "", "custom Binance public WebSocket URL (default auto)")
 	return f
 }
@@ -116,6 +118,7 @@ func runDryRun(ctx context.Context, args []string) error {
 	paperCfg.MaxDrawdownPct = f.maxDD
 	paperCfg.Symbols = symList
 	paperCfg.EnableAllModels = f.enableAllModels
+	paperCfg.ExtendOnShutdown = f.extendOnShutdown
 
 	dryRunEngine, err := paper.NewDryRunEngine(paperCfg, ring, ingestor)
 	if err != nil {
@@ -247,6 +250,13 @@ func printDryRunStatus(stateFile string) error {
 	fmt.Printf(" Peak Equity:     $%.2f USDT\n", st.PeakEquity)
 	fmt.Printf(" Max Drawdown:    %.2f%%\n", st.MaxDrawdownPct)
 	fmt.Printf(" Total Trades:    %d (Win Rate: %.1f%%)\n", st.TotalTrades, st.WinRate)
+
+	if st.ShutdownCount > 0 {
+		fmt.Printf(" Shutdown Recovery: %d resumes (%.1fh compensated downtime)\n", st.ShutdownCount, st.OfflineDowntimeSeconds/3600.0)
+		if !st.LastResumeTime.IsZero() {
+			fmt.Printf(" Last Resumed:    %s\n", st.LastResumeTime.Format(time.RFC3339))
+		}
+	}
 
 	if st.CircuitHalted {
 		fmt.Printf(" Circuit Halt:    %s\n", st.CircuitHaltReason)

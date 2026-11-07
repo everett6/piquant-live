@@ -1,7 +1,7 @@
 [Unit]
 Description=PiQuant 14-Day Autonomous Paper Money Dry Run Service (Raspberry Pi 5)
-After=network-online.target avahi-daemon.service
-Wants=network-online.target
+After=network-online.target time-sync.target avahi-daemon.service
+Wants=network-online.target time-sync.target
 Documentation=https://github.com/everett6/PiQuant
 
 [Service]

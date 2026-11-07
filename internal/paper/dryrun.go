@@ -29,8 +29,9 @@ type DryRunConfig struct {
 	StateFile       string        // Path to checkpoint state (default: data/paper/dryrun_state.json)
 	JournalFile     string        // Path to trade journal (default: data/paper/dryrun_journal.jsonl)
 	CheckpointFreq  time.Duration // Interval to save state (default: 5 * time.Second)
-	OrderLatency    time.Duration // Feed + order placement latency before maker order is active (default: 50ms)
-	EnableAllModels bool          // Re-enable models disabled by ablation gate in the ensemble (default: false)
+	OrderLatency     time.Duration // Feed + order placement latency before maker order is active (default: 50ms)
+	EnableAllModels  bool          // Re-enable models disabled by ablation gate in the ensemble (default: false)
+	ExtendOnShutdown bool          // Automatically extend target end time by offline duration upon shutdown/power-cycle recovery (default: true)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -40,17 +41,18 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 	}
 	paperDir := filepath.Join(dataDir, "paper")
 	return DryRunConfig{
-		InitialCapital: 100000.00,
-		TargetDuration: 14 * 24 * time.Hour,
-		Symbols:        []string{"BTCUSDT", "ETHUSDT"},
-		MaxDrawdownPct: 2.0,
-		MakerFeeBps:    0.0,
-		TakerFeeBps:    4.0,
-		KylesLambda:    0.25,
-		StateFile:      filepath.Join(paperDir, "dryrun_state.json"),
-		JournalFile:    filepath.Join(paperDir, "dryrun_journal.jsonl"),
-		CheckpointFreq: 5 * time.Second,
-		OrderLatency:   50 * time.Millisecond,
+		InitialCapital:   100000.00,
+		TargetDuration:   14 * 24 * time.Hour,
+		Symbols:          []string{"BTCUSDT", "ETHUSDT"},
+		MaxDrawdownPct:   2.0,
+		MakerFeeBps:      0.0,
+		TakerFeeBps:      4.0,
+		KylesLambda:      0.25,
+		StateFile:        filepath.Join(paperDir, "dryrun_state.json"),
+		JournalFile:      filepath.Join(paperDir, "dryrun_journal.jsonl"),
+		CheckpointFreq:   5 * time.Second,
+		OrderLatency:     50 * time.Millisecond,
+		ExtendOnShutdown: true,
 	}
 }
 
@@ -122,9 +124,12 @@ type DryRunState struct {
 	DailyReturns      []float64            `json:"daily_returns"`
 	DaysElapsed       int                  `json:"days_elapsed"`
 	HoursRemaining    float64              `json:"hours_remaining"`
-	DataSource        string               `json:"data_source"`       // "live" or "fallback"
-	FeedDownSeconds   float64              `json:"feed_down_seconds"` // Cumulative duration market feed was disconnected
-	QuotingPaused     bool                 `json:"quoting_paused"`    // True when quoting/matching paused due to feed down
+	DataSource             string               `json:"data_source"`              // "live" or "fallback"
+	FeedDownSeconds        float64              `json:"feed_down_seconds"`        // Cumulative duration market feed was disconnected
+	QuotingPaused          bool                 `json:"quoting_paused"`           // True when quoting/matching paused due to feed down
+	OfflineDowntimeSeconds float64              `json:"offline_downtime_seconds"` // Cumulative time system was shut down / offline
+	ShutdownCount          int                  `json:"shutdown_count"`           // Number of power-cycles/resumptions survived
+	LastResumeTime         time.Time            `json:"last_resume_time"`         // Timestamp of latest recovery after shutdown
 }
 
 // DryRunEngine orchestrates the 14-day autonomous dry run.
@@ -340,18 +345,22 @@ func (e *DryRunEngine) runCheckpointLoop(ctx context.Context) {
 // saveCheckpoint serializes DryRunState to JSON.
 func (e *DryRunEngine) saveCheckpoint() error {
 	e.mu.Lock()
-	e.state.LastCheckpoint = time.Now()
 	now := time.Now()
-	elapsed := now.Sub(e.state.StartTime)
-	e.state.DaysElapsed = int(elapsed.Hours()/24.0) + 1
-	if e.state.DaysElapsed > 14 {
-		e.state.DaysElapsed = 14
+	e.state.LastCheckpoint = now
+
+	// Protect against backward time jump before NTP sync on Raspberry Pi
+	if !e.state.StartTime.IsZero() && now.After(e.state.StartTime) {
+		elapsed := now.Sub(e.state.StartTime)
+		e.state.DaysElapsed = int(elapsed.Hours()/24.0) + 1
+		if e.state.DaysElapsed > 14 {
+			e.state.DaysElapsed = 14
+		}
+		rem := e.state.TargetEndTime.Sub(now)
+		if rem < 0 {
+			rem = 0
+		}
+		e.state.HoursRemaining = rem.Hours()
 	}
-	rem := e.state.TargetEndTime.Sub(now)
-	if rem < 0 {
-		rem = 0
-	}
-	e.state.HoursRemaining = rem.Hours()
 
 	data, err := json.MarshalIndent(e.state, "", "  ")
 	e.mu.Unlock()
@@ -371,7 +380,7 @@ func (e *DryRunEngine) saveCheckpoint() error {
 	return os.Rename(tmpFile, e.cfg.StateFile)
 }
 
-// loadCheckpoint deserializes state from JSON.
+// loadCheckpoint deserializes state from JSON and handles shutdown gap recovery.
 func (e *DryRunEngine) loadCheckpoint() error {
 	if e.cfg.StateFile == "" {
 		return os.ErrNotExist
@@ -388,6 +397,35 @@ func (e *DryRunEngine) loadCheckpoint() error {
 
 	if st.Positions == nil {
 		st.Positions = make(map[string]*Position)
+	}
+
+	now := time.Now()
+	// Detect shutdown gap and recover seamlessly
+	if !st.LastCheckpoint.IsZero() {
+		if now.Before(st.LastCheckpoint) {
+			// System clock warped backwards (Raspberry Pi without RTC booted before NTP sync).
+			// Keep existing target end time and hours remaining intact until NTP catches up.
+		} else {
+			offlineGap := now.Sub(st.LastCheckpoint)
+			// If offline for more than 30s (e.g. 12-hour power-off, reboot, or transport):
+			if offlineGap > 30*time.Second {
+				st.OfflineDowntimeSeconds += offlineGap.Seconds()
+				st.FeedDownSeconds += offlineGap.Seconds()
+				st.ShutdownCount++
+				st.LastResumeTime = now
+
+				// If configured (default true), extend target end time by the offline duration
+				// so the user gets the FULL 336 hours of active live market evaluation!
+				if e.cfg.ExtendOnShutdown && !st.TargetEndTime.IsZero() {
+					st.TargetEndTime = st.TargetEndTime.Add(offlineGap)
+				}
+				rem := st.TargetEndTime.Sub(now)
+				if rem < 0 {
+					rem = 0
+				}
+				st.HoursRemaining = rem.Hours()
+			}
+		}
 	}
 
 	e.mu.Lock()
