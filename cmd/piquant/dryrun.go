@@ -21,17 +21,18 @@ import (
 
 type dryRunFlags struct {
 	serveFlags
-	capital          float64
-	durationH        float64
-	window           string
-	maxDD            float64
-	symbols          string
-	statusOnly       bool
-	reportOnly       bool
-	enableFallback   bool
-	enableAllModels  bool
-	extendOnShutdown bool
-	wsURL            string
+	capital           float64
+	durationH         float64
+	window            string
+	maxDD             float64
+	symbols           string
+	statusOnly        bool
+	reportOnly        bool
+	enableFallback    bool
+	enableAllModels   bool
+	extendOnShutdown  bool
+	flattenOnShutdown bool
+	wsURL             string
 }
 
 func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
@@ -53,6 +54,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.BoolVar(&f.enableFallback, "fallback", false, "opt-in to local synthetic feed generation when offline (default false)")
 	fs.BoolVar(&f.enableAllModels, "enable-all-models", false, "re-enable all registered models in ensemble regardless of ablation gate")
 	fs.BoolVar(&f.extendOnShutdown, "extend-on-shutdown", true, "automatically extend target end time by offline duration upon shutdown/power-cycle recovery (default true)")
+	fs.BoolVar(&f.flattenOnShutdown, "flatten-on-shutdown", true, "automatically liquidate all open positions to cash at current mark price on shutdown (default true)")
 	fs.StringVar(&f.wsURL, "ws-url", "", "custom Binance public WebSocket URL (default auto)")
 	return f
 }
@@ -124,6 +126,7 @@ func runDryRun(ctx context.Context, args []string) error {
 	paperCfg.Symbols = symList
 	paperCfg.EnableAllModels = f.enableAllModels
 	paperCfg.ExtendOnShutdown = f.extendOnShutdown
+	paperCfg.FlattenOnShutdown = f.flattenOnShutdown
 
 	dryRunEngine, err := paper.NewDryRunEngine(paperCfg, ring, ingestor)
 	if err != nil {

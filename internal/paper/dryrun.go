@@ -30,9 +30,10 @@ type DryRunConfig struct {
 	JournalFile     string        // Path to trade journal (default: data/paper/dryrun_journal.jsonl)
 	CheckpointFreq  time.Duration // Interval to save state (default: 5 * time.Second)
 	OrderLatency     time.Duration // Feed + order placement latency before maker order is active (default: 50ms)
-	EnableAllModels  bool          // Re-enable models disabled by ablation gate in the ensemble (default: false)
-	ExtendOnShutdown bool          // Automatically extend target end time by offline duration upon shutdown/power-cycle recovery (default: true)
-	WindowPreset     string        // Window preset: "7d" (last week), "30d" (last month), "14d" (2 weeks)
+	EnableAllModels   bool          // Re-enable models disabled by ablation gate in the ensemble (default: false)
+	ExtendOnShutdown  bool          // Automatically extend target end time by offline duration upon shutdown/power-cycle recovery (default: true)
+	FlattenOnShutdown bool          // Automatically liquidate all open positions to cash at current mark price on shutdown (default: true)
+	WindowPreset      string        // Window preset: "7d" (last week), "30d" (last month), "14d" (2 weeks)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -42,18 +43,19 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 	}
 	paperDir := filepath.Join(dataDir, "paper")
 	return DryRunConfig{
-		InitialCapital:   1000.00,
-		TargetDuration:   14 * 24 * time.Hour,
-		Symbols:          []string{"BTCUSDT", "ETHUSDT"},
-		MaxDrawdownPct:   2.0,
-		MakerFeeBps:      0.0,
-		TakerFeeBps:      4.0,
-		KylesLambda:      0.25,
-		StateFile:        filepath.Join(paperDir, "dryrun_state.json"),
-		JournalFile:      filepath.Join(paperDir, "dryrun_journal.jsonl"),
-		CheckpointFreq:   5 * time.Second,
-		OrderLatency:     50 * time.Millisecond,
-		ExtendOnShutdown: true,
+		InitialCapital:    1000.00,
+		TargetDuration:    14 * 24 * time.Hour,
+		Symbols:           []string{"BTCUSDT", "ETHUSDT"},
+		MaxDrawdownPct:    2.0,
+		MakerFeeBps:       0.0,
+		TakerFeeBps:       4.0,
+		KylesLambda:       0.25,
+		StateFile:         filepath.Join(paperDir, "dryrun_state.json"),
+		JournalFile:       filepath.Join(paperDir, "dryrun_journal.jsonl"),
+		CheckpointFreq:    5 * time.Second,
+		OrderLatency:      50 * time.Millisecond,
+		ExtendOnShutdown:  true,
+		FlattenOnShutdown: true,
 	}
 }
 
@@ -312,13 +314,83 @@ func (e *DryRunEngine) Start(ctx context.Context) {
 	go e.runCheckpointLoop(ctx)
 }
 
-// Stop terminates the engine and checkpoints state.
+// Stop terminates the engine, cancels all resting orders, optionally auto-liquidates open inventory to cash, and checkpoints state.
 func (e *DryRunEngine) Stop() {
 	if !e.running.Swap(false) {
 		return
 	}
 	close(e.stopCh)
 	e.wg.Wait()
+
+	e.mu.Lock()
+	// 1. Cancel all resting maker orders on shutdown
+	for s := range e.activeOrders {
+		e.activeOrders[s] = nil
+	}
+
+	// 2. Auto TS (Trailing Stop / Liquidation) on Shutdown:
+	// If configured (default true), close any open inventory at current MarkPrice to convert all unrealized PnL to cash
+	if e.cfg.FlattenOnShutdown {
+		for sym, pos := range e.state.Positions {
+			if pos != nil && pos.Size != 0 && pos.MarkPrice > 0 {
+				closePrice := pos.MarkPrice
+				qty := math.Abs(pos.Size)
+				valUSDT := closePrice * qty
+				realizedPnL := 0.0
+
+				if pos.Size > 0 { // Long position liquidated
+					realizedPnL = pos.Size * (closePrice - pos.AvgEntryPrice)
+					e.state.Cash += valUSDT
+				} else { // Short position covered
+					realizedPnL = (-pos.Size) * (pos.AvgEntryPrice - closePrice)
+					e.state.Cash -= valUSDT
+				}
+
+				pos.RealizedPnL += realizedPnL
+				pos.UnrealizedPnL = 0
+				pos.Size = 0
+				pos.TotalTrades++
+
+				e.state.RealizedPnL += realizedPnL
+				e.state.TotalTrades++
+				if realizedPnL > 0 {
+					e.state.WinningTrades++
+				} else if realizedPnL < 0 {
+					e.state.LosingTrades++
+				}
+
+				// Record liquidation fill in journal/blotter
+				fillRec := TradeRecord{
+					Timestamp:   time.Now().UTC(),
+					Symbol:      sym,
+					Side:        "SHUTDOWN_AUTO_LIQUIDATE",
+					Role:        "TAKER_SAFETY",
+					Price:       closePrice,
+					Size:        qty,
+					ValueUSDT:   valUSDT,
+					FeeUSDT:     0.0,
+					EdgeBps:     0.0,
+					SlippageBps: 0.0,
+					PnLRealized: realizedPnL,
+					Strategy:    "Shutdown_Auto_TS_Flatten",
+					DataSource:  "live",
+				}
+				e.recentFills = append([]TradeRecord{fillRec}, e.recentFills...)
+				if len(e.recentFills) > 64 {
+					e.recentFills = e.recentFills[:64]
+				}
+				if e.journal != nil {
+					if b, err := json.Marshal(fillRec); err == nil {
+						_, _ = e.journal.Write(append(b, '\n'))
+					}
+				}
+			}
+		}
+		// Reset unrealized PnL and lock equity into cash
+		e.state.UnrealizedPnL = 0
+		e.state.Equity = e.state.Cash
+	}
+	e.mu.Unlock()
 
 	_ = e.saveCheckpoint()
 	if e.journal != nil {
