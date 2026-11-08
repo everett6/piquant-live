@@ -1,6 +1,7 @@
 package paper
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -686,7 +687,17 @@ func (e *DryRunEngine) saveCheckpoint() error {
 
 	_ = os.MkdirAll(filepath.Dir(e.cfg.StateFile), 0o755)
 	tmpFile := e.cfg.StateFile + ".tmp"
-	if err := os.WriteFile(tmpFile, data, 0o644); err != nil {
+	f, err := os.OpenFile(tmpFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	// Flush kernel page cache to physical storage (SD card / NVMe) to prevent 0x00 null byte corruption on power loss
+	_ = f.Sync()
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmpFile, e.cfg.StateFile)
@@ -702,9 +713,17 @@ func (e *DryRunEngine) loadCheckpoint() error {
 		return err
 	}
 
+	cleanData := bytes.Trim(data, "\x00\r\n \t")
+	if len(cleanData) == 0 {
+		// File was zeroed out by power-loss before dirty pages reached flash
+		_ = os.Rename(e.cfg.StateFile, e.cfg.StateFile+".corrupted")
+		return os.ErrNotExist
+	}
+
 	var st DryRunState
-	if err := json.Unmarshal(data, &st); err != nil {
-		return err
+	if err := json.Unmarshal(cleanData, &st); err != nil {
+		_ = os.Rename(e.cfg.StateFile, e.cfg.StateFile+".corrupted")
+		return os.ErrNotExist
 	}
 
 	if st.Positions == nil {
