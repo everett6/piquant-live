@@ -659,3 +659,67 @@ func TestMacroGuardianEventHaltAndSpreadScaling(t *testing.T) {
 		t.Errorf("expected spread multiplier 1.0x, got %f", stNom.Macro.SpreadMultiplier)
 	}
 }
+
+func TestBreakevenFloorAndProfitLockingRatchet(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.MakerFeeBps = 1.5 // 3.0 bps round trip
+
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	engine, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	// 1. Manually establish a LONG position in ETHUSDT at $2230.00
+	engine.mu.Lock()
+	engine.state.Positions["ETHUSDT"] = &Position{
+		Symbol:        "ETHUSDT",
+		Size:          0.020,
+		AvgEntryPrice: 2230.00,
+		MarkPrice:     2230.00,
+	}
+	engine.mu.Unlock()
+
+	// 2. Evaluate quotes when midPrice drops slightly to $2229.50 (normal 2 bps noise against position)
+	now := time.Now()
+	engine.evaluateQuotesAndGating("ETHUSDT", 2229.50, now)
+
+	st := engine.State()
+	orders := st.ActiveOrders["ETHUSDT"]
+	var sellOrd *ActiveMakerOrder
+	for _, o := range orders {
+		if o.Side == "SELL" {
+			sellOrd = &o
+			break
+		}
+	}
+	if sellOrd == nil {
+		t.Fatalf("expected active SELL order for ETHUSDT")
+	}
+
+	// Min profit ask = 2230.00 * (1.0 + (3.0 + 0.5)*1e-4) = 2230.7805 -> rounded up to 2230.79
+	minExpectedAsk := 2230.78
+	if sellOrd.Price < minExpectedAsk {
+		t.Errorf("expected sell order price >= %f (breakeven floor), got %f", minExpectedAsk, sellOrd.Price)
+	}
+
+	// 3. Test Profit-Locking: midPrice surges to $2235.00 (> 2230 + 3.5 bps profit threshold)
+	engine.evaluateQuotesAndGating("ETHUSDT", 2235.00, now)
+	stSurge := engine.State()
+	var surgeSell *ActiveMakerOrder
+	for _, o := range stSurge.ActiveOrders["ETHUSDT"] {
+		if o.Side == "SELL" {
+			surgeSell = &o
+			break
+		}
+	}
+	if surgeSell == nil {
+		t.Fatalf("expected active SELL order during surge")
+	}
+	if surgeSell.Price < 2230.78 {
+		t.Errorf("expected surge sell price >= 2230.78, got %f", surgeSell.Price)
+	}
+}

@@ -1624,32 +1624,52 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	targetBid := midPrice - (bidOffsetBps * midPrice * 1e-4)
 	targetAsk := midPrice + (askOffsetBps * midPrice * 1e-4)
 
-	// Profit-Locking Ratchet:
-	// If current inventory has moved into confirmed net profit (> 2x round-trip maker fee + 1.0 bps net edge),
-	// pull the closing exit quote right to the inside touch (bestAsk for long, bestBid for short)
-	// so the position exits with confirmed net profit before market mean-reversion.
+	// Institutional Breakeven Floor & Profit-Locking Ratchet:
+	// When holding open inventory, the closing quote must mathematically guarantee net profitability
+	// after accounting for round-trip maker fees (2 * MakerFeeBps) and target net profit margin (0.50 bps).
+	// An exit is ONLY allowed below break-even if adverse breakout stop-loss (> 15 bps drawdown) triggers.
 	if pos != nil && math.Abs(pos.Size) > 1e-8 && pos.AvgEntryPrice > 0 {
-		netPnLBps := 0.0
-		if pos.Size > 0 && midPrice > pos.AvgEntryPrice {
-			netPnLBps = (midPrice - pos.AvgEntryPrice) / pos.AvgEntryPrice * 1e4 - (2.0 * e.cfg.MakerFeeBps)
-		} else if pos.Size < 0 && midPrice < pos.AvgEntryPrice {
-			netPnLBps = (pos.AvgEntryPrice - midPrice) / pos.AvgEntryPrice * 1e4 - (2.0 * e.cfg.MakerFeeBps)
-		}
-		if netPnLBps >= 1.0 { // Net green by >= 1.0 bps after covering all fees
-			if pos.Size > 0 && bestAsk > 0 {
-				targetAsk = bestAsk // Fast profit-lock exit at inside ask
-			} else if pos.Size < 0 && bestBid > 0 {
-				targetBid = bestBid // Fast profit-lock cover at inside bid
-			}
-		}
-	}
+		minNetEdgeBps := 0.50
+		roundTripFeeBps := 2.0 * e.cfg.MakerFeeBps
 
-	// Holding Urgency: after 90s, pull closing quote to the inside touch to expedite queue clearance
-	if holdSec > 90.0 {
-		if currentInv < 0 && bestBid > 0 && targetBid < bestBid {
-			targetBid = bestBid
-		} else if currentInv > 0 && bestAsk > 0 && targetAsk > bestAsk {
-			targetAsk = bestAsk
+		if pos.Size > 0 { // Holding LONG position
+			minProfitAsk := pos.AvgEntryPrice * (1.0 + (roundTripFeeBps+minNetEdgeBps)*1e-4)
+			adverseDrawdownBps := (pos.AvgEntryPrice - midPrice) / pos.AvgEntryPrice * 1e4
+
+			if adverseDrawdownBps > 15.0 {
+				// Severe adverse trend: stop-loss triggered to protect capital against runaway crashes
+				if bestAsk > 0 {
+					targetAsk = bestAsk
+				}
+			} else {
+				// Normal market oscillation: quote at or above minProfitAsk
+				if targetAsk < minProfitAsk {
+					targetAsk = minProfitAsk
+				}
+				// Profit-locking ratchet: if market surged into confirmed net profit, take inside ask
+				if bestAsk >= minProfitAsk {
+					targetAsk = bestAsk
+				}
+			}
+		} else if pos.Size < 0 { // Holding SHORT position
+			maxProfitBid := pos.AvgEntryPrice * (1.0 - (roundTripFeeBps+minNetEdgeBps)*1e-4)
+			adverseDrawdownBps := (midPrice - pos.AvgEntryPrice) / pos.AvgEntryPrice * 1e4
+
+			if adverseDrawdownBps > 15.0 {
+				// Severe adverse trend: stop-loss triggered to protect capital
+				if bestBid > 0 {
+					targetBid = bestBid
+				}
+			} else {
+				// Normal market oscillation: cover at or below maxProfitBid
+				if targetBid > maxProfitBid {
+					targetBid = maxProfitBid
+				}
+				// Profit-locking ratchet: if market dumped into confirmed net profit, take inside bid
+				if bestBid <= maxProfitBid && bestBid > 0 {
+					targetBid = bestBid
+				}
+			}
 		}
 	}
 
@@ -1677,10 +1697,10 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if ord.Side == "SELL" {
 			target = targetAsk
 		}
-		// Preserve FIFO queue priority: only cancel & replace if target price moved > 2.5 bps
-		// or if order has rested for > 90 seconds without filling.
+		// Preserve FIFO queue priority: only cancel & replace if target price moved > 2.5 bps.
+		// Avoid cancelling orders solely due to time elapsed, preserving queue position.
 		devBps := math.Abs(ord.Price-target) / target * 1e4
-		if devBps > 2.5 || now.Sub(ord.PlacedAt) > 90*time.Second {
+		if devBps > 2.5 {
 			continue // cancel stale order
 		}
 		keptOrders = append(keptOrders, ord)
@@ -1754,8 +1774,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	e.activeOrders[symbol] = orders
 
 	// Tactical Taker Execution:
-	// Only triggered on extreme high-conviction directional forecast passing conformal gate against taker costs
-	if math.Abs(metaPred) > 4.5 && e.conformal.PassesConformalGate(metaPred, x[10], e.cfg.TakerFeeBps) {
+	// In HFT market making, taker orders are strictly restricted to extreme momentum dislocations (>= 15.0 bps)
+	// that clear double round-trip cost hurdles, preventing fee bleed on high-frequency noise.
+	if math.Abs(metaPred) >= 15.0 && e.conformal.PassesConformalGate(metaPred, x[10], (e.cfg.TakerFeeBps+e.cfg.MakerFeeBps)*2.0) {
 		e.simulateTakerFillLocked(symbol, midPrice, metaPred)
 	}
 }
