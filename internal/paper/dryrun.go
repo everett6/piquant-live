@@ -34,6 +34,8 @@ type DryRunConfig struct {
 	ExtendOnShutdown  bool          // Automatically extend target end time by offline duration upon shutdown/power-cycle recovery (default: true)
 	FlattenOnShutdown bool          // Automatically liquidate all open positions to cash at current mark price on shutdown (default: true)
 	WindowPreset      string        // Window preset: "7d" (last week), "30d" (last month), "14d" (2 weeks)
+	BaseLeverage      float64       // Nominal base leverage multiplier (default: 2.5x)
+	MaxLeverage       float64       // Maximum allowable leverage ceiling (default: 5.0x)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -56,6 +58,8 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		OrderLatency:      50 * time.Millisecond,
 		ExtendOnShutdown:  true,
 		FlattenOnShutdown: true,
+		BaseLeverage:      2.5,
+		MaxLeverage:       5.0,
 	}
 }
 
@@ -222,6 +226,12 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 
 	levCfg := DefaultDynamicLeverageConfig()
 	levCfg.MaxDrawdownPct = cfg.MaxDrawdownPct
+	if cfg.BaseLeverage > 0 {
+		levCfg.BaseLeverage = cfg.BaseLeverage
+	}
+	if cfg.MaxLeverage > 0 {
+		levCfg.MaxLeverage = cfg.MaxLeverage
+	}
 	levCtrl := NewDynamicLeverageController(levCfg)
 
 	e := &DryRunEngine{

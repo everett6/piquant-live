@@ -25,6 +25,8 @@ type dryRunFlags struct {
 	durationH         float64
 	window            string
 	maxDD             float64
+	baseLev           float64
+	maxLev            float64
 	symbols           string
 	statusOnly        bool
 	reportOnly        bool
@@ -48,6 +50,8 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.StringVar(&f.window, "window", "7d", "evaluation window preset: '7d' (last week), '30d' (last month), '14d' (2 weeks)")
 	fs.Float64Var(&f.durationH, "duration-hours", 0, "target autonomous duration in hours (0 = infer from --window, e.g. 168h for 7d, 720h for 30d)")
 	fs.Float64Var(&f.maxDD, "max-drawdown", 2.0, "maximum allowable drawdown percentage before circuit breaker halts")
+	fs.Float64Var(&f.baseLev, "base-leverage", 2.5, "nominal base leverage multiplier (e.g. 2.5 for 2.5x, 3.5 for 3.5x to reach $20/mo on $200)")
+	fs.Float64Var(&f.maxLev, "max-leverage", 5.0, "maximum allowable leverage ceiling")
 	fs.StringVar(&f.symbols, "symbols", "BTCUSDT,ETHUSDT", "comma-separated trading symbols")
 	fs.BoolVar(&f.statusOnly, "status", false, "print terminal summary of active dry run and exit")
 	fs.BoolVar(&f.reportOnly, "report", false, "generate and print institutional EOD risk & tear-sheet report and exit")
@@ -123,6 +127,12 @@ func runDryRun(ctx context.Context, args []string) error {
 		paperCfg.TargetDuration = time.Duration(f.durationH) * time.Hour
 	}
 	paperCfg.MaxDrawdownPct = f.maxDD
+	if f.baseLev > 0 {
+		paperCfg.BaseLeverage = f.baseLev
+	}
+	if f.maxLev > 0 {
+		paperCfg.MaxLeverage = f.maxLev
+	}
 	paperCfg.Symbols = symList
 	paperCfg.EnableAllModels = f.enableAllModels
 	paperCfg.ExtendOnShutdown = f.extendOnShutdown

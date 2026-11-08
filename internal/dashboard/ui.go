@@ -341,7 +341,13 @@ const indexHTML = `<!doctype html>
               <input id="inputMaxDD" class="cockpit-input" type="number" step="0.1" value="2.0" min="0.5" max="10.0" onchange="applyCustomParameters()">
             </div>
             <div>
-              <label style="font-size:10px;color:var(--muted)">Target Monthly Gain (%)</label>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+                <label style="font-size:10px;color:var(--muted)">Target Monthly Gain (%)</label>
+                <div style="display:flex;gap:4px">
+                  <button type="button" class="preset-pill-btn" style="padding:1px 5px;font-size:9px" onclick="setTargetGoal(7.22, 2.5)" title="Standard conservative: $14.45/mo">7.2%</button>
+                  <button type="button" class="preset-pill-btn" style="padding:1px 5px;font-size:9px;color:var(--accent);border-color:rgba(0,230,118,0.4)" onclick="setTargetGoal(10.0, 3.5)" title="Accelerated target: $20.00/mo">10% ($20/mo ⚡)</button>
+                </div>
+              </div>
               <input id="inputTargetReturn" class="cockpit-input" type="number" step="0.1" value="7.22" min="1.0" max="50.0" onchange="applyCustomParameters()">
             </div>
             <div>
@@ -3003,6 +3009,12 @@ const indexHTML = `<!doctype html>
     applyCustomParameters();
   };
 
+  window.setTargetGoal = function(targetPct, lev) {
+    if ($("inputTargetReturn")) $("inputTargetReturn").value = targetPct;
+    if (lev && $("inputBaseLeverage")) $("inputBaseLeverage").value = lev;
+    applyCustomParameters();
+  };
+
   window.applyCustomParameters = function() {
     var cap = parseFloat($("inputCustomCapital") ? $("inputCustomCapital").value : 200) || 200;
     var baseLev = parseFloat($("inputBaseLeverage") ? $("inputBaseLeverage").value : 2.5) || 2.5;
@@ -3012,8 +3024,9 @@ const indexHTML = `<!doctype html>
 
     var moGain = cap * (targetRet / 100.0);
     var wkGain = moGain / 4.33;
-    var rebates = cap * 0.0304;
-    var trades = Math.round(120 * (cap / 1000.0));
+    var levScale = baseLev / 2.5;
+    var rebates = cap * 0.0304 * levScale;
+    var trades = Math.round(120 * (cap / 1000.0) * levScale);
 
     if ($("projMonthlyGain")) $("projMonthlyGain").textContent = "+$" + num(moGain, 2) + " / mo (+" + num(targetRet, 2) + "%)";
     if ($("projWeeklyGain")) $("projWeeklyGain").textContent = "(\u2248 +$" + num(wkGain, 2) + " / week)";
