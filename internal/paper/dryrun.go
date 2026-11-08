@@ -43,6 +43,10 @@ type DryRunConfig struct {
 	EnableMacroShield bool          // Zero-cost macro calendar event shield (default: true)
 	MacroSyncURL      string        // Optional custom URL for macro calendar sync (default: ForexFactory free feed)
 	DataDir           string        // Root data directory (default: "data")
+	TargetProfitBps   float64       // Net target profit margin per swing in bps (default: 25.0 bps = 0.25%)
+	EntryOffsetBps    float64       // Minimum maker entry distance from mid in bps (default: 12.5 bps = 0.125%)
+	StopLossBps       float64       // Structural invalidation stop loss in bps (default: 75.0 bps = 0.75%)
+	CleanReset        bool          // Reset cumulative historical win/loss stats on start
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -69,6 +73,10 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		MaxLeverage:       5.0,
 		EnableMacroShield: true,
 		DataDir:           dataDir,
+		TargetProfitBps:   25.0,
+		EntryOffsetBps:    12.5,
+		StopLossBps:       75.0,
+		CleanReset:        false,
 	}
 }
 
@@ -288,6 +296,15 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	if cfg.OrderLatency <= 0 {
 		cfg.OrderLatency = 50 * time.Millisecond
 	}
+	if cfg.TargetProfitBps <= 0 {
+		cfg.TargetProfitBps = 25.0
+	}
+	if cfg.EntryOffsetBps <= 0 {
+		cfg.EntryOffsetBps = 12.5
+	}
+	if cfg.StopLossBps <= 0 {
+		cfg.StopLossBps = 75.0
+	}
 
 	levCfg := DefaultDynamicLeverageConfig()
 	levCfg.MaxDrawdownPct = cfg.MaxDrawdownPct
@@ -385,6 +402,29 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		if e.state.WindowPreset == "" {
 			e.state.WindowPreset = cfg.WindowPreset
 		}
+	}
+
+	// Clean reset option: clears contaminated legacy trade counts, win rate, realized PnL, positions, and archives old journal
+	if cfg.CleanReset {
+		e.state.WinningTrades = 0
+		e.state.LosingTrades = 0
+		e.state.TotalTrades = 0
+		e.state.WinRate = 100.0
+		e.state.RealizedPnL = 0.0
+		e.state.InitialCapital = cfg.InitialCapital
+		e.state.Equity = cfg.InitialCapital
+		e.state.Cash = cfg.InitialCapital
+		e.state.PeakEquity = cfg.InitialCapital
+		e.state.MaxDrawdownPct = 0.0
+		e.state.TotalReturnPct = 0.0
+		e.state.DailyReturns = nil
+		e.state.Positions = make(map[string]*Position)
+		if cfg.JournalFile != "" {
+			if _, err := os.Stat(cfg.JournalFile); err == nil {
+				_ = os.Rename(cfg.JournalFile, cfg.JournalFile+".legacy")
+			}
+		}
+		_ = e.saveCheckpoint()
 	}
 
 	// Ensure journal directory exists
@@ -1520,10 +1560,6 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	} else {
 		sm.InventorySince = time.Time{}
 	}
-	holdSec := 0.0
-	if !sm.InventorySince.IsZero() {
-		holdSec = now.Sub(sm.InventorySince).Seconds()
-	}
 	e.mu.Unlock()
 
 	// Normalize inventory into [-5.0, +5.0] clip units so GLFT & Cartea-Jaimungal inventory risk aversion
@@ -1593,16 +1629,6 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	// Blend AdaHedge online meta-prediction with GLFT reservation skew
 	blendedSkewBps := 0.65*(qd.ReservationBps-invSkewBps) + 0.35*metaPred
 
-	// Ornstein-Uhlenbeck Inventory Holding-Age Urgency: accelerate mean-reverting exits after 75s
-	if holdSec > 75.0 {
-		urgencyBps := math.Min(1.50, (holdSec-75.0)*0.02)
-		if currentInv > 0 {
-			blendedSkewBps -= urgencyBps
-		} else if currentInv < 0 {
-			blendedSkewBps += urgencyBps
-		}
-	}
-
 	bidOffsetBps := math.Max(floorBps, qd.HalfSpreadBps-blendedSkewBps) + tcaPenaltyBps
 	askOffsetBps := math.Max(floorBps, qd.HalfSpreadBps+blendedSkewBps) + tcaPenaltyBps
 
@@ -1612,10 +1638,14 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		askOffsetBps *= macroSt.SpreadMultiplier
 	}
 
-	// Volatility-Adaptive Fee Floor (Avellaneda-Stoikov & GLFT):
-	// In calm markets (vol <= 0.40 bps), floor is tight (fee + 0.45 bps) for maximum fill turnover.
-	// In volatile markets, floor scales with volatility so liquidity provision is compensated with wider margins.
-	feeFloorBps := math.Max(floorBps, e.cfg.MakerFeeBps+0.45)
+	// Volatility-Adaptive Entry Spread (Multi-Horizon Swing & Position Market Making):
+	// Entry quotes are placed at real liquidity discount levels (default: EntryOffsetBps = 12.5 bps),
+	// preventing premature fills on high-frequency noise and ensuring purchases happen on genuine dips.
+	entrySpreadBps := e.cfg.EntryOffsetBps
+	if entrySpreadBps <= 0 {
+		entrySpreadBps = 12.5
+	}
+	feeFloorBps := math.Max(floorBps, entrySpreadBps)
 	if sm.VolVarBps > 0.40 {
 		volScale := math.Min(2.5, sm.VolVarBps/0.40)
 		feeFloorBps *= volScale
@@ -1630,25 +1660,33 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	targetBid := midPrice - (bidOffsetBps * midPrice * 1e-4)
 	targetAsk := midPrice + (askOffsetBps * midPrice * 1e-4)
 
-	// Institutional Breakeven Floor & Profit-Locking Ratchet:
+	// Institutional Breakeven Floor & Profit-Locking Ratchet (Multi-Minute to Multi-Day Horizon):
 	// When holding open inventory, the closing quote must mathematically guarantee net profitability
-	// after accounting for round-trip maker fees (2 * MakerFeeBps) and target net profit margin (0.50 bps).
-	// An exit is ONLY allowed below break-even if adverse breakout stop-loss (> 15 bps drawdown) triggers.
+	// of at least TargetProfitBps (default: 25.0 bps = 0.25% net) after covering all round-trip maker fees.
+	// Positions are patiently held across minutes, hours, or days until the profit target is reached.
+	// An exit is ONLY allowed below break-even if structural invalidation stop-loss (default: 75.0 bps) triggers.
 	if pos != nil && math.Abs(pos.Size) > 1e-8 && pos.AvgEntryPrice > 0 {
-		minNetEdgeBps := 0.50
+		targetProfitBps := e.cfg.TargetProfitBps
+		if targetProfitBps <= 0 {
+			targetProfitBps = 25.0
+		}
+		stopLossBps := e.cfg.StopLossBps
+		if stopLossBps <= 0 {
+			stopLossBps = 75.0
+		}
 		roundTripFeeBps := 2.0 * e.cfg.MakerFeeBps
 
 		if pos.Size > 0 { // Holding LONG position
-			minProfitAsk := pos.AvgEntryPrice * (1.0 + (roundTripFeeBps+minNetEdgeBps)*1e-4)
+			minProfitAsk := pos.AvgEntryPrice * (1.0 + (roundTripFeeBps+targetProfitBps)*1e-4)
 			adverseDrawdownBps := (pos.AvgEntryPrice - midPrice) / pos.AvgEntryPrice * 1e4
 
-			if adverseDrawdownBps > 15.0 {
-				// Severe adverse trend: stop-loss triggered to protect capital against runaway crashes
+			if adverseDrawdownBps > stopLossBps {
+				// Structural invalidation: stop-loss triggered to protect capital against sustained crashes
 				if bestAsk > 0 {
 					targetAsk = bestAsk
 				}
 			} else {
-				// Normal market oscillation: quote at or above minProfitAsk
+				// Normal market oscillation / swing holding: quote at or above minProfitAsk
 				if targetAsk < minProfitAsk {
 					targetAsk = minProfitAsk
 				}
@@ -1658,16 +1696,16 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				}
 			}
 		} else if pos.Size < 0 { // Holding SHORT position
-			maxProfitBid := pos.AvgEntryPrice * (1.0 - (roundTripFeeBps+minNetEdgeBps)*1e-4)
+			maxProfitBid := pos.AvgEntryPrice * (1.0 - (roundTripFeeBps+targetProfitBps)*1e-4)
 			adverseDrawdownBps := (midPrice - pos.AvgEntryPrice) / pos.AvgEntryPrice * 1e4
 
-			if adverseDrawdownBps > 15.0 {
-				// Severe adverse trend: stop-loss triggered to protect capital
+			if adverseDrawdownBps > stopLossBps {
+				// Structural invalidation: stop-loss triggered to protect capital
 				if bestBid > 0 {
 					targetBid = bestBid
 				}
 			} else {
-				// Normal market oscillation: cover at or below maxProfitBid
+				// Normal market oscillation / swing holding: cover at or below maxProfitBid
 				if targetBid > maxProfitBid {
 					targetBid = maxProfitBid
 				}

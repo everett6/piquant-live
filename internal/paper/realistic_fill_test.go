@@ -12,6 +12,7 @@ func TestRealisticQueueFillsAndLatency(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := DefaultDryRunConfig(tempDir)
 	cfg.OrderLatency = 20 * time.Millisecond // 20ms test latency
+	cfg.EntryOffsetBps = 2.0
 
 	ring := engine.NewSPSCRing(1024)
 	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)

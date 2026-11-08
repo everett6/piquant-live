@@ -700,14 +700,14 @@ func TestBreakevenFloorAndProfitLockingRatchet(t *testing.T) {
 		t.Fatalf("expected active SELL order for ETHUSDT")
 	}
 
-	// Min profit ask = 2230.00 * (1.0 + (3.0 + 0.5)*1e-4) = 2230.7805 -> rounded up to 2230.79
-	minExpectedAsk := 2230.78
+	// Min profit ask = 2230.00 * (1.0 + (3.0 + 25.0)*1e-4) = 2236.24 -> rounded up to 2236.25
+	minExpectedAsk := 2236.24
 	if sellOrd.Price < minExpectedAsk {
 		t.Errorf("expected sell order price >= %f (breakeven floor), got %f", minExpectedAsk, sellOrd.Price)
 	}
 
-	// 3. Test Profit-Locking: midPrice surges to $2235.00 (> 2230 + 3.5 bps profit threshold)
-	engine.evaluateQuotesAndGating("ETHUSDT", 2235.00, now)
+	// 3. Test Profit-Locking: midPrice surges to $2240.00 (> 2230 + 28 bps profit threshold)
+	engine.evaluateQuotesAndGating("ETHUSDT", 2240.00, now)
 	stSurge := engine.State()
 	var surgeSell *ActiveMakerOrder
 	for _, o := range stSurge.ActiveOrders["ETHUSDT"] {
@@ -719,8 +719,8 @@ func TestBreakevenFloorAndProfitLockingRatchet(t *testing.T) {
 	if surgeSell == nil {
 		t.Fatalf("expected active SELL order during surge")
 	}
-	if surgeSell.Price < 2230.78 {
-		t.Errorf("expected surge sell price >= 2230.78, got %f", surgeSell.Price)
+	if surgeSell.Price < 2236.24 {
+		t.Errorf("expected surge sell price >= 2236.24, got %f", surgeSell.Price)
 	}
 }
 
@@ -793,3 +793,63 @@ func TestUnconditionalExitQuotingAndFullPositionSizing(t *testing.T) {
 		t.Errorf("expected exit BUY order size to match full open short inventory (%f), got %f", targetShortQty, exitBuyOrd.Size)
 	}
 }
+
+func TestCleanResetPurgesLegacyStats(t *testing.T) {
+	tempDir := t.TempDir()
+	paperDir := filepath.Join(tempDir, "paper")
+	_ = os.MkdirAll(paperDir, 0o755)
+
+	statePath := filepath.Join(paperDir, "dryrun_state.json")
+	journalPath := filepath.Join(paperDir, "dryrun_journal.jsonl")
+
+	// Write mock contaminated legacy state
+	mockState := DryRunState{
+		WinningTrades:  4,
+		LosingTrades:   106,
+		TotalTrades:    110,
+		WinRate:        3.636,
+		RealizedPnL:    -3.50,
+		InitialCapital: 200.0,
+		Equity:         196.50,
+		Cash:           196.50,
+		PeakEquity:     200.0,
+		MaxDrawdownPct: 1.75,
+		Positions: map[string]*Position{
+			"BTCUSDT": {Symbol: "BTCUSDT", Size: 0.001, AvgEntryPrice: 75000},
+		},
+	}
+	raw, _ := json.Marshal(mockState)
+	_ = os.WriteFile(statePath, raw, 0o644)
+	_ = os.WriteFile(journalPath, []byte("{\"fill\":\"legacy\"}\n"), 0o644)
+
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.CleanReset = true
+	ring := engine.NewSPSCRing(128)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine with CleanReset: %v", err)
+	}
+
+	st := dryRun.State()
+	if st.TotalTrades != 0 || st.WinningTrades != 0 || st.LosingTrades != 0 {
+		t.Errorf("expected trade counts to be 0, got Total=%d, Win=%d, Loss=%d", st.TotalTrades, st.WinningTrades, st.LosingTrades)
+	}
+	if st.WinRate != 100.0 {
+		t.Errorf("expected WinRate 100.0, got %f", st.WinRate)
+	}
+	if st.RealizedPnL != 0.0 {
+		t.Errorf("expected RealizedPnL 0.0, got %f", st.RealizedPnL)
+	}
+	if st.Cash != 200.0 || st.Equity != 200.0 {
+		t.Errorf("expected Cash and Equity 200.0, got Cash=%f, Equity=%f", st.Cash, st.Equity)
+	}
+	if len(st.Positions) != 0 {
+		t.Errorf("expected Positions to be empty after CleanReset, got %d positions", len(st.Positions))
+	}
+	if _, err := os.Stat(journalPath + ".legacy"); err != nil {
+		t.Errorf("expected legacy journal backup file to exist: %v", err)
+	}
+}
+

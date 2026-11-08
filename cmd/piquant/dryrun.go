@@ -28,6 +28,10 @@ type dryRunFlags struct {
 	baseLev           float64
 	maxLev            float64
 	symbols           string
+	targetProfitBps   float64
+	entryOffsetBps    float64
+	stopLossBps       float64
+	cleanReset        bool
 	statusOnly        bool
 	reportOnly        bool
 	watch             bool
@@ -55,6 +59,10 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.Float64Var(&f.baseLev, "base-leverage", 2.5, "nominal base leverage multiplier (e.g. 2.5 for 2.5x, 3.5 for 3.5x to reach $20/mo on $200)")
 	fs.Float64Var(&f.maxLev, "max-leverage", 5.0, "maximum allowable leverage ceiling")
 	fs.StringVar(&f.symbols, "symbols", "BTCUSDT,ETHUSDT", "comma-separated trading symbols")
+	fs.Float64Var(&f.targetProfitBps, "target-profit", 25.0, "net target profit margin per swing in bps (default: 25.0 bps = 0.25%)")
+	fs.Float64Var(&f.entryOffsetBps, "entry-offset", 12.5, "minimum maker entry distance from mid in bps (default: 12.5 bps = 0.125%)")
+	fs.Float64Var(&f.stopLossBps, "stop-loss", 75.0, "structural invalidation stop loss in bps (default: 75.0 bps = 0.75%)")
+	fs.BoolVar(&f.cleanReset, "reset", false, "reset cumulative historical win/loss stats and trade count on start")
 	fs.BoolVar(&f.statusOnly, "status", false, "print terminal summary of active dry run and exit")
 	fs.BoolVar(&f.reportOnly, "report", false, "generate and print institutional EOD risk & tear-sheet report and exit")
 	fs.BoolVar(&f.watch, "watch", false, "attach live updating Bloomberg/HFT Terminal UI (TUI) monitor")
@@ -147,6 +155,16 @@ func runDryRun(ctx context.Context, args []string) error {
 		paperCfg.MaxLeverage = f.maxLev
 	}
 	paperCfg.Symbols = symList
+	if f.targetProfitBps > 0 {
+		paperCfg.TargetProfitBps = f.targetProfitBps
+	}
+	if f.entryOffsetBps > 0 {
+		paperCfg.EntryOffsetBps = f.entryOffsetBps
+	}
+	if f.stopLossBps > 0 {
+		paperCfg.StopLossBps = f.stopLossBps
+	}
+	paperCfg.CleanReset = f.cleanReset
 	paperCfg.EnableAllModels = f.enableAllModels
 	paperCfg.ExtendOnShutdown = f.extendOnShutdown
 	paperCfg.FlattenOnShutdown = f.flattenOnShutdown
