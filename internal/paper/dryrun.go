@@ -43,7 +43,7 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 	}
 	paperDir := filepath.Join(dataDir, "paper")
 	return DryRunConfig{
-		InitialCapital:    1000.00,
+		InitialCapital:    200.00,
 		TargetDuration:    14 * 24 * time.Hour,
 		Symbols:           []string{"BTCUSDT", "ETHUSDT"},
 		MaxDrawdownPct:    2.0,

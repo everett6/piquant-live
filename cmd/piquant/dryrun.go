@@ -44,7 +44,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.BoolVar(&f.noDiscover, "no-discovery", false, "do not announce or search for the peer board")
 	fs.StringVar(&f.app, "app", version, "version string shown in the interface")
 
-	fs.Float64Var(&f.capital, "capital", 1000.00, "initial paper capital in USDT")
+	fs.Float64Var(&f.capital, "capital", 200.00, "initial paper capital in USDT")
 	fs.StringVar(&f.window, "window", "7d", "evaluation window preset: '7d' (last week), '30d' (last month), '14d' (2 weeks)")
 	fs.Float64Var(&f.durationH, "duration-hours", 0, "target autonomous duration in hours (0 = infer from --window, e.g. 168h for 7d, 720h for 30d)")
 	fs.Float64Var(&f.maxDD, "max-drawdown", 2.0, "maximum allowable drawdown percentage before circuit breaker halts")

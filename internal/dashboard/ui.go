@@ -312,11 +312,12 @@ const indexHTML = `<!doctype html>
             </div>
             <div style="display:flex;gap:6px;align-items:center">
               <span style="font-size:11px;color:var(--muted)">Presets:</span>
+              <button class="preset-pill-btn active" id="btnPreset200" onclick="setCapitalPreset(200)">$200</button>
+              <button class="preset-pill-btn" onclick="setCapitalPreset(500)">$500</button>
               <button class="preset-pill-btn" onclick="setCapitalPreset(1000)">$1k</button>
-              <button class="preset-pill-btn active" id="btnPreset2k" onclick="setCapitalPreset(2000)">$2k</button>
+              <button class="preset-pill-btn" onclick="setCapitalPreset(2000)">$2k</button>
               <button class="preset-pill-btn" onclick="setCapitalPreset(5000)">$5k</button>
               <button class="preset-pill-btn" onclick="setCapitalPreset(10000)">$10k</button>
-              <button class="preset-pill-btn" onclick="setCapitalPreset(25000)">$25k</button>
             </div>
           </div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;align-items:end">
@@ -324,7 +325,7 @@ const indexHTML = `<!doctype html>
               <label style="font-size:10px;color:var(--muted)">Starting Capital ($)</label>
               <div style="position:relative">
                 <span style="position:absolute;left:10px;top:8px;font-size:13px;color:var(--accent);font-weight:700;font-family:ui-monospace,monospace">$</span>
-                <input id="inputCustomCapital" class="cockpit-input" type="number" value="2000" min="100" max="1000000" step="100" style="padding-left:24px" onchange="applyCustomParameters()">
+                <input id="inputCustomCapital" class="cockpit-input" type="number" value="200" min="50" max="1000000" step="50" style="padding-left:24px" onchange="applyCustomParameters()">
               </div>
             </div>
             <div>
@@ -353,11 +354,11 @@ const indexHTML = `<!doctype html>
           <div style="margin-top:10px;padding:8px 12px;background:rgba(0,230,118,0.05);border:1px solid rgba(0,230,118,0.2);border-radius:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;font-size:12px">
             <div style="display:flex;align-items:center;gap:6px">
               <span style="color:var(--muted)">Investor PnL Projection:</span>
-              <span id="projMonthlyGain" style="font-weight:750;color:var(--accent);font-size:14px;font-family:ui-monospace,monospace">+$144.46 / mo (+7.22%)</span>
-              <span style="color:var(--muted);font-size:11px" id="projWeeklyGain">(&approx; +$33.40 / week)</span>
+              <span id="projMonthlyGain" style="font-weight:750;color:var(--accent);font-size:14px;font-family:ui-monospace,monospace">+$14.45 / mo (+7.22%)</span>
+              <span style="color:var(--muted);font-size:11px" id="projWeeklyGain">(&approx; +$3.34 / week)</span>
             </div>
             <div style="font-size:11px;color:var(--muted);font-family:ui-monospace,monospace" id="projRebateBreakdown">
-              Est. Rebates: +$60.82/mo &bull; Expected Trades: 240/mo &bull; Profit Factor: 2.14
+              Est. Rebates: +$6.08/mo &bull; Expected Trades: 28/mo &bull; Profit Factor: 2.14
             </div>
           </div>
         </div>
@@ -386,13 +387,13 @@ const indexHTML = `<!doctype html>
         <div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-bottom:14px;gap:12px">
           <div class="stat-quant">
             <div class="k">Portfolio Capital &amp; Equity</div>
-            <div class="v" id="topDryRunEquity" style="font-size:24px;font-weight:750;color:var(--text)">$2,000.00</div>
-            <div class="s" id="topDryRunInitCap">Base: $1,168 BTC + $832 ETH</div>
+            <div class="v" id="topDryRunEquity" style="font-size:24px;font-weight:750;color:var(--text)">$200.00</div>
+            <div class="s" id="topDryRunInitCap">Base: $117 BTC + $83 ETH</div>
           </div>
           <div class="stat-quant">
             <div class="k">Realized PnL &amp; Net Return</div>
             <div class="v" id="topDryRunReturn" style="font-size:24px;font-weight:750;color:var(--accent)">+$0.00 (+0.00%)</div>
-            <div class="s" id="topDryRunCash">Cash: $2,000.00 USDT</div>
+            <div class="s" id="topDryRunCash">Cash: $200.00 USDT</div>
           </div>
           <div class="stat-quant" style="border:1px solid rgba(0,230,118,0.35);background:linear-gradient(145deg, rgba(0,230,118,0.06) 0%, rgba(8,14,20,0.96) 100%)">
             <div class="k" style="color:var(--accent)">Adaptive Vol-Parity Leverage</div>
@@ -488,22 +489,22 @@ const indexHTML = `<!doctype html>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
           <div class="stat-quant" style="border:1px solid rgba(0,210,255,0.35);background:linear-gradient(145deg, rgba(0,210,255,0.05) 0%, rgba(9,14,22,0.96) 100%)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-              <span style="font-weight:750;color:var(--info);font-size:13px" id="benchWeekTitle">&bull; Last Week Simulation ($2,000 Portfolio)</span>
+              <span style="font-weight:750;color:var(--info);font-size:13px" id="benchWeekTitle">&bull; Last Week Simulation ($200 Portfolio)</span>
               <span class="pill" style="font-size:10px;background:rgba(0,210,255,0.15);color:var(--info);font-weight:700">7 DAYS / 168h</span>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px">
-              <div><span style="font-size:20px;font-weight:750;color:var(--accent)" id="benchWeekProfit">+$32.82</span> <span style="color:var(--accent);font-weight:600" id="benchWeekPct">(+1.64%)</span></div>
-              <div class="mono" style="color:var(--muted);font-size:11px" id="benchWeekDetails">56 trades &bull; 64.3% win &bull; +$13.82 rebates &bull; Max DD 0.32%</div>
+              <div><span style="font-size:20px;font-weight:750;color:var(--accent)" id="benchWeekProfit">+$3.28</span> <span style="color:var(--accent);font-weight:600" id="benchWeekPct">(+1.64%)</span></div>
+              <div class="mono" style="color:var(--muted);font-size:11px" id="benchWeekDetails">28 trades &bull; 64.3% win &bull; +$1.38 rebates &bull; Max DD 0.32%</div>
             </div>
           </div>
           <div class="stat-quant" style="border:1px solid rgba(0,230,118,0.35);background:linear-gradient(145deg, rgba(0,230,118,0.06) 0%, rgba(9,14,22,0.96) 100%)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-              <span style="font-weight:750;color:var(--accent);font-size:13px" id="benchMonthTitle">&bull; Last Month Simulation ($2,000 Portfolio)</span>
+              <span style="font-weight:750;color:var(--accent);font-size:13px" id="benchMonthTitle">&bull; Last Month Simulation ($200 Portfolio)</span>
               <span class="pill ok" style="font-size:10px;font-weight:700">30 DAYS / 720h</span>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px">
-              <div><span style="font-size:20px;font-weight:750;color:var(--accent)" id="benchMonthProfit">+$144.46</span> <span style="color:var(--accent);font-weight:600" id="benchMonthPct">(+7.22%)</span></div>
-              <div class="mono" style="color:var(--muted);font-size:11px" id="benchMonthDetails">240 trades &bull; 62.5% win &bull; +$60.82 rebates &bull; Max DD 0.65%</div>
+              <div><span style="font-size:20px;font-weight:750;color:var(--accent)" id="benchMonthProfit">+$14.45</span> <span style="color:var(--accent);font-weight:600" id="benchMonthPct">(+7.22%)</span></div>
+              <div class="mono" style="color:var(--muted);font-size:11px" id="benchMonthDetails">120 trades &bull; 62.5% win &bull; +$6.08 rebates &bull; Max DD 0.65%</div>
             </div>
           </div>
         </div>
@@ -2948,7 +2949,7 @@ const indexHTML = `<!doctype html>
     var container = $("coinSelectorGrid");
     if (!container) return;
     var activeCoins = computeRiskParityWeights();
-    var cap = parseFloat($("inputCustomCapital") ? $("inputCustomCapital").value : 2000) || 2000;
+    var cap = parseFloat($("inputCustomCapital") ? $("inputCustomCapital").value : 200) || 200;
 
     var html = coinUniverse.map(function(c){
       var isActive = c.active;
@@ -3003,7 +3004,7 @@ const indexHTML = `<!doctype html>
   };
 
   window.applyCustomParameters = function() {
-    var cap = parseFloat($("inputCustomCapital") ? $("inputCustomCapital").value : 2000) || 2000;
+    var cap = parseFloat($("inputCustomCapital") ? $("inputCustomCapital").value : 200) || 200;
     var baseLev = parseFloat($("inputBaseLeverage") ? $("inputBaseLeverage").value : 2.5) || 2.5;
     var maxLev = parseFloat($("inputMaxLeverage") ? $("inputMaxLeverage").value : 5.0) || 5.0;
     var maxDD = parseFloat($("inputMaxDD") ? $("inputMaxDD").value : 2.0) || 2.0;
@@ -3190,7 +3191,7 @@ const indexHTML = `<!doctype html>
   // Window Preset Switching helper
   window.selectEvaluationWindow = function(preset) {
     currentActiveWindow = preset || "7d";
-    var cap = 2000;
+    var cap = 200;
     if ($("inputCustomCapital") && parseFloat($("inputCustomCapital").value) > 0) {
       cap = parseFloat($("inputCustomCapital").value);
     }

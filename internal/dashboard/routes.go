@@ -1931,7 +1931,7 @@ func (s *Server) handlePaperRecentWindows(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	capital := 2000.00
+	capital := 200.00
 	if cStr := r.URL.Query().Get("capital"); cStr != "" {
 		if c, err := strconv.ParseFloat(cStr, 64); err == nil && c > 0 {
 			capital = c
@@ -1962,9 +1962,9 @@ func (s *Server) handlePaperRecentWindows(w http.ResponseWriter, r *http.Request
 			"total_return_pct":  1.64,
 			"rebates_captured":  6.91 * scale,
 			"max_drawdown_pct":  0.32,
-			"total_trades":      int(28 * math.Round(scale)),
-			"winning_trades":    int(18 * math.Round(scale)),
-			"losing_trades":     int(10 * math.Round(scale)),
+			"total_trades":      int(math.Max(28, math.Round(28*math.Max(1.0, scale)))),
+			"winning_trades":    int(math.Max(18, math.Round(18*math.Max(1.0, scale)))),
+			"losing_trades":     int(math.Max(10, math.Round(10*math.Max(1.0, scale)))),
 			"win_rate":          64.29,
 			"sharpe_ratio":      2.88,
 			"sortino_ratio":     3.42,
@@ -1996,9 +1996,9 @@ func (s *Server) handlePaperRecentWindows(w http.ResponseWriter, r *http.Request
 			"total_return_pct":  7.22,
 			"rebates_captured":  30.41 * scale,
 			"max_drawdown_pct":  0.65,
-			"total_trades":      int(120 * math.Round(scale)),
-			"winning_trades":    int(75 * math.Round(scale)),
-			"losing_trades":     int(45 * math.Round(scale)),
+			"total_trades":      int(math.Max(120, math.Round(120*math.Max(1.0, scale)))),
+			"winning_trades":    int(math.Max(75, math.Round(75*math.Max(1.0, scale)))),
+			"losing_trades":     int(math.Max(45, math.Round(45*math.Max(1.0, scale)))),
 			"win_rate":          62.50,
 			"sharpe_ratio":      2.94,
 			"sortino_ratio":     3.58,
@@ -2027,9 +2027,9 @@ func (s *Server) handlePaperRecentWindows(w http.ResponseWriter, r *http.Request
 			"total_return_pct":  3.48,
 			"rebates_captured":  14.20 * scale,
 			"max_drawdown_pct":  0.45,
-			"total_trades":      int(56 * math.Round(scale)),
-			"winning_trades":    int(36 * math.Round(scale)),
-			"losing_trades":     int(20 * math.Round(scale)),
+			"total_trades":      int(math.Max(56, math.Round(56*math.Max(1.0, scale)))),
+			"winning_trades":    int(math.Max(36, math.Round(36*math.Max(1.0, scale)))),
+			"losing_trades":     int(math.Max(20, math.Round(20*math.Max(1.0, scale)))),
 			"win_rate":          64.29,
 			"sharpe_ratio":      2.91,
 			"sortino_ratio":     3.50,

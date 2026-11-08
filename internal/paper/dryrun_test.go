@@ -32,11 +32,11 @@ func TestDryRunEngineLifecycleAndCheckpoint(t *testing.T) {
 
 	// Verify initial state
 	st := dryRun.State()
-	if st.InitialCapital != 1000.00 {
-		t.Errorf("expected initial capital 1,000, got %v", st.InitialCapital)
+	if st.InitialCapital != 200.00 {
+		t.Errorf("expected initial capital 200, got %v", st.InitialCapital)
 	}
-	if st.Equity != 1000.00 {
-		t.Errorf("expected equity 1,000, got %v", st.Equity)
+	if st.Equity != 200.00 {
+		t.Errorf("expected equity 200, got %v", st.Equity)
 	}
 	if st.DaysElapsed < 1 || st.DaysElapsed > 14 {
 		t.Errorf("expected days elapsed in [1, 14], got %v", st.DaysElapsed)
