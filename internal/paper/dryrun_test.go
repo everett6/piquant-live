@@ -529,6 +529,39 @@ func TestQuantBugFixesVerification(t *testing.T) {
 	if dryRun.minHalfSpreadFloorBps != 1.25 {
 		t.Errorf("expected reloaded minHalfSpreadFloorBps 1.25, got %f", dryRun.minHalfSpreadFloorBps)
 	}
+
+	// 3. Verify state recovery from append-only journal when state.json is wiped
+	journalPath := filepath.Join(tempDir, "journal.jsonl")
+	jLines := `{"timestamp":"2026-11-08T10:00:00Z","symbol":"BTCUSDT","side":"BUY","role":"MAKER","price":50000.0,"size":0.001,"value_usdt":50.0,"fee_usdt":0.0075,"pnl_realized":-0.0075}
+{"timestamp":"2026-11-08T10:01:00Z","symbol":"BTCUSDT","side":"SELL","role":"MAKER","price":50020.0,"size":0.001,"value_usdt":50.02,"fee_usdt":0.007503,"pnl_realized":0.012497}
+`
+	if err := os.WriteFile(journalPath, []byte(jLines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wipe state file so engine must recover from journal
+	_ = os.Remove(cfg.StateFile)
+	cfg.JournalFile = journalPath
+
+	dryRun2, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create recovered engine: %v", err)
+	}
+
+	st := dryRun2.State()
+	if st.TotalTrades != 2 {
+		t.Errorf("expected 2 recovered trades from journal, got %d", st.TotalTrades)
+	}
+	if st.WinningTrades != 1 {
+		t.Errorf("expected 1 winning trade from journal, got %d", st.WinningTrades)
+	}
+	if st.Positions["BTCUSDT"].Size != 0.0 {
+		t.Errorf("expected flat position after round trip, got %f", st.Positions["BTCUSDT"].Size)
+	}
+	expectedNetCash := 200.00 - 0.0075 + 0.012497
+	if math.Abs(st.Cash-expectedNetCash) > 1e-4 {
+		t.Errorf("expected cash %f, got %f", expectedNetCash, st.Cash)
+	}
 }
 
 func BenchmarkProcessMarketEvent(b *testing.B) {

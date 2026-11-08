@@ -1,6 +1,7 @@
 package paper
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -322,31 +323,37 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 
 	// Attempt to restore existing state from checkpoint
 	if err := e.loadCheckpoint(); err != nil {
-		// Initialize fresh state if no checkpoint exists
-		now := time.Now()
-		targetDays := int(cfg.TargetDuration.Hours() / 24.0)
-		if targetDays <= 0 {
-			targetDays = 14
-		}
-		e.state = DryRunState{
-			StartTime:      now,
-			TargetEndTime:  now.Add(cfg.TargetDuration),
-			LastCheckpoint: now,
-			InitialCapital: cfg.InitialCapital,
-			Cash:           cfg.InitialCapital,
-			Equity:         cfg.InitialCapital,
-			PeakEquity:     cfg.InitialCapital,
-			Positions:      make(map[string]*Position, len(cfg.Symbols)),
-			DailyReturns:   make([]float64, 0, targetDays),
-			TargetDays:     targetDays,
-			WindowPreset:   cfg.WindowPreset,
-			DataSource:     "live",
-			Leverage:       levCtrl.Compute(10.0, 0.20, 0.50, 0.0, false),
-		}
-		for _, s := range cfg.Symbols {
-			upper := strings.ToUpper(s)
-			e.state.Positions[upper] = &Position{
-				Symbol: upper,
+		// Secondary persistence fallback: reconstruct complete state from append-only trade journal
+		if recState, jErr := e.recoverStateFromJournal(); jErr == nil && recState != nil {
+			e.state = *recState
+			_ = e.saveCheckpoint() // Re-persist reconstructed clean checkpoint to disk
+		} else {
+			// Initialize fresh state if neither checkpoint nor journal exists
+			now := time.Now()
+			targetDays := int(cfg.TargetDuration.Hours() / 24.0)
+			if targetDays <= 0 {
+				targetDays = 14
+			}
+			e.state = DryRunState{
+				StartTime:      now,
+				TargetEndTime:  now.Add(cfg.TargetDuration),
+				LastCheckpoint: now,
+				InitialCapital: cfg.InitialCapital,
+				Cash:           cfg.InitialCapital,
+				Equity:         cfg.InitialCapital,
+				PeakEquity:     cfg.InitialCapital,
+				Positions:      make(map[string]*Position, len(cfg.Symbols)),
+				DailyReturns:   make([]float64, 0, targetDays),
+				TargetDays:     targetDays,
+				WindowPreset:   cfg.WindowPreset,
+				DataSource:     "live",
+				Leverage:       levCtrl.Compute(10.0, 0.20, 0.50, 0.0, false),
+			}
+			for _, s := range cfg.Symbols {
+				upper := strings.ToUpper(s)
+				e.state.Positions[upper] = &Position{
+					Symbol: upper,
+				}
 			}
 		}
 	} else {
@@ -763,6 +770,148 @@ func (e *DryRunEngine) loadCheckpoint() error {
 	e.state = st
 	e.mu.Unlock()
 	return nil
+}
+
+// recoverStateFromJournal replays dryrun_journal.jsonl to reconstruct complete state if checkpoint was lost or corrupted.
+func (e *DryRunEngine) recoverStateFromJournal() (*DryRunState, error) {
+	if e.cfg.JournalFile == "" {
+		return nil, os.ErrNotExist
+	}
+	f, err := os.Open(e.cfg.JournalFile)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	var records []TradeRecord
+	for scanner.Scan() {
+		line := bytes.Trim(scanner.Bytes(), "\x00\r\n \t")
+		if len(line) == 0 {
+			continue
+		}
+		var rec TradeRecord
+		if err := json.Unmarshal(line, &rec); err == nil && rec.Symbol != "" {
+			records = append(records, rec)
+		}
+	}
+	if len(records) == 0 {
+		return nil, os.ErrNotExist
+	}
+
+	targetDays := int(e.cfg.TargetDuration.Hours() / 24.0)
+	if targetDays <= 0 {
+		targetDays = 14
+	}
+
+	st := &DryRunState{
+		StartTime:      records[0].Timestamp,
+		TargetEndTime:  records[0].Timestamp.Add(e.cfg.TargetDuration),
+		LastCheckpoint: records[len(records)-1].Timestamp,
+		InitialCapital: e.cfg.InitialCapital,
+		Cash:           e.cfg.InitialCapital,
+		Equity:         e.cfg.InitialCapital,
+		PeakEquity:     e.cfg.InitialCapital,
+		Positions:      make(map[string]*Position, len(e.cfg.Symbols)),
+		DailyReturns:   make([]float64, 0, targetDays),
+		TargetDays:     targetDays,
+		WindowPreset:   e.cfg.WindowPreset,
+		DataSource:     "live",
+	}
+
+	for _, s := range e.cfg.Symbols {
+		u := strings.ToUpper(s)
+		st.Positions[u] = &Position{Symbol: u}
+	}
+
+	for _, r := range records {
+		pos := st.Positions[r.Symbol]
+		if pos == nil {
+			pos = &Position{Symbol: r.Symbol}
+			st.Positions[r.Symbol] = pos
+		}
+
+		st.Cash += r.PnLRealized
+		st.RealizedPnL += r.PnLRealized
+		st.TotalTrades++
+		pos.TotalTrades++
+		pos.RealizedPnL += r.PnLRealized
+		pos.TotalVolumeUSDT += r.ValueUSDT
+
+		if r.Role == "MAKER" {
+			pos.MakerTrades++
+		} else {
+			pos.TakerTrades++
+		}
+
+		if r.Side == "BUY" {
+			newSize := pos.Size + r.Size
+			if newSize > 0 {
+				if pos.Size >= 0 {
+					pos.AvgEntryPrice = (pos.AvgEntryPrice*pos.Size + r.Price*r.Size) / newSize
+				} else {
+					pos.AvgEntryPrice = r.Price
+				}
+			} else if newSize == 0 {
+				pos.AvgEntryPrice = 0.0
+			}
+			pos.Size = newSize
+		} else if r.Side == "SELL" {
+			newSize := pos.Size - r.Size
+			if newSize < 0 {
+				if pos.Size <= 0 {
+					pos.AvgEntryPrice = (pos.AvgEntryPrice*(-pos.Size) + r.Price*r.Size) / (-newSize)
+				} else {
+					pos.AvgEntryPrice = r.Price
+				}
+			} else if newSize == 0 {
+				pos.AvgEntryPrice = 0.0
+			}
+			pos.Size = newSize
+		}
+
+		if r.PnLRealized > 0 {
+			st.WinningTrades++
+		} else if r.PnLRealized < 0 && (r.Role == "TAKER" || r.Side == "SELL" || pos.Size <= 0) {
+			st.LosingTrades++
+		}
+	}
+
+	if st.TotalTrades > 0 {
+		closed := st.WinningTrades + st.LosingTrades
+		if closed > 0 {
+			st.WinRate = float64(st.WinningTrades) / float64(closed) * 100.0
+		}
+	}
+
+	st.Equity = st.Cash
+	if st.Equity > st.PeakEquity {
+		st.PeakEquity = st.Equity
+	}
+
+	now := time.Now()
+	if !st.LastCheckpoint.IsZero() && now.After(st.LastCheckpoint) {
+		gap := now.Sub(st.LastCheckpoint)
+		if gap > 30*time.Second {
+			st.OfflineDowntimeSeconds += gap.Seconds()
+			st.FeedDownSeconds += gap.Seconds()
+			st.ShutdownCount++
+			st.LastResumeTime = now
+			if e.cfg.ExtendOnShutdown && !st.TargetEndTime.IsZero() {
+				st.TargetEndTime = st.TargetEndTime.Add(gap)
+			}
+		}
+	}
+
+	// Keep recent fills for memory blotter
+	numRec := len(records)
+	if numRec > 30 {
+		e.recentFills = append([]TradeRecord(nil), records[numRec-30:]...)
+	} else {
+		e.recentFills = append([]TradeRecord(nil), records...)
+	}
+
+	return st, nil
 }
 
 // runExecutionLoop consumes MarketEvents from SPSCRing and evaluates quantitative signals.
@@ -1306,8 +1455,17 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 	e.mu.Unlock()
 
+	// Proportional inventory skew restoring force:
+	// When short (currentInv < 0), shifts reservation price higher to pull buy quote closer to mid
+	// and push sell quote further out.
+	var invSkewBps float64
+	if maxInvQty > 0 {
+		invFraction := currentInv / maxInvQty // [-1.0, 1.0]
+		invSkewBps = invFraction * 2.5        // +/- 2.5 bps restoring force
+	}
+
 	// Blend AdaHedge online meta-prediction with GLFT reservation skew
-	blendedSkewBps := 0.65*qd.ReservationBps + 0.35*metaPred
+	blendedSkewBps := 0.65*(qd.ReservationBps-invSkewBps) + 0.35*metaPred
 
 	// Ornstein-Uhlenbeck Inventory Holding-Age Urgency: accelerate mean-reverting exits after 75s (not premature 20s)
 	if holdSec > 75.0 {
@@ -1385,7 +1543,12 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 
 	// Place resting BUY maker quote at the BACK of the real L1 queue (100% of bidSize ahead when joining at bestBid)
-	if !hasBuy && currentInv+clipQty <= maxInvQty && blendedSkewBps > -3.5 {
+	// Inventory risk gate: do NOT stack more inventory in the same direction if already holding >= 2 clips
+	allowBuy := !hasBuy && currentInv+clipQty <= maxInvQty && blendedSkewBps > -3.5
+	if currentInv >= 2.0*clipQty {
+		allowBuy = false // Don't stack more long inventory into a falling market
+	}
+	if allowBuy {
 		queueEst := bidSize
 		if bestBid > 0 && targetBid < bestBid*0.9999 {
 			// Resting deeper than L1 touch: proportional L2 level depth ahead
@@ -1405,7 +1568,12 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 
 	// Place resting SELL maker quote at the BACK of the real L1 queue (100% of askSize ahead when joining at bestAsk)
-	if !hasSell && currentInv-clipQty >= -maxInvQty && blendedSkewBps < 3.5 {
+	// Inventory risk gate: do NOT stack more inventory in the same direction if already holding >= 2 clips
+	allowSell := !hasSell && currentInv-clipQty >= -maxInvQty && blendedSkewBps < 3.5
+	if currentInv <= -2.0*clipQty {
+		allowSell = false // Don't stack more short inventory into a rising market
+	}
+	if allowSell {
 		queueEst := askSize
 		if bestAsk > 0 && targetAsk > bestAsk*1.0001 {
 			queueEst = math.Max(clipQty, askSize*0.50)
