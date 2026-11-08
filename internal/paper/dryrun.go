@@ -769,6 +769,35 @@ func (e *DryRunEngine) loadCheckpoint() error {
 	e.mu.Lock()
 	e.state = st
 	e.mu.Unlock()
+
+	// Pre-load recent fills from journal tail so in-memory blotter is warm on startup
+	if e.cfg.JournalFile != "" {
+		if jf, err := os.Open(e.cfg.JournalFile); err == nil {
+			defer jf.Close()
+			scanner := bufio.NewScanner(jf)
+			var rFills []TradeRecord
+			for scanner.Scan() {
+				line := bytes.Trim(scanner.Bytes(), "\x00\r\n \t")
+				if len(line) == 0 {
+					continue
+				}
+				var rec TradeRecord
+				if err := json.Unmarshal(line, &rec); err == nil && rec.Symbol != "" {
+					rFills = append(rFills, rec)
+					if len(rFills) > 60 {
+						rFills = rFills[len(rFills)-30:]
+					}
+				}
+			}
+			if len(rFills) > 30 {
+				rFills = rFills[len(rFills)-30:]
+			}
+			e.mu.Lock()
+			e.recentFills = rFills
+			e.mu.Unlock()
+		}
+	}
+
 	return nil
 }
 
@@ -844,6 +873,16 @@ func (e *DryRunEngine) recoverStateFromJournal() (*DryRunState, error) {
 			pos.TakerTrades++
 		}
 
+		oldSize := pos.Size
+		isClosing := false
+		if r.Side == "BUY" && oldSize < -1e-8 {
+			isClosing = true
+		} else if r.Side == "SELL" && oldSize > 1e-8 {
+			isClosing = true
+		} else if strings.Contains(r.Side, "LIQUIDATE") {
+			isClosing = true
+		}
+
 		if r.Side == "BUY" {
 			newSize := pos.Size + r.Size
 			if newSize > 0 {
@@ -870,10 +909,12 @@ func (e *DryRunEngine) recoverStateFromJournal() (*DryRunState, error) {
 			pos.Size = newSize
 		}
 
-		if r.PnLRealized > 0 {
-			st.WinningTrades++
-		} else if r.PnLRealized < 0 && (r.Role == "TAKER" || r.Side == "SELL" || pos.Size <= 0) {
-			st.LosingTrades++
+		if isClosing {
+			if r.PnLRealized > 0 {
+				st.WinningTrades++
+			} else {
+				st.LosingTrades++
+			}
 		}
 	}
 
@@ -1467,9 +1508,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	// Blend AdaHedge online meta-prediction with GLFT reservation skew
 	blendedSkewBps := 0.65*(qd.ReservationBps-invSkewBps) + 0.35*metaPred
 
-	// Ornstein-Uhlenbeck Inventory Holding-Age Urgency: accelerate mean-reverting exits after 75s (not premature 20s)
+	// Ornstein-Uhlenbeck Inventory Holding-Age Urgency: accelerate mean-reverting exits after 75s
 	if holdSec > 75.0 {
-		urgencyBps := math.Min(1.20, (holdSec-75.0)*0.015)
+		urgencyBps := math.Min(1.50, (holdSec-75.0)*0.02)
 		if currentInv > 0 {
 			blendedSkewBps -= urgencyBps
 		} else if currentInv < 0 {
@@ -1481,7 +1522,6 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	askOffsetBps := math.Max(floorBps, qd.HalfSpreadBps+blendedSkewBps) + tcaPenaltyBps
 
 	// Ensure baseline half-spread covers round-trip maker fees (2 * MakerFeeBps) + positive expected edge.
-	// Both bid and ask must be floored so that entering and exiting inventory captures positive net edge.
 	feeFloorBps := math.Max(floorBps, e.cfg.MakerFeeBps+0.45)
 	if bidOffsetBps < feeFloorBps {
 		bidOffsetBps = feeFloorBps
@@ -1493,10 +1533,16 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	targetBid := midPrice - (bidOffsetBps * midPrice * 1e-4)
 	targetAsk := midPrice + (askOffsetBps * midPrice * 1e-4)
 
+	// Holding Urgency: after 90s, pull closing quote to the inside touch to expedite queue clearance
+	if holdSec > 90.0 {
+		if currentInv < 0 && bestBid > 0 && targetBid < bestBid {
+			targetBid = bestBid
+		} else if currentInv > 0 && bestAsk > 0 && targetAsk > bestAsk {
+			targetAsk = bestAsk
+		}
+	}
+
 	// Clamp to the touch so resting quotes remain passive maker orders (never cross into taker territory).
-	// NOTE: We intentionally do NOT artificially force exit quotes above AvgEntryPrice ("profit-locking bias").
-	// If inventory goes underwater, GLFT reservation skew + O-U holding-age urgency naturally lowers the exit
-	// quote toward the current market so losing inventory can be cut honestly and win rate reflects true market risk.
 	if bestBid > 0 && targetBid > bestBid {
 		targetBid = bestBid
 	}
@@ -1522,7 +1568,6 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		}
 		// Preserve FIFO queue priority: only cancel & replace if target price moved > 2.5 bps
 		// or if order has rested for > 90 seconds without filling.
-		// Canceling every 15s resets queue priority (QueueAhead) repeatedly, preventing passive fills.
 		devBps := math.Abs(ord.Price-target) / target * 1e4
 		if devBps > 2.5 || now.Sub(ord.PlacedAt) > 90*time.Second {
 			continue // cancel stale order
@@ -1542,16 +1587,18 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		latency = 120 * time.Millisecond
 	}
 
-	// Place resting BUY maker quote at the BACK of the real L1 queue (100% of bidSize ahead when joining at bestBid)
-	// Inventory risk gate: do NOT stack more inventory in the same direction if already holding >= 2 clips
+	// Place resting BUY maker quote at the BACK of the real L1 queue
+	// Adverse selection & inventory risk gating:
 	allowBuy := !hasBuy && currentInv+clipQty <= maxInvQty && blendedSkewBps > -3.5
 	if currentInv >= 2.0*clipQty {
 		allowBuy = false // Don't stack more long inventory into a falling market
 	}
+	if currentInv > 0 && (blendedSkewBps < -1.25 || sm.Ret5sBps < -1.5) {
+		allowBuy = false // Toxic cascade defense: do not buy more when market is falling
+	}
 	if allowBuy {
 		queueEst := bidSize
 		if bestBid > 0 && targetBid < bestBid*0.9999 {
-			// Resting deeper than L1 touch: proportional L2 level depth ahead
 			queueEst = math.Max(clipQty, bidSize*0.50)
 		}
 		orders = append(orders, &ActiveMakerOrder{
@@ -1567,11 +1614,14 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		})
 	}
 
-	// Place resting SELL maker quote at the BACK of the real L1 queue (100% of askSize ahead when joining at bestAsk)
-	// Inventory risk gate: do NOT stack more inventory in the same direction if already holding >= 2 clips
+	// Place resting SELL maker quote at the BACK of the real L1 queue
+	// Adverse selection & inventory risk gating:
 	allowSell := !hasSell && currentInv-clipQty >= -maxInvQty && blendedSkewBps < 3.5
 	if currentInv <= -2.0*clipQty {
 		allowSell = false // Don't stack more short inventory into a rising market
+	}
+	if currentInv < 0 && (blendedSkewBps > 1.25 || sm.Ret5sBps > 1.5) {
+		allowSell = false // Toxic cascade defense: do not sell more when market is surging
 	}
 	if allowSell {
 		queueEst := askSize

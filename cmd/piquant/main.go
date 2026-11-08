@@ -52,6 +52,8 @@ func main() {
 		err = runDashboard(ctx, args)
 	case "agent":
 		err = runAgent(ctx, args)
+	case "top", "monitor", "tui":
+		err = runMonitor(ctx, args)
 	case "dry-run", "dryrun":
 		err = runDryRun(ctx, args)
 	case "backtest-history", "backtest":
@@ -87,6 +89,7 @@ func usage() {
   piquant doctor      check this board and its network peer
   piquant dashboard   serve the read-only control panel (Raspberry Pi 3B)
   piquant agent       expose engine status to the panel (Raspberry Pi 5)
+  piquant top         live updating Bloomberg/HFT Terminal UI (aliases: monitor, tui)
   piquant dry-run          launch 14-day autonomous paper money dry run with live public feeds
   piquant backtest-history run 10–15+ year historical multi-regime simulation starting at $1,000
   piquant backtest-ticks   run 2-year microsecond monthly tick-by-tick market-making simulation

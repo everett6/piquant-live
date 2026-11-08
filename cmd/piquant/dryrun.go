@@ -30,6 +30,8 @@ type dryRunFlags struct {
 	symbols           string
 	statusOnly        bool
 	reportOnly        bool
+	watch             bool
+	live              bool
 	enableFallback    bool
 	enableAllModels   bool
 	extendOnShutdown  bool
@@ -55,6 +57,8 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.StringVar(&f.symbols, "symbols", "BTCUSDT,ETHUSDT", "comma-separated trading symbols")
 	fs.BoolVar(&f.statusOnly, "status", false, "print terminal summary of active dry run and exit")
 	fs.BoolVar(&f.reportOnly, "report", false, "generate and print institutional EOD risk & tear-sheet report and exit")
+	fs.BoolVar(&f.watch, "watch", false, "attach live updating Bloomberg/HFT Terminal UI (TUI) monitor")
+	fs.BoolVar(&f.live, "live", false, "alias for --watch")
 	fs.BoolVar(&f.enableFallback, "fallback", false, "opt-in to local synthetic feed generation when offline (default false)")
 	fs.BoolVar(&f.enableAllModels, "enable-all-models", false, "re-enable all registered models in ensemble regardless of ablation gate")
 	fs.BoolVar(&f.extendOnShutdown, "extend-on-shutdown", true, "automatically extend target end time by offline duration upon shutdown/power-cycle recovery (default true)")
@@ -80,6 +84,15 @@ func runDryRun(ctx context.Context, args []string) error {
 	// If --report is requested, print Markdown EOD tear-sheet report and return
 	if f.reportOnly {
 		return printDailyReport(stateFile, dDir)
+	}
+
+	// If --watch or --live is requested, launch live updating Terminal UI (TUI)
+	if f.watch || f.live {
+		var monitorArgs []string
+		if f.dataDir != "" {
+			monitorArgs = append(monitorArgs, "--data", f.dataDir)
+		}
+		return runMonitor(ctx, monitorArgs)
 	}
 
 	// If --status is requested, print terminal report and return
