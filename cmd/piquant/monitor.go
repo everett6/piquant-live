@@ -116,7 +116,7 @@ func runMonitor(ctx context.Context, args []string) error {
 		}
 		termWidth := getTerminalWidth()
 		var buf bytes.Buffer
-		renderTerminalFrame(&buf, st, trades, termWidth, dDir, f.remoteURL)
+		renderTerminalFrame(&buf, st, trades, termWidth, dDir, f.remoteURL, f.interval, f.limit)
 		fmt.Print(buf.String())
 		return nil
 	}
@@ -141,6 +141,8 @@ func runMonitor(ctx context.Context, args []string) error {
 	// Initial render
 	fmt.Print(ansiClearScreen)
 
+	currentInterval := f.interval
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -155,6 +157,25 @@ func runMonitor(ctx context.Context, args []string) error {
 				// Immediate force refresh
 				fmt.Print(ansiClearScreen)
 			}
+			if k == '1' {
+				currentInterval = 1000 * time.Millisecond
+				ticker.Reset(currentInterval)
+			} else if k == '2' {
+				currentInterval = 500 * time.Millisecond
+				ticker.Reset(currentInterval)
+			} else if k == '3' {
+				currentInterval = 250 * time.Millisecond
+				ticker.Reset(currentInterval)
+			} else if k == 'b' || k == 'B' {
+				if f.limit <= 5 {
+					f.limit = 8
+				} else if f.limit <= 8 {
+					f.limit = 15
+				} else {
+					f.limit = 5
+				}
+				fmt.Print(ansiClearScreen)
+			}
 		case <-ticker.C:
 		}
 
@@ -166,7 +187,7 @@ func runMonitor(ctx context.Context, args []string) error {
 		if err != nil {
 			renderWaitingFrame(&buf, err, termWidth, dDir, f.remoteURL)
 		} else {
-			renderTerminalFrame(&buf, st, trades, termWidth, dDir, f.remoteURL)
+			renderTerminalFrame(&buf, st, trades, termWidth, dDir, f.remoteURL, currentInterval, f.limit)
 		}
 
 		// Flush full frame in single atomic write to eliminate flicker
@@ -304,7 +325,7 @@ func readJournalTail(journalPath string, limit int) []paper.TradeRecord {
 }
 
 // renderTerminalFrame draws the complete institutional Bloomberg/HFT UI.
-func renderTerminalFrame(w io.Writer, st *paper.DryRunState, trades []paper.TradeRecord, width int, dataDir, remoteURL string) {
+func renderTerminalFrame(w io.Writer, st *paper.DryRunState, trades []paper.TradeRecord, width int, dataDir, remoteURL string, interval time.Duration, limit int) {
 	if width < 80 {
 		width = 80
 	}
@@ -478,6 +499,68 @@ func renderTerminalFrame(w io.Writer, st *paper.DryRunState, trades []paper.Trad
 	if lev.RegimeDetail != "" {
 		fmt.Fprintf(w, "%s  Detail:%s %s%s%s\n", ansiGray, ansiReset, ansiDim, lev.RegimeDetail, ansiReset)
 	}
+
+	// 4b. MACRO EVENT SHIELD TELEMETRY
+	macroSt := st.Macro
+	macroBadge := ansiBrightGreen + ansiBold + "NOMINAL" + ansiReset
+	switch macroSt.PhaseName {
+	case "PRE_EVENT_DEFENSE":
+		macroBadge = ansiBrightYellow + ansiBold + "PRE_EVENT_DEFENSE" + ansiReset
+	case "EVENT_HALT":
+		macroBadge = ansiBrightRed + ansiBold + "EVENT_HALT" + ansiReset
+	case "POST_EVENT_DRIFT":
+		macroBadge = ansiBrightCyan + ansiBold + "POST_EVENT_DRIFT" + ansiReset
+	}
+
+	nextEventDesc := "None"
+	if macroSt.NextEvent != nil {
+		diff := time.Duration(macroSt.TimeUntilNext) * time.Second
+		hours := int(diff.Hours())
+		mins := int(diff.Minutes()) % 60
+		if hours > 24 {
+			days := hours / 24
+			remHours := hours % 24
+			nextEventDesc = fmt.Sprintf("%s in %dd %dh (%s)", macroSt.NextEvent.Title, days, remHours, macroSt.NextEvent.Impact)
+		} else if hours > 0 {
+			nextEventDesc = fmt.Sprintf("%s in %dh %dm (%s)", macroSt.NextEvent.Title, hours, mins, macroSt.NextEvent.Impact)
+		} else {
+			secs := int(diff.Seconds()) % 60
+			nextEventDesc = fmt.Sprintf("%s in %dm %ds (%s)", macroSt.NextEvent.Title, mins, secs, macroSt.NextEvent.Impact)
+		}
+	} else if macroSt.ActiveEvent != nil {
+		nextEventDesc = fmt.Sprintf("ACTIVE: %s (%s)", macroSt.ActiveEvent.Title, macroSt.ActiveEvent.Impact)
+	}
+
+	sourceStr := macroSt.Source
+	if sourceStr == "" {
+		sourceStr = "ForexFactory (Free)"
+	}
+
+	spreadMult := macroSt.SpreadMultiplier
+	if spreadMult <= 0 {
+		if macroSt.PhaseName == "EVENT_HALT" {
+			spreadMult = 0.0
+		} else {
+			spreadMult = 1.0
+		}
+	}
+	levMult := macroSt.LeverageMultiplier
+	if levMult <= 0 {
+		if macroSt.PhaseName == "EVENT_HALT" {
+			levMult = 0.0
+		} else {
+			levMult = 1.0
+		}
+	}
+
+	fmt.Fprintf(w, "%s[MACRO EVENT SHIELD]%s    Status: %s │ Next: %s │ Spread: %.1fx │ Lev: %.2fx │ Source: %s\n",
+		ansiMagenta, ansiReset,
+		macroBadge,
+		nextEventDesc,
+		spreadMult,
+		levMult,
+		sourceStr,
+	)
 	fmt.Println()
 
 	// 5. OPEN POSITIONS TABLE
@@ -584,8 +667,9 @@ func renderTerminalFrame(w io.Writer, st *paper.DryRunState, trades []paper.Trad
 	if remoteURL != "" {
 		sourceLoc = remoteURL
 	}
-	fmt.Fprintf(w, "%s[q] Quit  [r] Force Refresh  │ Auto-refresh: 500ms │ Target: %s%s\n",
-		ansiDim, sourceLoc, ansiReset)
+	intMs := int(interval.Milliseconds())
+	fmt.Fprintf(w, "%s[q] Quit │ [r] Refresh │ [b] Blotter (%d) │ [1/2/3] Speed (%dms) │ Target: %s%s\n",
+		ansiDim, limit, intMs, sourceLoc, ansiReset)
 }
 
 func renderWaitingFrame(w io.Writer, err error, width int, dataDir, remoteURL string) {

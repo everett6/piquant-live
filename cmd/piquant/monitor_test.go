@@ -110,7 +110,7 @@ func TestMonitorRenderFrame(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	renderTerminalFrame(&buf, st, trades, 100, "/tmp/data", "")
+	renderTerminalFrame(&buf, st, trades, 100, "/tmp/data", "", 500*time.Millisecond, 10)
 	rawOut := buf.String()
 	cleanOut := stripANSI(rawOut)
 

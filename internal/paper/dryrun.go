@@ -16,6 +16,7 @@ import (
 
 	"piquant-live/internal/engine"
 	"piquant-live/internal/experiment"
+	"piquant-live/internal/macro"
 	"piquant-live/internal/marketdata"
 	"piquant-live/internal/models/common"
 )
@@ -39,6 +40,9 @@ type DryRunConfig struct {
 	WindowPreset      string        // Window preset: "7d" (last week), "30d" (last month), "14d" (2 weeks)
 	BaseLeverage      float64       // Nominal base leverage multiplier (default: 2.5x)
 	MaxLeverage       float64       // Maximum allowable leverage ceiling (default: 5.0x)
+	EnableMacroShield bool          // Zero-cost macro calendar event shield (default: true)
+	MacroSyncURL      string        // Optional custom URL for macro calendar sync (default: ForexFactory free feed)
+	DataDir           string        // Root data directory (default: "data")
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -63,6 +67,8 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		FlattenOnShutdown: true,
 		BaseLeverage:      2.5,
 		MaxLeverage:       5.0,
+		EnableMacroShield: true,
+		DataDir:           dataDir,
 	}
 }
 
@@ -143,6 +149,7 @@ type DryRunState struct {
 	ShutdownCount          int                  `json:"shutdown_count"`           // Number of power-cycles/resumptions survived
 	LastResumeTime         time.Time                     `json:"last_resume_time"`         // Timestamp of latest recovery after shutdown
 	Leverage               DynamicLeverageState          `json:"leverage"`                 // Real-time automatic dynamic leverage and regime
+	Macro                  macro.MacroState              `json:"macro"`                    // Zero-cost macro calendar event shield telemetry
 	ActiveOrders           map[string][]ActiveMakerOrder `json:"active_orders,omitempty"`   // Currently resting maker limit orders in the book
 }
 
@@ -225,6 +232,7 @@ type DryRunEngine struct {
 	sor           common.SmartOrderRouter
 	hawkesEst     *common.OnlineHawkesEstimator
 	leverageCtrl  *DynamicLeverageController
+	macroGuardian *macro.MacroGuardian
 
 	// Online tick tracking & autonomous cloud parameter hot-reload
 	minHalfSpreadFloorBps float64
@@ -320,6 +328,13 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		minHalfSpreadFloorBps: 0.25,
 		recentFills:           make([]TradeRecord, 0, 32),
 	}
+	if cfg.EnableMacroShield {
+		dDir := cfg.DataDir
+		if dDir == "" {
+			dDir = filepath.Dir(filepath.Dir(cfg.StateFile))
+		}
+		e.macroGuardian = macro.NewMacroGuardian(dDir, cfg.MacroSyncURL)
+	}
 	e.maybeReloadCloudParams()
 
 	// Attempt to restore existing state from checkpoint
@@ -382,6 +397,10 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		e.journal = f
 	}
 
+	if e.macroGuardian != nil {
+		e.state.Macro = e.macroGuardian.Evaluate(time.Now())
+	}
+
 	return e, nil
 }
 
@@ -389,6 +408,10 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 func (e *DryRunEngine) Start(ctx context.Context) {
 	if e.running.Swap(true) {
 		return
+	}
+
+	if e.macroGuardian != nil {
+		e.macroGuardian.Start(ctx)
 	}
 
 	e.wg.Add(2)
@@ -403,6 +426,10 @@ func (e *DryRunEngine) Stop() {
 	}
 	close(e.stopCh)
 	e.wg.Wait()
+
+	if e.macroGuardian != nil {
+		e.macroGuardian.Stop()
+	}
 
 	e.mu.Lock()
 	// 1. Cancel all resting maker orders on shutdown
@@ -531,6 +558,10 @@ func (e *DryRunEngine) State() DryRunState {
 
 	if cp.Leverage.EffectiveLeverage == 0 && e.leverageCtrl != nil {
 		cp.Leverage = e.leverageCtrl.Compute(10.0, 0.20, 0.50, 0.0, cp.CircuitHalted)
+	}
+
+	if cp.Macro.PhaseName == "" && e.macroGuardian != nil {
+		cp.Macro = e.macroGuardian.Evaluate(now)
 	}
 
 	return cp
@@ -705,6 +736,10 @@ func (e *DryRunEngine) saveCheckpoint() error {
 			}
 			e.state.ActiveOrders[sym] = copies
 		}
+	}
+
+	if e.macroGuardian != nil {
+		e.state.Macro = e.macroGuardian.Evaluate(now)
 	}
 
 	data, err := json.MarshalIndent(e.state, "", "  ")
@@ -1403,6 +1438,27 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		return
 	}
 
+	// Check Macro Event Shield (Zero-cost economic release defense)
+	var macroSt macro.MacroState
+	if e.macroGuardian != nil {
+		macroSt = e.macroGuardian.Evaluate(now)
+		e.mu.Lock()
+		e.state.Macro = macroSt
+		if !macroSt.AllowQuoting {
+			// PhaseEventHalt: High-impact release (CPI, FOMC, NFP) occurring right now.
+			// Pull resting maker quotes immediately to avoid severe adverse selection / toxic fill slippage.
+			e.activeOrders[symbol] = nil
+			e.state.QuotingPaused = true
+			e.mu.Unlock()
+			return
+		}
+		e.mu.Unlock()
+	} else {
+		macroSt.SpreadMultiplier = 1.0
+		macroSt.LeverageMultiplier = 1.0
+		macroSt.AllowQuoting = true
+	}
+
 	// Populate full 16-feature microstructure vector for current tick
 	var x [common.FeatureCount]float64
 	x[0] = imbL1
@@ -1441,6 +1497,10 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 
 	// Compute institutional clip size and max symbol inventory cap
 	clipQty, maxInvQty := e.leverageCtrl.ComputeClipSizeForSymbol(symbol, currEq, levState.EffectiveLeverage, midPrice, len(e.cfg.Symbols))
+	if macroSt.LeverageMultiplier > 0 && macroSt.LeverageMultiplier < 1.0 {
+		clipQty *= macroSt.LeverageMultiplier
+		maxInvQty *= macroSt.LeverageMultiplier
+	}
 	if clipQty <= 0 {
 		clipQty = 0.001
 		maxInvQty = 0.005
@@ -1545,6 +1605,12 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 
 	bidOffsetBps := math.Max(floorBps, qd.HalfSpreadBps-blendedSkewBps) + tcaPenaltyBps
 	askOffsetBps := math.Max(floorBps, qd.HalfSpreadBps+blendedSkewBps) + tcaPenaltyBps
+
+	// Apply Macro Event Shield spread scaling (e.g. 2.5x pre-event, 1.5x post-event drift)
+	if macroSt.SpreadMultiplier > 1.0 {
+		bidOffsetBps *= macroSt.SpreadMultiplier
+		askOffsetBps *= macroSt.SpreadMultiplier
+	}
 
 	// Ensure baseline half-spread covers round-trip maker fees (2 * MakerFeeBps) + positive expected edge.
 	feeFloorBps := math.Max(floorBps, e.cfg.MakerFeeBps+0.45)

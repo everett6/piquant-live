@@ -593,3 +593,69 @@ func BenchmarkProcessMarketEvent(b *testing.B) {
 		dryRun.processMarketEvent(&ev)
 	}
 }
+
+func TestMacroGuardianEventHaltAndSpreadScaling(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.EnableMacroShield = true
+
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	engine, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	// 1. Test during active high-impact FOMC event (2026-11-05 19:00:00 UTC)
+	// Event Halt phase: T - 2m to T + 5m -> quotes MUST be pulled, AllowQuoting = false
+	fomcTime := time.Date(2026, 11, 5, 19, 0, 0, 0, time.UTC)
+	engine.evaluateQuotesAndGating("BTCUSDT", 75000.0, fomcTime)
+
+	st := engine.State()
+	if st.Macro.PhaseName != "EVENT_HALT" {
+		t.Errorf("expected phase EVENT_HALT during FOMC release, got %s", st.Macro.PhaseName)
+	}
+	if st.Macro.AllowQuoting {
+		t.Errorf("expected AllowQuoting=false during EVENT_HALT, got true")
+	}
+	if len(st.ActiveOrders["BTCUSDT"]) > 0 {
+		t.Errorf("expected zero active resting orders during EVENT_HALT, got %d", len(st.ActiveOrders["BTCUSDT"]))
+	}
+	if !st.QuotingPaused {
+		t.Errorf("expected QuotingPaused=true during EVENT_HALT")
+	}
+
+	// 2. Test during Pre-Event Defense (T - 10m before FOMC)
+	preEventTime := time.Date(2026, 11, 5, 18, 50, 0, 0, time.UTC)
+	engine.evaluateQuotesAndGating("BTCUSDT", 75000.0, preEventTime)
+
+	stPre := engine.State()
+	if stPre.Macro.PhaseName != "PRE_EVENT_DEFENSE" {
+		t.Errorf("expected phase PRE_EVENT_DEFENSE, got %s", stPre.Macro.PhaseName)
+	}
+	if !stPre.Macro.AllowQuoting {
+		t.Errorf("expected AllowQuoting=true in pre-event defense")
+	}
+	if stPre.Macro.SpreadMultiplier != 2.5 {
+		t.Errorf("expected spread multiplier 2.5x, got %f", stPre.Macro.SpreadMultiplier)
+	}
+	if stPre.Macro.LeverageMultiplier != 0.50 {
+		t.Errorf("expected leverage multiplier 0.50x, got %f", stPre.Macro.LeverageMultiplier)
+	}
+
+	// 3. Test during Nominal Conditions (> 15m away, e.g. 2 hours before)
+	nominalTime := time.Date(2026, 11, 5, 17, 0, 0, 0, time.UTC)
+	engine.evaluateQuotesAndGating("BTCUSDT", 75000.0, nominalTime)
+
+	stNom := engine.State()
+	if stNom.Macro.PhaseName != "NOMINAL" {
+		t.Errorf("expected phase NOMINAL, got %s", stNom.Macro.PhaseName)
+	}
+	if !stNom.Macro.AllowQuoting {
+		t.Errorf("expected AllowQuoting=true in nominal phase")
+	}
+	if stNom.Macro.SpreadMultiplier != 1.0 {
+		t.Errorf("expected spread multiplier 1.0x, got %f", stNom.Macro.SpreadMultiplier)
+	}
+}
