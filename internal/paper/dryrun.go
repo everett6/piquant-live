@@ -14,6 +14,7 @@ import (
 
 	"piquant-live/internal/engine"
 	"piquant-live/internal/experiment"
+	"piquant-live/internal/marketdata"
 	"piquant-live/internal/models/common"
 )
 
@@ -142,6 +143,55 @@ type DryRunState struct {
 	Leverage               DynamicLeverageState `json:"leverage"`                 // Real-time automatic dynamic leverage and regime
 }
 
+// SymbolMicrostructure maintains isolated per-symbol order-book dynamics,
+// 16-feature streaming extraction, VPIN toxicity, Kyle's Lambda, Hawkes intensity,
+// and MicrostructureCircuitBreaker so multi-asset price/depth scales never cross-contaminate.
+type SymbolMicrostructure struct {
+	Symbol       string
+	CircuitBrk   *experiment.MicrostructureCircuitBreaker
+	VpinCalc     *common.VPINCalculator
+	KyleEst      *common.KylesLambdaEstimator
+	HawkesEst    *common.OnlineHawkesEstimator
+	AdaHedge     *common.AdaHedgeEnsemble
+	PrevPreds    [common.MaxEnsembleExperts]float64
+	HasPrevPreds bool
+
+	PrevBids    [10]marketdata.PriceLevel
+	PrevAsks    [10]marketdata.PriceLevel
+	NumPrevBids int
+	NumPrevAsks int
+	HasPrevBook bool
+
+	PrevMid     float64
+	Ofi1s       float64
+	Ofi5s       float64
+	Ofi30s      float64
+	Mlofi1s     float64
+	Mlofi5s     float64
+	Ret1sBps    float64
+	Ret5sBps    float64
+	VolVarBps   float64
+	TradeBuy5s  float64
+	TradeSell5s float64
+	TradeRate1s float64
+}
+
+func newSymbolMicrostructure(symbol string, kylesLambda float64) *SymbolMicrostructure {
+	if kylesLambda <= 0 {
+		kylesLambda = 0.25
+	}
+	return &SymbolMicrostructure{
+		Symbol:      symbol,
+		CircuitBrk:  experiment.NewMicrostructureCircuitBreaker(1.0),
+		VpinCalc:    common.NewVPINCalculator(25.0, 50), // $25k notional volume buckets
+		KyleEst:     common.NewKylesLambdaEstimator(0.05, kylesLambda),
+		HawkesEst:   common.NewOnlineHawkesEstimator(5.0, 12.0, 20.0),
+		AdaHedge:    common.NewAdaHedgeEnsemble(7, 0.985),
+		VolVarBps:   0.15,
+		TradeRate1s: 4.0,
+	}
+}
+
 // DryRunEngine orchestrates the 14-day autonomous dry run.
 type DryRunEngine struct {
 	cfg     DryRunConfig
@@ -152,8 +202,9 @@ type DryRunEngine struct {
 	mu    sync.RWMutex
 	state DryRunState
 
-	// Resting passive maker orders per symbol
+	// Resting passive maker orders and isolated microstructure state per symbol
 	activeOrders map[string][]*ActiveMakerOrder
+	symMicro     map[string]*SymbolMicrostructure
 	lastTickTime time.Time
 
 	// Models & Quantitative guards
@@ -234,6 +285,12 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	}
 	levCtrl := NewDynamicLeverageController(levCfg)
 
+	symMicro := make(map[string]*SymbolMicrostructure, len(cfg.Symbols))
+	for _, s := range cfg.Symbols {
+		upper := strings.ToUpper(s)
+		symMicro[upper] = newSymbolMicrostructure(upper, cfg.KylesLambda)
+	}
+
 	e := &DryRunEngine{
 		cfg:           cfg,
 		ring:          ring,
@@ -253,6 +310,7 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		hawkesEst:     common.NewOnlineHawkesEstimator(5.0, 12.0, 20.0),
 		leverageCtrl:  levCtrl,
 		activeOrders:  make(map[string][]*ActiveMakerOrder),
+		symMicro:      symMicro,
 		recentFills:   make([]TradeRecord, 0, 32),
 	}
 
@@ -611,10 +669,24 @@ func (e *DryRunEngine) ProcessMarketEvent(ev *engine.MarketEvent) {
 	e.processMarketEvent(ev)
 }
 
+func (e *DryRunEngine) getOrCreateSymbolMicro(symbol string) *SymbolMicrostructure {
+	if e.symMicro == nil {
+		e.symMicro = make(map[string]*SymbolMicrostructure)
+	}
+	sm, ok := e.symMicro[symbol]
+	if !ok || sm == nil {
+		sm = newSymbolMicrostructure(symbol, e.cfg.KylesLambda)
+		e.symMicro[symbol] = sm
+	}
+	return sm
+}
+
 // processMarketEvent executes hot-path pricing and order matching.
 func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 	symbol := "BTCUSDT"
-	if ev.SymbolID == 1 {
+	if int(ev.SymbolID) < len(e.cfg.Symbols) {
+		symbol = strings.ToUpper(e.cfg.Symbols[ev.SymbolID])
+	} else if ev.SymbolID == 1 {
 		symbol = "ETHUSDT"
 	}
 
@@ -680,7 +752,7 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 		e.state.PeakEquity = e.state.Equity
 	}
 
-	// Check max drawdown
+	// Check hard portfolio max drawdown circuit breaker
 	if e.state.PeakEquity > 0 {
 		dd := (e.state.PeakEquity - e.state.Equity) / e.state.PeakEquity * 100.0
 		if dd > e.state.MaxDrawdownPct {
@@ -689,12 +761,16 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 		if dd >= e.cfg.MaxDrawdownPct && !e.state.CircuitHalted {
 			e.state.CircuitHalted = true
 			e.state.CircuitHaltReason = fmt.Sprintf("Emergency Circuit Breaker: Max Drawdown breached (%.2f%% >= %.2f%%)", dd, e.cfg.MaxDrawdownPct)
+			for sym := range e.activeOrders {
+				e.activeOrders[sym] = nil
+			}
 		}
 	}
 
 	if e.state.InitialCapital > 0 {
 		e.state.TotalReturnPct = (e.state.Equity - e.state.InitialCapital) / e.state.InitialCapital * 100.0
 	}
+	sm := e.getOrCreateSymbolMicro(symbol)
 	e.mu.Unlock()
 
 	// Update TCA multi-horizon markouts on incoming live market tick
@@ -702,7 +778,7 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 		e.tcaTracker.OnTick(symbol, price, now.UnixNano())
 	}
 
-	// 2. Microstructure Circuit Breaker Check
+	// 2. Hard Portfolio Circuit Breaker Check
 	if e.state.CircuitHalted {
 		return
 	}
@@ -713,6 +789,29 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 	// consume the queue ahead (hftbacktest fill realism).
 	if ev.Kind == 0 {
 		isBuyerMaker := (ev.Side == 1)
+		// Update per-symbol microstructure estimators (prevents BTC/ETH price cross-contamination)
+		if sm.VpinCalc != nil {
+			sm.VpinCalc.UpdateTrade(price, ev.Size, isBuyerMaker)
+		}
+		if sm.KyleEst != nil {
+			sm.KyleEst.UpdateTrade(price, ev.Size, isBuyerMaker)
+		}
+		if sm.HawkesEst != nil {
+			sm.HawkesEst.Update(ev.Timestamp, !isBuyerMaker, ev.Size)
+		}
+		// Maintain rolling trade flow imbalance & arrival rate
+		e.mu.Lock()
+		sm.TradeRate1s = 0.92*sm.TradeRate1s + 1.0
+		if !isBuyerMaker { // Taker buy
+			sm.TradeBuy5s = 0.96*sm.TradeBuy5s + ev.Size
+			sm.TradeSell5s = 0.96 * sm.TradeSell5s
+		} else { // Taker sell
+			sm.TradeSell5s = 0.96*sm.TradeSell5s + ev.Size
+			sm.TradeBuy5s = 0.96 * sm.TradeBuy5s
+		}
+		e.mu.Unlock()
+
+		// Also keep global diagnostic estimators updated
 		if e.vpinCalc != nil {
 			e.vpinCalc.UpdateTrade(price, ev.Size, isBuyerMaker)
 		}
@@ -784,17 +883,29 @@ func (e *DryRunEngine) matchMakerOrders(symbol string, tradePrice float64, trade
 
 // evaluateQuotesAndGating calculates order book signals and maintains resting maker quotes.
 func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, now time.Time) {
+	e.mu.Lock()
+	sm := e.getOrCreateSymbolMicro(symbol)
+	e.mu.Unlock()
+
 	var spreadBps float64 = 0.80
 	var top5Depth float64 = 150000.0
-	var imbL1 float64 = 0.20
-	var queueRatio float64 = 0.55
+	var imbL1 float64 = 0.0
+	var imbL5 float64 = 0.0
+	var imbL20 float64 = 0.0
+	var microDev float64 = 0.0
+	var queueRatio float64 = 0.50
 	var bestBid float64 = midPrice * 0.9999
 	var bestAsk float64 = midPrice * 1.0001
 	var bidSize float64 = 1.5
 	var askSize float64 = 1.5
 
+	var curBids [10]marketdata.PriceLevel
+	var curAsks [10]marketdata.PriceLevel
+	hasLiveBook := false
+
 	if e.stream != nil {
 		if book, hasBook := e.stream.GetL2Book(symbol); hasBook && book != nil && book.NumBids > 0 && book.NumAsks > 0 {
+			hasLiveBook = true
 			b0 := book.Bids[0]
 			a0 := book.Asks[0]
 			bestBid = b0.Price
@@ -808,88 +919,159 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			if totSize > 0 {
 				imbL1 = (b0.Size - a0.Size) / totSize
 				queueRatio = b0.Size / totSize
+				microPrice := (bestBid*a0.Size + bestAsk*b0.Size) / totSize
+				if bestAsk > bestBid {
+					microDev = (microPrice - midPrice) / (bestAsk - bestBid)
+				}
 			}
+
+			var sumBid5, sumAsk5 float64
 			var sumTop5 float64
 			for i := 0; i < 5 && i < book.NumBids; i++ {
+				curBids[i].Price = book.Bids[i].Price
+				curBids[i].Size = book.Bids[i].Size
+				sumBid5 += book.Bids[i].Size
 				sumTop5 += book.Bids[i].Size * book.Bids[i].Price
 			}
 			for i := 0; i < 5 && i < book.NumAsks; i++ {
+				curAsks[i].Price = book.Asks[i].Price
+				curAsks[i].Size = book.Asks[i].Size
+				sumAsk5 += book.Asks[i].Size
 				sumTop5 += book.Asks[i].Size * book.Asks[i].Price
+			}
+			if sumBid5+sumAsk5 > 0 {
+				imbL5 = (sumBid5 - sumAsk5) / (sumBid5 + sumAsk5)
 			}
 			if sumTop5 > 0 {
 				top5Depth = sumTop5
 			}
+
+			var sumBid20, sumAsk20 float64
+			for i := 0; i < 20 && i < book.NumBids; i++ {
+				sumBid20 += book.Bids[i].Size
+			}
+			for i := 0; i < 20 && i < book.NumAsks; i++ {
+				sumAsk20 += book.Asks[i].Size
+			}
+			if sumBid20+sumAsk20 > 0 {
+				imbL20 = (sumBid20 - sumAsk20) / (sumBid20 + sumAsk20)
+			}
 		}
 	}
 
-	// Microstructure Circuit Breaker & Dynamic Risk Safeguard Check
-	liveVpin := e.vpinCalc.VPIN()
-	halted, haltReason := e.circuitBrk.Check(spreadBps, top5Depth, liveVpin)
-	if e.riskSafeguard != nil {
-		rState, rReason := e.riskSafeguard.OnTick(e.state.Equity, spreadBps, liveVpin, now)
-		if rState == StateTripped {
-			halted = true
-			haltReason = rReason
+	// Real-time Cont-Kukanov-Stoikov OFI & Xu-Gould-Howison Multi-Level OFI extraction
+	e.mu.Lock()
+	var tickOFI1, tickMLOFI float64
+	if hasLiveBook && sm.HasPrevBook {
+		weights := [5]float64{1.0, 0.7408, 0.5488, 0.4066, 0.3012} // exp(-0.3 * m)
+		for m := 0; m < 5; m++ {
+			var eBid, eAsk float64
+			if curBids[m].Price > sm.PrevBids[m].Price {
+				eBid = curBids[m].Size
+			} else if curBids[m].Price == sm.PrevBids[m].Price {
+				eBid = curBids[m].Size - sm.PrevBids[m].Size
+			} else {
+				eBid = -sm.PrevBids[m].Size
+			}
+
+			if curAsks[m].Price < sm.PrevAsks[m].Price {
+				eAsk = curAsks[m].Size
+			} else if curAsks[m].Price == sm.PrevAsks[m].Price {
+				eAsk = curAsks[m].Size - sm.PrevAsks[m].Size
+			} else {
+				eAsk = -sm.PrevAsks[m].Size
+			}
+
+			levelOFI := eBid - eAsk
+			normDenom := curBids[m].Size + curAsks[m].Size + 1e-6
+			normLevelOFI := levelOFI / normDenom
+			if m == 0 {
+				tickOFI1 = normLevelOFI
+			}
+			tickMLOFI += weights[m] * normLevelOFI
 		}
 	}
-	if halted {
+	if hasLiveBook {
+		sm.PrevBids = curBids
+		sm.PrevAsks = curAsks
+		sm.HasPrevBook = true
+	}
+
+	sm.Ofi1s = 0.85*sm.Ofi1s + 0.15*tickOFI1
+	sm.Ofi5s = 0.96*sm.Ofi5s + 0.04*tickOFI1
+	sm.Ofi30s = 0.992*sm.Ofi30s + 0.008*tickOFI1
+	sm.Mlofi1s = 0.85*sm.Mlofi1s + 0.15*tickMLOFI
+	sm.Mlofi5s = 0.96*sm.Mlofi5s + 0.04*tickMLOFI
+
+	// Real-time tick return & EWMA realized volatility
+	var tickRetBps float64
+	if sm.PrevMid > 0 && midPrice > 0 {
+		tickRetBps = (midPrice - sm.PrevMid) / sm.PrevMid * 1e4
+	}
+	sm.PrevMid = midPrice
+	sm.Ret1sBps = 0.85*sm.Ret1sBps + 0.15*tickRetBps
+	sm.Ret5sBps = 0.96*sm.Ret5sBps + 0.04*tickRetBps
+	sm.VolVarBps = math.Sqrt(0.98*sm.VolVarBps*sm.VolVarBps + 0.02*tickRetBps*tickRetBps)
+	if sm.VolVarBps < 0.25 {
+		sm.VolVarBps = 0.25
+	}
+	sm.TradeRate1s *= 0.95
+	tradeTot5s := sm.TradeBuy5s + sm.TradeSell5s
+	tradeImb5s := 0.0
+	if tradeTot5s > 1e-8 {
+		tradeImb5s = (sm.TradeBuy5s - sm.TradeSell5s) / tradeTot5s
+	}
+
+	// Per-symbol VPIN & Microstructure Circuit Breaker Check (Soft Quoting Gate)
+	liveVpin := sm.VpinCalc.VPIN()
+	softGatePaused, _ := sm.CircuitBrk.CheckWithTime(spreadBps, top5Depth, liveVpin, now.UnixNano())
+	e.mu.Unlock()
+
+	// Check dynamic portfolio risk safeguard for hard drawdown trip only
+	if e.riskSafeguard != nil {
+		rState, rReason := e.riskSafeguard.OnTick(e.state.Equity, spreadBps, liveVpin, now)
+		if rState == StateTripped && e.state.MaxDrawdownPct >= e.cfg.MaxDrawdownPct {
+			e.mu.Lock()
+			e.state.CircuitHalted = true
+			e.state.CircuitHaltReason = rReason
+			e.activeOrders[symbol] = nil
+			e.mu.Unlock()
+			return
+		}
+	}
+
+	// If per-symbol microstructure gate detects a transient book anomaly (e.g. 500ms depth flicker or wide spread),
+	// temporarily pull resting quotes on this symbol without permanently bricking the engine.
+	if softGatePaused {
 		e.mu.Lock()
-		e.state.CircuitHalted = true
-		e.state.CircuitHaltReason = haltReason
-		e.activeOrders[symbol] = nil // Cancel all resting quotes on halt
+		e.activeOrders[symbol] = nil
 		e.mu.Unlock()
 		return
 	}
 
-	// Synthesize standard feature vector for current tick
+	// Populate full 16-feature microstructure vector for current tick
 	var x [common.FeatureCount]float64
 	x[0] = imbL1
-	x[3] = 0.10
+	x[1] = imbL5
+	x[2] = imbL20
+	x[3] = microDev
 	x[4] = spreadBps
-	x[5] = 1.20
-	x[10] = 1.50
-	x[11] = 0.35
-	x[13] = 0.25
-	x[14] = 12.0
+	x[5] = sm.Ofi1s * 5.0
+	x[6] = sm.Ofi5s * 5.0
+	x[7] = sm.Ofi30s * 5.0
+	x[8] = sm.Mlofi1s * 3.0
+	x[9] = sm.Mlofi5s * 3.0
+	x[10] = sm.VolVarBps
+	x[11] = sm.Ret1sBps
+	x[12] = sm.Ret5sBps
+	x[13] = tradeImb5s
+	x[14] = sm.TradeRate1s
 	x[15] = queueRatio
 
-	e.mu.RLock()
-	pos := e.state.Positions[symbol]
-	currentInv := 0.0
-	if pos != nil {
-		currentInv = pos.Size
-	}
-	e.mu.RUnlock()
-
-	// GLFT & Cartea-Jaimungal reservation prices
-	qd := e.glftMM.Quote(&x, currentInv)
-	_, _, carteaRes := e.carteaMM.ComputeQuotes(midPrice, currentInv, 0.0, 30.0, x[5])
-
-	// AdaHedge ensemble with Ablation Gate filtering
-	carteaSignal := 0.0
-	if e.cfg.EnableAllModels || !experiment.DefaultDisabledModels["cartea_jaimungal"] {
-		carteaSignal = (carteaRes - midPrice) / midPrice * 1e4
-	}
-	prevPreds := [common.MaxEnsembleExperts]float64{0.48, 0.42, 0.44, 0.46, 0.39, 0.51, 0.45, 0}
-	currPreds := [common.MaxEnsembleExperts]float64{0.45, 0.38, qd.ReservationBps, 0.44, 0.40, 0.52, carteaSignal, 0}
-	metaPred, _ := e.adaHedge.UpdateAndCombine(0.50, prevPreds, currPreds)
-
-	// Avellaneda-Stoikov & GLFT inventory-skewed quoting:
-	targetBid := midPrice - (qd.BidOffsetBps * midPrice * 1e-4)
-	targetAsk := midPrice + (qd.AskOffsetBps * midPrice * 1e-4)
-
-	// Clamp to the touch so resting quotes remain passive maker orders (never cross into taker territory)
-	if bestBid > 0 && targetBid > bestBid {
-		targetBid = bestBid
-	}
-	if bestAsk > 0 && targetAsk < bestAsk {
-		targetAsk = bestAsk
-	}
-
 	// Dynamic Leverage Controller: automatic regime & exposure scaling
-	hkRatio := 0.60
-	if e.hawkesEst != nil {
-		hkRatio = e.hawkesEst.BranchingRatio()
+	hkRatio := 0.55
+	if sm.HawkesEst != nil {
+		hkRatio = sm.HawkesEst.BranchingRatio()
 	}
 	ddPct := 0.0
 	if e.state.PeakEquity > 0 {
@@ -898,10 +1080,97 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	levState := e.leverageCtrl.Compute(spreadBps, liveVpin, hkRatio, ddPct, e.state.CircuitHalted)
 	e.state.Leverage = levState
 
-	// Dynamic institutional order sizing bounded by effective leverage and capital (symbol-specific vol parity)
-	qty := e.leverageCtrl.ComputeOrderSizeForSymbol(symbol, e.state.Equity, levState.EffectiveLeverage, midPrice, len(e.cfg.Symbols))
-	if qty <= 0 {
-		qty = 0.001
+	// Compute institutional clip size (20% of symbol allocation) and max symbol inventory cap
+	clipQty, maxInvQty := e.leverageCtrl.ComputeClipSizeForSymbol(symbol, e.state.Equity, levState.EffectiveLeverage, midPrice, len(e.cfg.Symbols))
+	if clipQty <= 0 {
+		clipQty = 0.001
+		maxInvQty = 0.005
+	}
+
+	e.mu.RLock()
+	pos := e.state.Positions[symbol]
+	currentInv := 0.0
+	avgEntry := midPrice
+	if pos != nil {
+		currentInv = pos.Size
+		if pos.AvgEntryPrice > 0 {
+			avgEntry = pos.AvgEntryPrice
+		}
+	}
+	e.mu.RUnlock()
+
+	// Normalize inventory into [-5.0, +5.0] clip units so GLFT & Cartea-Jaimungal inventory risk aversion
+	// scales identically across high-price (BTC) and low-price (ETH/SOL) contracts.
+	normInv := 0.0
+	if maxInvQty > 0 {
+		normInv = (currentInv / maxInvQty) * 5.0
+		if normInv > 5.0 {
+			normInv = 5.0
+		} else if normInv < -5.0 {
+			normInv = -5.0
+		}
+	}
+
+	// GLFT & Cartea-Jaimungal reservation prices with normalized inventory
+	qd := e.glftMM.Quote(&x, normInv)
+	_, _, carteaRes := e.carteaMM.ComputeQuotes(midPrice, normInv, 0.0, 30.0, x[5])
+
+	// Live 7-expert AdaHedge ensemble updated with realized tick return
+	carteaSignal := 0.0
+	if e.cfg.EnableAllModels || !experiment.DefaultDisabledModels["cartea_jaimungal"] {
+		carteaSignal = (carteaRes - midPrice) / midPrice * 1e4
+	}
+	currPreds := [common.MaxEnsembleExperts]float64{
+		0.45*x[8] + 0.35*x[0]*spreadBps,             // Expert 0: MLOFI Ridge
+		0.50*x[5] + 0.30*x[6] + 0.20*x[3]*spreadBps, // Expert 1: Rough Signature OFI
+		qd.ReservationBps,                           // Expert 2: GLFT Queue-Reactive
+		0.60*x[3]*spreadBps + 0.40*x[1],             // Expert 3: Stoikov Microprice
+		-0.35 * x[12],                               // Expert 4: Short-Horizon Mean Reversion
+		0.55*x[13] + 0.25*x[5],                      // Expert 5: Hawkes Signed Trade Flow
+		carteaSignal,                                // Expert 6: Cartea-Jaimungal
+		0,
+	}
+	e.mu.Lock()
+	var metaPred float64
+	if sm.HasPrevPreds {
+		metaPred, _ = sm.AdaHedge.UpdateAndCombine(tickRetBps, sm.PrevPreds, currPreds)
+		_, _ = e.adaHedge.UpdateAndCombine(tickRetBps, sm.PrevPreds, currPreds)
+	} else {
+		metaPred = qd.ReservationBps
+	}
+	sm.PrevPreds = currPreds
+	sm.HasPrevPreds = true
+	e.mu.Unlock()
+
+	// Blend AdaHedge online meta-prediction with GLFT reservation skew
+	blendedSkewBps := 0.65*qd.ReservationBps + 0.35*metaPred
+	bidOffsetBps := math.Max(0.25, qd.HalfSpreadBps-blendedSkewBps)
+	askOffsetBps := math.Max(0.25, qd.HalfSpreadBps+blendedSkewBps)
+
+	targetBid := midPrice - (bidOffsetBps * midPrice * 1e-4)
+	targetAsk := midPrice + (askOffsetBps * midPrice * 1e-4)
+
+	// Profit-locking inventory exit floor: when holding moderate inventory (|normInv| < 3.5),
+	// anchor the closing maker quote so round-trip fills lock in positive net spread over AvgEntryPrice.
+	minProfitBps := math.Max(0.35, 2.0*e.cfg.MakerFeeBps+0.35)
+	if currentInv > 0 && normInv < 3.5 && avgEntry > 0 {
+		minProfitAsk := avgEntry * (1.0 + minProfitBps*1e-4)
+		if minProfitAsk > targetAsk && (minProfitAsk-midPrice)/midPrice*1e4 <= 12.0 {
+			targetAsk = minProfitAsk
+		}
+	} else if currentInv < 0 && normInv > -3.5 && avgEntry > 0 {
+		maxProfitBid := avgEntry * (1.0 - minProfitBps*1e-4)
+		if maxProfitBid < targetBid && (midPrice-maxProfitBid)/midPrice*1e4 <= 12.0 {
+			targetBid = maxProfitBid
+		}
+	}
+
+	// Clamp to the touch so resting quotes remain passive maker orders (never cross into taker territory)
+	if bestBid > 0 && targetBid > bestBid {
+		targetBid = bestBid
+	}
+	if bestAsk > 0 && targetAsk < bestAsk {
+		targetAsk = bestAsk
 	}
 
 	e.mu.Lock()
@@ -916,9 +1185,10 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if ord.Side == "SELL" {
 			target = targetAsk
 		}
-		// Cancel order if price deviated > 1.0 bps or if order has rested for > 2 seconds
+		// Preserve FIFO queue priority: only cancel & replace if target price moved > 2.5 bps
+		// or if order has rested for > 15 seconds without filling.
 		devBps := math.Abs(ord.Price-target) / target * 1e4
-		if devBps > 1.0 || now.Sub(ord.PlacedAt) > 2*time.Second {
+		if devBps > 2.5 || now.Sub(ord.PlacedAt) > 15*time.Second {
 			continue // cancel stale order
 		}
 		keptOrders = append(keptOrders, ord)
@@ -936,31 +1206,33 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		latency = 50 * time.Millisecond
 	}
 
-	// Place resting BUY maker quote if not present and inventory limit not exceeded
-	if !hasBuy && currentInv < 5.0*qty {
+	// Place resting BUY maker quote if not present, inventory limit not exceeded, and flow is not severely toxic downward
+	if !hasBuy && currentInv+clipQty <= maxInvQty && blendedSkewBps > -3.5 {
+		queueEst := math.Min(bidSize*0.35, 2.5*clipQty)
 		orders = append(orders, &ActiveMakerOrder{
 			Symbol:     symbol,
 			Side:       "BUY",
 			Price:      targetBid,
-			Size:       qty,
+			Size:       clipQty,
 			PlacedAt:   now,
 			ActiveAt:   now.Add(latency),
-			QueueAhead: bidSize,
+			QueueAhead: queueEst,
 			Strategy:   "GLFT_QueueReactive_Maker",
 			EdgeBps:    qd.HalfSpreadBps,
 		})
 	}
 
-	// Place resting SELL maker quote if not present and inventory limit not exceeded
-	if !hasSell && currentInv > -5.0*qty {
+	// Place resting SELL maker quote if not present, inventory limit not exceeded, and flow is not severely toxic upward
+	if !hasSell && currentInv-clipQty >= -maxInvQty && blendedSkewBps < 3.5 {
+		queueEst := math.Min(askSize*0.35, 2.5*clipQty)
 		orders = append(orders, &ActiveMakerOrder{
 			Symbol:     symbol,
 			Side:       "SELL",
 			Price:      targetAsk,
-			Size:       qty,
+			Size:       clipQty,
 			PlacedAt:   now,
 			ActiveAt:   now.Add(latency),
-			QueueAhead: askSize,
+			QueueAhead: queueEst,
 			Strategy:   "GLFT_QueueReactive_Maker",
 			EdgeBps:    qd.HalfSpreadBps,
 		})
@@ -968,8 +1240,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	e.activeOrders[symbol] = orders
 
 	// Tactical Taker Execution:
-	// Only triggered on high-conviction directional forecast passing conformal gate against taker costs
-	if math.Abs(metaPred) > 2.5 && e.conformal.PassesConformalGate(metaPred, x[10], e.cfg.TakerFeeBps) {
+	// Only triggered on extreme high-conviction directional forecast passing conformal gate against taker costs
+	if math.Abs(metaPred) > 4.5 && e.conformal.PassesConformalGate(metaPred, x[10], e.cfg.TakerFeeBps) {
 		e.simulateTakerFillLocked(symbol, midPrice, metaPred)
 	}
 }
@@ -1074,7 +1346,9 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 		e.state.LosingTrades++
 	}
 
-	if e.state.TotalTrades > 0 {
+	if closed := e.state.WinningTrades + e.state.LosingTrades; closed > 0 {
+		e.state.WinRate = float64(e.state.WinningTrades) / float64(closed) * 100.0
+	} else if e.state.TotalTrades > 0 {
 		e.state.WinRate = float64(e.state.WinningTrades) / float64(e.state.TotalTrades) * 100.0
 	}
 
@@ -1188,7 +1462,9 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 		e.state.LosingTrades++
 	}
 
-	if e.state.TotalTrades > 0 {
+	if closed := e.state.WinningTrades + e.state.LosingTrades; closed > 0 {
+		e.state.WinRate = float64(e.state.WinningTrades) / float64(closed) * 100.0
+	} else if e.state.TotalTrades > 0 {
 		e.state.WinRate = float64(e.state.WinningTrades) / float64(e.state.TotalTrades) * 100.0
 	}
 

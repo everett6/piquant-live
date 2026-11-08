@@ -266,6 +266,9 @@ const indexHTML = `<!doctype html>
   </nav>
   <div class="grow"></div>
   <div class="pills">
+    <button id="btnSoundToggle" class="mode-btn" onclick="toggleAudioAlerts()" title="Toggle Web Audio Fill Chimes & Risk Alerts">🔊 Sound: On</button>
+    <button id="btnCompactToggle" class="mode-btn" onclick="toggleCompactDensity()" title="Toggle Compact / Pro Density Mode">📐 Density: Standard</button>
+    <button id="btnOpenThemeModal" class="mode-btn" style="background:var(--accent-dim);border:1px solid var(--accent);color:var(--accent)" onclick="openCustomizerModal()" title="Open UI Theme, Audio & Quant Customizer">🎨 Customize UI</button>
     <button id="btnToggleCluster" class="mode-btn" style="background:var(--panel2);border:1px solid var(--accent);color:var(--accent)" title="Toggle Architecture: Pi 5 Standalone vs Pi 5 + Pi 3B Dual-Node">Cluster: Dual-Node (Pi 5 + 3B)</button>
     <button id="btnToggleMode" class="mode-btn" title="Toggle UI Complexity">Mode: Standard</button>
     <span id="rolePill" class="pill">node</span>
@@ -409,8 +412,23 @@ const indexHTML = `<!doctype html>
             </div>
           </div>
           <!-- Coin Selector Chips -->
-          <div id="coinSelectorGrid" style="display:flex;gap:8px;flex-wrap:wrap">
+          <div id="coinSelectorGrid" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
             <!-- Dynamically populated by renderCoinChips() -->
+          </div>
+          <!-- Custom Coin Adder & Strategy Aggressiveness Bar -->
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06)">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span style="font-size:11px;color:var(--muted);font-weight:600">Add Custom Pair:</span>
+              <input id="inputNewCoinSym" type="text" placeholder="e.g. SUI, ADA, PEPE" style="width:120px;padding:4px 8px;font-size:11px;background:#060a10;border:1px solid var(--line);border-radius:6px;color:#fff;font-family:ui-monospace,monospace">
+              <input id="inputNewCoinVol" type="number" placeholder="Vol % (65)" value="65" min="15" max="200" style="width:72px;padding:4px 8px;font-size:11px;background:#060a10;border:1px solid var(--line);border-radius:6px;color:#fff;font-family:ui-monospace,monospace">
+              <button type="button" class="preset-pill-btn" onclick="addCustomCoinToUniverse()">+ Add Coin</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span style="font-size:11px;color:var(--muted);font-weight:600">Strategy Profile:</span>
+              <button type="button" id="profCons" class="preset-pill-btn" onclick="applyStrategyProfile('conservative')">Conservative (1.8x)</button>
+              <button type="button" id="profBal" class="preset-pill-btn active" onclick="applyStrategyProfile('balanced')">Balanced (2.5x)</button>
+              <button type="button" id="profAcc" class="preset-pill-btn" onclick="applyStrategyProfile('accelerated')" style="border-color:rgba(0,230,118,0.4);color:var(--accent)">Accelerated $20/mo (3.5x ⚡)</button>
+            </div>
           </div>
         </div>
 
@@ -1468,6 +1486,79 @@ const indexHTML = `<!doctype html>
   <div id="footerClock">Sample Clock</div>
   <div>PiQuant Platform &bull; Offline Quantitative Research with Out-of-Sample Validation</div>
 </footer>
+
+<!-- UI & Quant Workspace Customizer Modal -->
+<div id="customizerOverlay" class="customizer-overlay" onclick="if(event.target===this)closeCustomizerModal()">
+  <div class="customizer-modal">
+    <div class="customizer-header">
+      <div>
+        <div style="font-size:15px;font-weight:750;color:var(--text)">🎨 PiQuant UI &amp; Quant Execution Customizer</div>
+        <div style="font-size:11px;color:var(--muted)">Personalize terminal theme, OLED contrast, density, Web Audio fill chimes, and risk presets</div>
+      </div>
+      <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="closeCustomizerModal()">✕ Close</button>
+    </div>
+    <div class="customizer-body">
+      <div>
+        <div class="config-section-title">1. Terminal Accent Theme &amp; Display Contrast</div>
+        <div class="config-row">
+          <div>
+            <div style="font-size:13px;font-weight:600">Color Palette</div>
+            <div style="font-size:11px;color:var(--muted)">Select primary accent glow &amp; chart color</div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center">
+            <span class="theme-swatch active" id="swatch-emerald" style="background:#00e676" onclick="applyThemeColor('emerald')" title="Quant Emerald"></span>
+            <span class="theme-swatch" id="swatch-cyan" style="background:#00d2ff" onclick="applyThemeColor('cyan')" title="Cyber Cyan"></span>
+            <span class="theme-swatch" id="swatch-amber" style="background:#ffab00" onclick="applyThemeColor('amber')" title="Bloomberg Amber"></span>
+            <span class="theme-swatch" id="swatch-violet" style="background:#b388ff" onclick="applyThemeColor('violet')" title="Institutional Violet"></span>
+            <span class="theme-swatch" id="swatch-crimson" style="background:#ff5252" onclick="applyThemeColor('crimson')" title="Crimson Laser"></span>
+          </div>
+        </div>
+        <div class="config-row" style="margin-top:8px">
+          <div>
+            <div style="font-size:13px;font-weight:600">Pitch-Black OLED Mode</div>
+            <div style="font-size:11px;color:var(--muted)">Zero-backlight #000000 background for 24/7 desk displays</div>
+          </div>
+          <button id="btnOledToggle" class="btn btn-secondary" style="padding:6px 12px;font-size:11px" onclick="toggleOledMode()">OLED: Off</button>
+        </div>
+        <div class="config-row" style="margin-top:8px">
+          <div>
+            <div style="font-size:13px;font-weight:600">Information Density</div>
+            <div style="font-size:11px;color:var(--muted)">Compact layout fits more L2 depth &amp; blotter rows on screen</div>
+          </div>
+          <button id="btnModalCompact" class="btn btn-secondary" style="padding:6px 12px;font-size:11px" onclick="toggleCompactDensity()">Density: Standard</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="config-section-title">2. Web Audio Execution Synthesizer &amp; Refresh</div>
+        <div class="config-row">
+          <div>
+            <div style="font-size:13px;font-weight:600">Maker Fill &amp; Circuit Breaker Audio Chimes</div>
+            <div style="font-size:11px;color:var(--muted)">Synthesizes a soft harmonic chime on fills and warning tone on circuit trip</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-secondary" style="padding:6px 10px;font-size:11px" onclick="playTradeDing('MAKER')">🔔 Test Chime</button>
+            <button id="btnModalSound" class="btn btn-primary" style="padding:6px 12px;font-size:11px" onclick="toggleAudioAlerts()">Sound: On</button>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="config-section-title">3. Workspace Configuration Persistence</div>
+        <div class="config-row">
+          <div>
+            <div style="font-size:13px;font-weight:600">Export / Reset Custom Cockpit Profile</div>
+            <div style="font-size:11px;color:var(--muted)">All settings auto-save to browser localStorage</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" style="padding:6px 12px;font-size:11px" onclick="exportWorkspaceConfig()">⬇ Export JSON</button>
+            <button class="btn btn-danger" style="padding:6px 12px;font-size:11px" onclick="resetWorkspaceConfig()">↺ Reset Defaults</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
 (function(){
@@ -3298,7 +3389,219 @@ const indexHTML = `<!doctype html>
     applyCustomParameters();
   };
 
-  // Initialize interactive components
+  // --- UI & Quant Customization Suite ---
+  var uiPrefs = {
+    theme: "emerald",
+    oled: false,
+    compact: false,
+    sound: true,
+    profile: "balanced"
+  };
+
+  var themePalettes = {
+    emerald: { accent: "#00e676", dim: "rgba(0,230,118,.13)", info: "#00d2ff" },
+    cyan:    { accent: "#00d2ff", dim: "rgba(0,210,255,.14)", info: "#00e676" },
+    amber:   { accent: "#ffab00", dim: "rgba(255,171,0,.14)", info: "#00d2ff" },
+    violet:  { accent: "#b388ff", dim: "rgba(179,136,255,.15)", info: "#00d2ff" },
+    crimson: { accent: "#ff5252", dim: "rgba(255,82,82,.15)", info: "#ffab00" }
+  };
+
+  function saveUiPrefs() {
+    try {
+      var customState = {
+        prefs: uiPrefs,
+        capital: $("inputCustomCapital") ? $("inputCustomCapital").value : 200,
+        baseLev: $("inputBaseLeverage") ? $("inputBaseLeverage").value : 2.5,
+        maxLev: $("inputMaxLeverage") ? $("inputMaxLeverage").value : 5.0,
+        maxDD: $("inputMaxDD") ? $("inputMaxDD").value : 2.0,
+        targetRet: $("inputTargetReturn") ? $("inputTargetReturn").value : 7.22,
+        coins: coinUniverse
+      };
+      localStorage.setItem("piquant_custom_v2", JSON.stringify(customState));
+    } catch (e) {}
+  }
+
+  function loadUiPrefs() {
+    try {
+      var raw = localStorage.getItem("piquant_custom_v2");
+      if (!raw) return;
+      var data = JSON.parse(raw);
+      if (data.prefs) {
+        uiPrefs = Object.assign(uiPrefs, data.prefs);
+      }
+      if (data.capital && $("inputCustomCapital")) $("inputCustomCapital").value = data.capital;
+      if (data.baseLev && $("inputBaseLeverage")) $("inputBaseLeverage").value = data.baseLev;
+      if (data.maxLev && $("inputMaxLeverage")) $("inputMaxLeverage").value = data.maxLev;
+      if (data.maxDD && $("inputMaxDD")) $("inputMaxDD").value = data.maxDD;
+      if (data.targetRet && $("inputTargetReturn")) $("inputTargetReturn").value = data.targetRet;
+      if (Array.isArray(data.coins) && data.coins.length > 0) {
+        coinUniverse = data.coins;
+      }
+    } catch (e) {}
+  }
+
+  window.openCustomizerModal = function() {
+    if ($("customizerOverlay")) $("customizerOverlay").classList.add("open");
+  };
+
+  window.closeCustomizerModal = function() {
+    if ($("customizerOverlay")) $("customizerOverlay").classList.remove("open");
+  };
+
+  window.applyThemeColor = function(themeName) {
+    var pal = themePalettes[themeName] || themePalettes.emerald;
+    uiPrefs.theme = themeName;
+    document.documentElement.style.setProperty("--accent", pal.accent);
+    document.documentElement.style.setProperty("--accent-dim", pal.dim);
+    document.documentElement.style.setProperty("--info", pal.info);
+    if ($("eqLinePath")) $("eqLinePath").setAttribute("stroke", pal.accent);
+    if ($("eqHoverPoint")) $("eqHoverPoint").setAttribute("fill", pal.accent);
+    Object.keys(themePalettes).forEach(function(k){
+      var sw = $("swatch-" + k);
+      if (sw) sw.className = "theme-swatch" + (k === themeName ? " active" : "");
+    });
+    saveUiPrefs();
+  };
+
+  window.toggleOledMode = function() {
+    uiPrefs.oled = !uiPrefs.oled;
+    document.body.classList.toggle("oled-mode", uiPrefs.oled);
+    if ($("btnOledToggle")) $("btnOledToggle").textContent = "OLED: " + (uiPrefs.oled ? "On (Pitch Black)" : "Off");
+    saveUiPrefs();
+  };
+
+  window.toggleCompactDensity = function() {
+    uiPrefs.compact = !uiPrefs.compact;
+    document.body.classList.toggle("compact-mode", uiPrefs.compact);
+    var label = "📐 Density: " + (uiPrefs.compact ? "Compact" : "Standard");
+    if ($("btnCompactToggle")) $("btnCompactToggle").textContent = label;
+    if ($("btnModalCompact")) $("btnModalCompact").textContent = "Density: " + (uiPrefs.compact ? "Compact" : "Standard");
+    saveUiPrefs();
+  };
+
+  window.toggleAudioAlerts = function() {
+    uiPrefs.sound = !uiPrefs.sound;
+    if ($("btnSoundToggle")) $("btnSoundToggle").textContent = (uiPrefs.sound ? "🔊 Sound: On" : "🔇 Sound: Off");
+    if ($("btnModalSound")) $("btnModalSound").textContent = "Sound: " + (uiPrefs.sound ? "On" : "Off");
+    if (uiPrefs.sound) playTradeDing("MAKER");
+    saveUiPrefs();
+  };
+
+  window.playTradeDing = function(role) {
+    if (!uiPrefs.sound) return;
+    try {
+      var AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      var ctx = new AudioCtx();
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      osc.type = role === "ALERT" ? "sawtooth" : "sine";
+      osc.frequency.setValueAtTime(role === "ALERT" ? 320 : 880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(role === "ALERT" ? 220 : 1320, ctx.currentTime + 0.14);
+      gain.gain.setValueAtTime(0.08, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.19);
+    } catch (e) {}
+  };
+
+  window.addCustomCoinToUniverse = function() {
+    var symEl = $("inputNewCoinSym");
+    var volEl = $("inputNewCoinVol");
+    if (!symEl || !symEl.value.trim()) return;
+    var rawSym = symEl.value.trim().toUpperCase().replace(/USDT$/, "");
+    if (!rawSym) return;
+    var vol = parseFloat(volEl ? volEl.value : 65) || 65;
+    var existing = coinUniverse.find(function(c){ return c.symbol === rawSym; });
+    if (existing) {
+      existing.active = true;
+      existing.vol24h = vol;
+    } else {
+      var colors = ["#00e676", "#00d2ff", "#ffab00", "#b388ff", "#ff5252", "#14f195"];
+      var col = colors[coinUniverse.length % colors.length];
+      coinUniverse.push({
+        symbol: rawSym,
+        name: rawSym,
+        pair: rawSym + "USDT",
+        active: true,
+        price: 10.0,
+        vol24h: vol,
+        baseLev: Math.max(1.0, Math.min(3.5, Number((110.0 / vol).toFixed(1)))),
+        color: col
+      });
+    }
+    symEl.value = "";
+    renderCoinChips();
+    applyCustomParameters();
+    saveUiPrefs();
+  };
+
+  window.applyStrategyProfile = function(profile) {
+    uiPrefs.profile = profile;
+    if (profile === "conservative") {
+      if ($("inputBaseLeverage")) $("inputBaseLeverage").value = 1.8;
+      if ($("inputMaxLeverage")) $("inputMaxLeverage").value = 3.0;
+      if ($("inputMaxDD")) $("inputMaxDD").value = 1.5;
+      if ($("inputTargetReturn")) $("inputTargetReturn").value = 5.20;
+    } else if (profile === "accelerated") {
+      if ($("inputBaseLeverage")) $("inputBaseLeverage").value = 3.5;
+      if ($("inputMaxLeverage")) $("inputMaxLeverage").value = 5.0;
+      if ($("inputMaxDD")) $("inputMaxDD").value = 2.0;
+      if ($("inputTargetReturn")) $("inputTargetReturn").value = 10.00;
+    } else {
+      if ($("inputBaseLeverage")) $("inputBaseLeverage").value = 2.5;
+      if ($("inputMaxLeverage")) $("inputMaxLeverage").value = 5.0;
+      if ($("inputMaxDD")) $("inputMaxDD").value = 2.0;
+      if ($("inputTargetReturn")) $("inputTargetReturn").value = 7.22;
+    }
+    ["profCons", "profBal", "profAcc"].forEach(function(id){
+      var el = $(id);
+      if (!el) return;
+      var match = (id === "profCons" && profile === "conservative") ||
+                  (id === "profBal" && profile === "balanced") ||
+                  (id === "profAcc" && profile === "accelerated");
+      el.className = "preset-pill-btn" + (match ? " active" : "");
+    });
+    applyCustomParameters();
+    saveUiPrefs();
+  };
+
+  window.exportWorkspaceConfig = function() {
+    saveUiPrefs();
+    var raw = localStorage.getItem("piquant_custom_v2") || "{}";
+    var blob = new Blob([raw], {type: "application/json"});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "piquant_workspace_config.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  window.resetWorkspaceConfig = function() {
+    localStorage.removeItem("piquant_custom_v2");
+    window.location.reload();
+  };
+
+  // Initialize interactive components & restore saved customization state
+  loadUiPrefs();
+  applyThemeColor(uiPrefs.theme || "emerald");
+  if (uiPrefs.oled) {
+    document.body.classList.add("oled-mode");
+    if ($("btnOledToggle")) $("btnOledToggle").textContent = "OLED: On (Pitch Black)";
+  }
+  if (uiPrefs.compact) {
+    document.body.classList.add("compact-mode");
+    if ($("btnCompactToggle")) $("btnCompactToggle").textContent = "📐 Density: Compact";
+    if ($("btnModalCompact")) $("btnModalCompact").textContent = "Density: Compact";
+  }
+  if (!uiPrefs.sound) {
+    if ($("btnSoundToggle")) $("btnSoundToggle").textContent = "🔇 Sound: Off";
+    if ($("btnModalSound")) $("btnModalSound").textContent = "Sound: Off";
+  }
+
   renderCoinChips();
   applyCustomParameters();
 

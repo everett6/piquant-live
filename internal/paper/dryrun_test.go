@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"piquant-live/internal/engine"
+	"piquant-live/internal/marketdata"
 	"piquant-live/internal/models/common"
 )
 
@@ -393,6 +394,66 @@ func TestFuturesMarginFillAccounting(t *testing.T) {
 	}
 	if st2.CircuitHalted {
 		t.Errorf("Circuit breaker should NOT trip on leveraged open!")
+	}
+}
+
+func TestMultiAssetMicrostructureIsolationAndClipSizing(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.InitialCapital = 200.00
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	// Populate BTC ($500k L5 depth) and ETH ($60k L5 depth) L2 books
+	stream.booksMu.Lock()
+	btcBook := &marketdata.L2OrderBook{
+		NumBids: 5,
+		NumAsks: 5,
+	}
+	ethBook := &marketdata.L2OrderBook{
+		NumBids: 5,
+		NumAsks: 5,
+	}
+	for i := 0; i < 5; i++ {
+		btcBook.Bids[i] = marketdata.PriceLevel{Price: 71800.0 - float64(i), Size: 0.70} // ~$250k bid side
+		btcBook.Asks[i] = marketdata.PriceLevel{Price: 71801.0 + float64(i), Size: 0.70} // ~$250k ask side
+		ethBook.Bids[i] = marketdata.PriceLevel{Price: 2238.0 - float64(i)*0.1, Size: 2.5} // ~$28k bid side
+		ethBook.Asks[i] = marketdata.PriceLevel{Price: 2238.2 + float64(i)*0.1, Size: 2.5} // ~$28k ask side
+	}
+	stream.books["BTCUSDT"] = btcBook
+	stream.books["ETHUSDT"] = ethBook
+	stream.booksMu.Unlock()
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	// Alternate BTC and ETH depth ticks within 5ms (previously triggered false depth_collapse_80pct)
+	now := time.Now().UnixNano()
+	for i := 0; i < 20; i++ {
+		dryRun.processMarketEvent(&engine.MarketEvent{
+			Timestamp: now + int64(i)*1_000_000,
+			SymbolID:  0, // BTCUSDT
+			Kind:      1, // Depth
+			Price:     71800.5,
+		})
+		dryRun.processMarketEvent(&engine.MarketEvent{
+			Timestamp: now + int64(i)*1_000_000 + 500_000,
+			SymbolID:  1, // ETHUSDT
+			Kind:      1, // Depth
+			Price:     2238.1,
+		})
+	}
+
+	st := dryRun.State()
+	if st.CircuitHalted {
+		t.Fatalf("Multi-asset BTC/ETH depth alternation must NOT trip CircuitHalted, got reason: %s", st.CircuitHaltReason)
+	}
+
+	clipBTC, maxBTC := dryRun.leverageCtrl.ComputeClipSizeForSymbol("BTCUSDT", 200.0, 2.5, 71800.5, 2)
+	if clipBTC <= 0 || maxBTC <= clipBTC {
+		t.Errorf("Expected valid clip and max inventory for BTCUSDT, got clip=%f max=%f", clipBTC, maxBTC)
 	}
 }
 

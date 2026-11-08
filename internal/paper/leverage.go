@@ -213,3 +213,43 @@ func (c *DynamicLeverageController) ComputeOrderSizeForSymbol(symbol string, equ
 	}
 	return rounded
 }
+
+// ComputeClipSizeForSymbol returns both the individual passive quote clip size (20% of max symbol allocation,
+// floored above Binance's $5.00 USDT minimum notional) and the maximum inventory limit for that symbol.
+func (c *DynamicLeverageController) ComputeClipSizeForSymbol(symbol string, equity float64, effectiveLev float64, price float64, numSymbols int) (clipQty float64, maxInvQty float64) {
+	maxInvQty = c.ComputeOrderSizeForSymbol(symbol, equity, effectiveLev, price, numSymbols)
+	if price <= 0 || maxInvQty <= 0 {
+		return 0.001, 0.005
+	}
+
+	uSym := strings.ToUpper(symbol)
+	prof := SymbolRiskProfile{VolWeight: 1.0, Decimals: 3}
+	for symPrefix, p := range DefaultSymbolProfiles {
+		if strings.Contains(uSym, symPrefix) {
+			prof = p
+			break
+		}
+	}
+
+	// Each quote leg is 20% of the symbol's max target position (so 5 clips build up max inventory),
+	// with a minimum clip notional of $6.00 USDT to strictly satisfy Binance Futures $5.00 min notional.
+	targetClip := maxInvQty * 0.20
+	minClip := 6.0 / price
+	if targetClip < minClip {
+		targetClip = minClip
+	}
+	if targetClip > maxInvQty {
+		targetClip = maxInvQty
+	}
+
+	p := math.Pow(10, float64(prof.Decimals))
+	clipQty = math.Round(targetClip*p) / p
+	if clipQty <= 0 {
+		if prof.Decimals > 0 {
+			clipQty = 1.0 / p
+		} else {
+			clipQty = 1.0
+		}
+	}
+	return clipQty, maxInvQty
+}

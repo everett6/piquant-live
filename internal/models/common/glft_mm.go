@@ -72,12 +72,20 @@ func (m *GLFTMarketMaker) Fit(samples []Sample, idx []int) error {
 
 // Quote computes the GLFT inventory-skewed reservation price and optimal bid/ask offsets.
 func (m *GLFTMarketMaker) Quote(x *[FeatureCount]float64, inventory float64) QuoteDecision {
+	spreadBps := math.Max(0.2, x[4])
 	var alpha float64
 	if m.fitted {
 		alpha = m.AlphaModel.Predict(x)
+	} else {
+		// Structural microstructure alpha prior when running online without batch pre-fit:
+		// Combines Cont-Kukanov-Stoikov L1 OFI (x[5]), Xu-Gould-Howison Multi-Level OFI (x[8]),
+		// multi-depth book imbalance (x[0..2]), and signed aggressor trade flow (x[13]).
+		ofiSignal := math.Tanh(x[5]*0.25)*0.45 + math.Tanh(x[8]*0.25)*0.55
+		bookPressure := 0.50*x[0] + 0.30*x[1] + 0.20*x[2]
+		tradeFlow := math.Max(-1.0, math.Min(1.0, x[13])) * 0.40
+		alpha = (0.45*ofiSignal + 0.35*bookPressure + 0.20*tradeFlow) * math.Max(0.5, math.Min(3.0, spreadBps))
 	}
 	// Incorporate Stoikov non-linear microprice deviation (x[3] is micro_dev in [-0.5, 0.5], x[4] is spread_bps)
-	spreadBps := math.Max(0.2, x[4])
 	stoikovShift := x[3] * spreadBps * 0.65
 	totalAlpha := 0.7*alpha + 0.3*stoikovShift
 
