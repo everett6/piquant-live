@@ -798,6 +798,33 @@ const indexHTML = `<!doctype html>
             </tbody>
           </table>
         </div>
+        <!-- Autonomous Kaggle Cloud Optimizer & TCA Risk Shield Telemetry Bar -->
+        <div style="background:var(--panel2);border:1px solid var(--accent);border-radius:10px;padding:10px 14px;margin-top:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--accent)">
+              Autonomous Kaggle Cloud Auto-Optimizer &amp; Live TCA Risk Shield
+            </div>
+            <div class="pills">
+              <span class="pill ok" id="cloudOptStatusPill">Kaggle Kernel: everetts12/piquant-optimizer (Active)</span>
+              <span class="pill info" id="cloudOptSchedulePill">Auto-Sync: Hourly (:15) &bull; Hot-Reload Active</span>
+              <span class="pill ok" id="cloudOptWeeklyPill">Target: +$18.42/wk (3.5x Base)</span>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:11px" class="mono">
+            <div style="background:var(--bg);padding:6px 10px;border-radius:6px;border:1px solid var(--line-subtle)">
+              <span style="color:var(--muted)">ACTIVE PARAMS:</span> <b id="cloudOptParams" style="color:var(--accent)">3.5x Base / 5.0x Max / 20% Clip</b>
+            </div>
+            <div style="background:var(--bg);padding:6px 10px;border-radius:6px;border:1px solid var(--line-subtle)">
+              <span style="color:var(--muted)">O-U HOLDING SKEW:</span> <b style="color:var(--ok)">&gt;20s Nonlinear Urgency Active</b>
+            </div>
+            <div style="background:var(--bg);padding:6px 10px;border-radius:6px;border:1px solid var(--line-subtle)">
+              <span style="color:var(--muted)">1S TCA MARKOUT SHIELD:</span> <b style="color:var(--info)">Auto-Widen &lt; -0.25 bps</b>
+            </div>
+            <div style="background:var(--bg);padding:6px 10px;border-radius:6px;border:1px solid var(--line-subtle)">
+              <span style="color:var(--muted)">BINANCE FEED:</span> <b style="color:var(--ok)">data-stream.binance.vision (Zero 451)</b>
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- 10-15 Year Historical $1,000 Simulation Summary Section -->
@@ -2317,11 +2344,11 @@ const indexHTML = `<!doctype html>
   var histSimLoaded = false;
   function loadHistoricalSim() {
     if (histSimLoaded) return;
+    histSimLoaded = true;
     fetch("/api/paper/historical-sim")
       .then(function(r){ return r.json(); })
       .then(function(d){
         if (!d) return;
-        histSimLoaded = true;
         var m1 = d.mode_1_full_15yr_compounded;
         var m2a = d.mode_2a_modern_binance_2017;
         var m2b = d.mode_2b_recent_5yr_2021;
@@ -2365,11 +2392,24 @@ const indexHTML = `<!doctype html>
   var tickSimLoaded = false;
   function loadTickSim() {
     if (tickSimLoaded) return;
+    tickSimLoaded = true;
+    fetch("/api/paper/cloud-optimizer")
+      .then(function(r){ return r.json(); })
+      .then(function(co){
+        if (co && co.optimal_params) {
+          var p = co.optimal_params;
+          if ($("cloudOptParams")) {
+            $("cloudOptParams").textContent = num(p.base_leverage || 3.5, 1) + "x Base / " + num(p.max_leverage || 5.0, 1) + "x Max / " + Math.round((p.clip_fraction || 0.20) * 100) + "% Clip";
+          }
+          if ($("cloudOptWeeklyPill") && p.projected_weekly_usd) {
+            $("cloudOptWeeklyPill").textContent = "Target: +$" + num(p.projected_weekly_usd, 2) + "/wk (" + num(p.base_leverage || 3.5, 1) + "x Base)";
+          }
+        }
+      }).catch(function(){});
     fetch("/api/paper/tick-sim")
       .then(function(r){ return r.json(); })
       .then(function(d){
         if (!d || d.error) return;
-        tickSimLoaded = true;
         if ($("tickSimEquityVal")) $("tickSimEquityVal").textContent = "$" + num(d.final_equity, 2);
         if ($("tickSimCagr")) $("tickSimCagr").textContent = "+" + num(d.cagr_pct, 1) + "% CAGR";
         if ($("tickSimProfit")) $("tickSimProfit").textContent = "+$" + num(d.total_net_profit, 2) + " Net";

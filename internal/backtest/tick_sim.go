@@ -6,7 +6,10 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"piquant-live/internal/engine"
@@ -21,14 +24,18 @@ type TickSimConfig struct {
 	Symbol             string  `json:"symbol"`
 	InitialCapital     float64 `json:"initial_capital"`
 	Months             int     `json:"months"`
-	MakerFeeBps        float64 `json:"maker_fee_bps"`        // Negative for rebate (e.g. -0.5 bps), or 0.0
-	TakerFeeBps        float64 `json:"taker_fee_bps"`        // Taker fee for emergency reduce-only hedges (e.g. 3.5 bps)
-	SimulatedLatencyMs float64 `json:"simulated_latency_ms"` // Simulated tick-to-quote response latency (ms)
-	BaseSpreadBps      float64 `json:"base_spread_bps"`      // Base half-spread (bps)
-	MaxLeverage        float64 `json:"max_leverage"`         // Maximum dynamic leverage cap (e.g. 3.0x; never 20x-50x)
-	KellyFraction      float64 `json:"kelly_fraction"`       // Fractional Kelly scaling (e.g. 0.35)
-	WarningDrawdownPct float64 `json:"warning_drawdown_pct"` // Circuit breaker warning threshold (2.0%)
-	TrippedDrawdownPct float64 `json:"tripped_drawdown_pct"` // Circuit breaker tripped threshold (3.5%)
+	MakerFeeBps        float64 `json:"maker_fee_bps"`         // Negative for rebate (e.g. -0.5 bps), or 0.0
+	TakerFeeBps        float64 `json:"taker_fee_bps"`         // Taker fee for emergency reduce-only hedges (e.g. 3.5 bps)
+	SimulatedLatencyMs float64 `json:"simulated_latency_ms"`  // Simulated tick-to-quote response latency (ms)
+	BaseSpreadBps      float64 `json:"base_spread_bps"`       // Base half-spread (bps)
+	MinHalfSpreadBps   float64 `json:"min_half_spread_bps"`   // Minimum half-spread floor (bps, default 0.25)
+	Gamma              float64 `json:"gamma"`                 // GLFT inventory risk aversion parameter (default 0.001)
+	ClipFraction       float64 `json:"clip_fraction"`         // Order clip fraction of active margin (default 0.15)
+	BaseLeverage       float64 `json:"base_leverage"`         // Base leverage multiplier (default 1.6)
+	MaxLeverage        float64 `json:"max_leverage"`          // Maximum dynamic leverage cap (e.g. 3.0x; never 20x-50x)
+	KellyFraction      float64 `json:"kelly_fraction"`        // Fractional Kelly scaling (e.g. 0.35)
+	WarningDrawdownPct float64 `json:"warning_drawdown_pct"`  // Circuit breaker warning threshold (2.0%)
+	TrippedDrawdownPct float64 `json:"tripped_drawdown_pct"`  // Circuit breaker tripped threshold (3.5%)
 }
 
 // DefaultTickSimConfig returns institutional standard parameters for BTCUSDT tick backtesting.
@@ -41,6 +48,10 @@ func DefaultTickSimConfig() TickSimConfig {
 		TakerFeeBps:        3.50,  // Taker fee (3.5 bps)
 		SimulatedLatencyMs: 10.0,  // 10ms local tick-to-quote engine delay
 		BaseSpreadBps:      1.50,  // 1.5 bps base spread
+		MinHalfSpreadBps:   0.25,  // 0.25 bps half-spread floor
+		Gamma:              1e-3,  // GLFT inventory risk aversion
+		ClipFraction:       0.15,  // 15% clip fraction per quote leg
+		BaseLeverage:       1.60,  // 1.6x nominal base leverage
 		MaxLeverage:        3.00,  // Bounded 1x–3x leverage
 		KellyFraction:      0.35,  // Conservative 35% fractional Kelly
 		WarningDrawdownPct: 2.00,
@@ -184,6 +195,18 @@ func NewTickSimulator(cfg TickSimConfig) *TickSimulator {
 	if cfg.BaseSpreadBps <= 0 {
 		cfg.BaseSpreadBps = 1.50
 	}
+	if cfg.MinHalfSpreadBps <= 0 {
+		cfg.MinHalfSpreadBps = 0.25
+	}
+	if cfg.Gamma <= 0 {
+		cfg.Gamma = 1e-3
+	}
+	if cfg.ClipFraction <= 0 {
+		cfg.ClipFraction = 0.15
+	}
+	if cfg.BaseLeverage <= 0 {
+		cfg.BaseLeverage = 1.60
+	}
 	if cfg.MaxLeverage <= 0 {
 		cfg.MaxLeverage = 3.00
 	}
@@ -215,7 +238,7 @@ func NewTickSimulator(cfg TickSimConfig) *TickSimulator {
 		hawkes:         common.NewOnlineHawkesEstimator(5.0, 12.0, 20.0),
 		vpin:           common.NewVPINCalculator(50.0, 50),
 		kyles:          common.NewKylesLambdaEstimator(0.05, 0.30),
-		glft:           common.NewGLFTMarketMaker(1e-3, 0.05, cfg.MakerFeeBps),
+		glft:           common.NewGLFTMarketMaker(cfg.Gamma, 0.05, cfg.MakerFeeBps),
 		funding:        common.NewFundingCarryTracker(0.05, 0.10),
 		tca:            paper.NewTCAMarkoutTracker(),
 		queueModel:     common.NewQueueReactiveModel(),
@@ -468,12 +491,20 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 	}
 
 	// Target leverage bounded strictly to [0.5x, MaxLeverage] (never 20x–50x liquidation trap)
-	targetLev := math.Max(0.5, math.Min(s.cfg.MaxLeverage, 1.6*(8.0/localVolBps)*s.cfg.KellyFraction))
+	baseLev := s.cfg.BaseLeverage
+	if baseLev <= 0 {
+		baseLev = 1.60
+	}
+	targetLev := math.Max(0.5, math.Min(s.cfg.MaxLeverage, baseLev*(8.0/localVolBps)*s.cfg.KellyFraction))
 	s.sumDynamicLeverage += targetLev
 	s.leverageSamples++
 
-	// 2. Order Sizing: ~15% of active margin per leg
-	orderNotional := (s.currentEquity * targetLev) * 0.15
+	// 2. Order Sizing: configurable clip fraction of active margin per leg
+	clipFrac := s.cfg.ClipFraction
+	if clipFrac <= 0 {
+		clipFrac = 0.15
+	}
+	orderNotional := (s.currentEquity * targetLev) * clipFrac
 	quoteQty := orderNotional / midPrice
 	if quoteQty <= 0 {
 		return
@@ -491,8 +522,12 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 		qNorm = -1.0
 	}
 
-	// Inventory skew: when long (qNorm > 0), shift reservation down to encourage selling and deter buying
-	inventorySkewBps := qNorm * 3.5
+	// Inventory skew scaled by GLFT risk aversion gamma (baseline gamma = 1e-3 -> 3.5 bps)
+	gammaScale := s.cfg.Gamma / 1e-3
+	if gammaScale <= 0 {
+		gammaScale = 1.0
+	}
+	inventorySkewBps := qNorm * 3.5 * math.Sqrt(gammaScale)
 
 	// Flow toxicity widening (VPIN + Hawkes)
 	vpinVal := s.vpin.VPIN()
@@ -508,11 +543,15 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 	bidOffsetBps := halfSpreadBps + inventorySkewBps
 	askOffsetBps := halfSpreadBps - inventorySkewBps
 
-	if bidOffsetBps < 0.25 {
-		bidOffsetBps = 0.25
+	minFloor := s.cfg.MinHalfSpreadBps
+	if minFloor <= 0 {
+		minFloor = 0.25
 	}
-	if askOffsetBps < 0.25 {
-		askOffsetBps = 0.25
+	if bidOffsetBps < minFloor {
+		bidOffsetBps = minFloor
+	}
+	if askOffsetBps < minFloor {
+		askOffsetBps = minFloor
 	}
 
 	newBidPrice := midPrice * (1.0 - bidOffsetBps/10000.0)
@@ -801,4 +840,242 @@ func GenerateTickReports(reportsDir string, res TickSimResult) (mdPath, jsonPath
 	}
 
 	return mdPath, jsonPath, nil
+}
+
+// MonthlyTickPartition stores pre-loaded ticks for one calendar month in memory for zero-I/O parallel replay.
+type MonthlyTickPartition struct {
+	Month string
+	File  string
+	Ticks []AggTradeTick
+}
+
+// ExtractMonthLabel extracts "YYYY-MM" from a partition filename like "BTCUSDT-2024-01.pqbin".
+func ExtractMonthLabel(p string) string {
+	base := filepath.Base(p)
+	parts := strings.Split(strings.TrimSuffix(base, ".pqbin"), "-")
+	if len(parts) >= 3 {
+		return fmt.Sprintf("%s-%s", parts[1], parts[2])
+	}
+	return base
+}
+
+// LoadMonthlyPartitions loads all monthly .pqbin partition files concurrently into memory once.
+func LoadMonthlyPartitions(files []string) ([]MonthlyTickPartition, error) {
+	partitions := make([]MonthlyTickPartition, len(files))
+	errs := make([]error, len(files))
+
+	workers := runtime.NumCPU()
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(files) && len(files) > 0 {
+		workers = len(files)
+	}
+
+	jobs := make(chan int, len(files))
+	for i := range files {
+		jobs <- i
+	}
+	close(jobs)
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				fpath := files[idx]
+				var ticks []AggTradeTick
+				hdr, err := LoadPQBinFile(fpath, func(t *AggTradeTick) error {
+					if ticks == nil {
+						ticks = make([]AggTradeTick, 0, 45000)
+					}
+					ticks = append(ticks, *t)
+					return nil
+				})
+				if err != nil {
+					errs[idx] = fmt.Errorf("load %s: %w", fpath, err)
+					continue
+				}
+				_ = hdr
+				partitions[idx] = MonthlyTickPartition{
+					Month: ExtractMonthLabel(fpath),
+					File:  fpath,
+					Ticks: ticks,
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	for _, err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+	return partitions, nil
+}
+
+// ReplayPartitions replays pre-loaded monthly tick partitions through a fresh TickSimulator instance.
+func ReplayPartitions(cfg TickSimConfig, partitions []MonthlyTickPartition) TickSimResult {
+	sim := NewTickSimulator(cfg)
+	monthlyMetrics := make([]MonthlyTickMetric, 0, len(partitions))
+
+	for idx, part := range partitions {
+		monthStartEquity := sim.currentEquity
+		if idx == 0 {
+			monthStartEquity = cfg.InitialCapital
+			if monthStartEquity <= 0 {
+				monthStartEquity = 1000.0
+			}
+		}
+		for i := range part.Ticks {
+			sim.ProcessTick(&part.Ticks[i])
+		}
+		m := sim.MonthlySnapshot(part.Month, monthStartEquity)
+		monthlyMetrics = append(monthlyMetrics, m)
+	}
+	return sim.FinalizeResult(monthlyMetrics)
+}
+
+// GridSearchCandidate holds the evaluation metrics and composite score for a candidate parameter configuration.
+type GridSearchCandidate struct {
+	Rank              int           `json:"rank"`
+	Config            TickSimConfig `json:"config"`
+	Result            TickSimResult `json:"result"`
+	CompositeScore    float64       `json:"composite_score"`
+	PassesDrawdownCap bool          `json:"passes_drawdown_cap"`
+}
+
+// OptimalParamsConfig defines the serialized optimal parameter configuration consumed by live/paper engines.
+type OptimalParamsConfig struct {
+	Symbol           string  `json:"symbol"`
+	Gamma            float64 `json:"gamma"`
+	MinHalfSpreadBps float64 `json:"min_half_spread_bps"`
+	ClipFraction     float64 `json:"clip_fraction"`
+	BaseLeverage     float64 `json:"base_leverage"`
+	MaxLeverageCap   float64 `json:"max_leverage_cap"`
+	CompositeScore   float64 `json:"composite_score"`
+	SharpeRatio      float64 `json:"sharpe_ratio"`
+	MaxDrawdownPct   float64 `json:"max_drawdown_pct"`
+	TotalReturnPct   float64 `json:"total_return_pct"`
+	CAGR             float64 `json:"cagr_pct"`
+	UpdatedAt        string  `json:"updated_at"`
+}
+
+// DefaultGridSearchCandidates generates 16 candidate parameter combinations varying gamma,
+// min_half_spread_bps, clip_fraction, and base_leverage around the baseline config.
+func DefaultGridSearchCandidates(baseCfg TickSimConfig) []TickSimConfig {
+	gammas := []float64{0.0005, 0.0015}
+	minSpreads := []float64{0.20, 0.40}
+	clipFracs := []float64{0.12, 0.20}
+	baseLevs := []float64{1.50, 2.40}
+
+	candidates := make([]TickSimConfig, 0, len(gammas)*len(minSpreads)*len(clipFracs)*len(baseLevs))
+	for _, g := range gammas {
+		for _, ms := range minSpreads {
+			for _, cf := range clipFracs {
+				for _, bl := range baseLevs {
+					c := baseCfg
+					c.Gamma = g
+					c.MinHalfSpreadBps = ms
+					c.ClipFraction = cf
+					c.BaseLeverage = bl
+					if bl+1.0 > c.MaxLeverage {
+						c.MaxLeverage = bl + 1.0
+					}
+					candidates = append(candidates, c)
+				}
+			}
+		}
+	}
+	return candidates
+}
+
+// RunParallelGridSearch evaluates all candidate parameter configurations concurrently across runtime.NumCPU() workers
+// and returns the ranked leaderboard sorted by composite risk-adjusted score: SharpeRatio * (1 - MaxDrawdownPct/100)
+// subject to MaxDrawdownPct <= 12.0%.
+func RunParallelGridSearch(partitions []MonthlyTickPartition, candidates []TickSimConfig) []GridSearchCandidate {
+	n := len(candidates)
+	if n == 0 {
+		return nil
+	}
+
+	results := make([]GridSearchCandidate, n)
+	workers := runtime.NumCPU()
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > n {
+		workers = n
+	}
+
+	jobs := make(chan int, n)
+	for i := 0; i < n; i++ {
+		jobs <- i
+	}
+	close(jobs)
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				cfg := candidates[idx]
+				res := ReplayPartitions(cfg, partitions)
+				passesCap := res.MaxDrawdownPct <= 12.0
+				score := res.SharpeRatio * (1.0 - res.MaxDrawdownPct/100.0)
+				results[idx] = GridSearchCandidate{
+					Config:            cfg,
+					Result:            res,
+					CompositeScore:    score,
+					PassesDrawdownCap: passesCap,
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].PassesDrawdownCap != results[j].PassesDrawdownCap {
+			return results[i].PassesDrawdownCap
+		}
+		if math.Abs(results[i].CompositeScore-results[j].CompositeScore) > 1e-9 {
+			return results[i].CompositeScore > results[j].CompositeScore
+		}
+		return results[i].Result.TotalReturnPct > results[j].Result.TotalReturnPct
+	})
+
+	for i := range results {
+		results[i].Rank = i + 1
+	}
+	return results
+}
+
+// SaveOptimalParams writes the winning grid search configuration to JSON for hot-reload by live/paper engines.
+func SaveOptimalParams(outPath string, winner GridSearchCandidate) error {
+	if outPath == "" {
+		return nil
+	}
+	_ = os.MkdirAll(filepath.Dir(outPath), 0755)
+	payload := OptimalParamsConfig{
+		Symbol:           winner.Config.Symbol,
+		Gamma:            winner.Config.Gamma,
+		MinHalfSpreadBps: winner.Config.MinHalfSpreadBps,
+		ClipFraction:     winner.Config.ClipFraction,
+		BaseLeverage:     winner.Config.BaseLeverage,
+		MaxLeverageCap:   winner.Config.MaxLeverage,
+		CompositeScore:   winner.CompositeScore,
+		SharpeRatio:      winner.Result.SharpeRatio,
+		MaxDrawdownPct:   winner.Result.MaxDrawdownPct,
+		TotalReturnPct:   winner.Result.TotalReturnPct,
+		CAGR:             winner.Result.CAGR,
+		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+	}
+	b, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(outPath, b, 0644)
 }

@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -24,6 +25,8 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	forceDownload := fs.Bool("force-download", false, "Force download of monthly tick archives from Binance Vision")
 	makerRebate := fs.Float64("maker-rebate-bps", -0.50, "Maker fee rebate in bps (negative for rebate earned)")
 	latencyMs := fs.Float64("latency-ms", 10.0, "Simulated tick-to-quote response delay in ms")
+	gridSearch := fs.Bool("grid-search", false, "Run parallel multi-core parameter grid search across 16 configurations")
+	optimalOut := fs.String("optimal-out", "data/reports/optimal_params.json", "Output path for winning optimal_params.json")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -73,37 +76,92 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 		files = files[:*months]
 	}
 
-	var monthlyMetrics []backtest.MonthlyTickMetric
+	var res backtest.TickSimResult
 
-	fmt.Printf("\n[PiQuant] Streaming %d monthly high-resolution tick partitions through quantitative stack...\n", len(files))
-	for idx, fpath := range files {
-		monthStr := extractMonthFromPath(fpath)
-		monthStartEquity := sim.MonthlySnapshot(monthStr, 0).EndEquity
-		if idx == 0 {
-			monthStartEquity = *capital
-		}
-
-		fmt.Printf("  [%2d/%2d] Replaying %s (%s)...", idx+1, len(files), monthStr, filepath.Base(fpath))
-
-		ticksInMonth := int64(0)
-		_, err := backtest.LoadPQBinFile(fpath, func(tick *backtest.AggTradeTick) error {
-			sim.ProcessTick(tick)
-			ticksInMonth++
-			return nil
-		})
+	if *gridSearch {
+		fmt.Printf("\n[PiQuant] Pre-loading %d monthly binary tick partitions into memory across %d CPU cores...\n",
+			len(files), runtime.NumCPU())
+		partitions, err := backtest.LoadMonthlyPartitions(files)
 		if err != nil {
-			fmt.Printf(" ERR: %v\n", err)
-			return fmt.Errorf("replaying %s: %w", fpath, err)
+			return fmt.Errorf("loading monthly partitions into memory: %w", err)
+		}
+		var totalLoadedTicks int64
+		for _, p := range partitions {
+			totalLoadedTicks += int64(len(p.Ticks))
+		}
+		candidates := backtest.DefaultGridSearchCandidates(cfg)
+		fmt.Printf("[PiQuant] Evaluating %d candidate parameter configurations in parallel (%s ticks per candidate)...\n",
+			len(candidates), formatNumber(totalLoadedTicks))
+
+		startGrid := time.Now()
+		leaderboard := backtest.RunParallelGridSearch(partitions, candidates)
+		gridElapsed := time.Since(startGrid)
+
+		fmt.Printf("\n" + strings.Repeat("=", 100) + "\n")
+		fmt.Printf("              PIQUANT MULTI-CORE PARALLEL GRID SEARCH LEADERBOARD (%d CORES, %v)              \n",
+			runtime.NumCPU(), gridElapsed.Round(time.Millisecond))
+		fmt.Printf(strings.Repeat("=", 100) + "\n")
+		fmt.Printf("%-4s | %-8s | %-8s | %-8s | %-8s | %-9s | %-8s | %-8s | %-9s | %-6s\n",
+			"Rank", "Gamma", "MinSprd", "ClipFrac", "BaseLev", "Return %", "Sharpe", "MaxDD %", "Score", "DD<=12")
+		fmt.Printf(strings.Repeat("-", 100) + "\n")
+		for _, c := range leaderboard {
+			fmt.Printf("#%-3d | %-8.4f | %-8.2f | %-8.2f | %-8.2f | %+8.2f%% | %-8.2f | %-7.2f%% | %-9.3f | %-6v\n",
+				c.Rank,
+				c.Config.Gamma,
+				c.Config.MinHalfSpreadBps,
+				c.Config.ClipFraction,
+				c.Config.BaseLeverage,
+				c.Result.TotalReturnPct,
+				c.Result.SharpeRatio,
+				c.Result.MaxDrawdownPct,
+				c.CompositeScore,
+				c.PassesDrawdownCap,
+			)
+		}
+		fmt.Printf(strings.Repeat("=", 100) + "\n")
+
+		if len(leaderboard) > 0 {
+			winner := leaderboard[0]
+			res = winner.Result
+			if err := backtest.SaveOptimalParams(*optimalOut, winner); err != nil {
+				return fmt.Errorf("saving optimal params to %s: %w", *optimalOut, err)
+			}
+			fmt.Printf("[PiQuant] Saved winning configuration (#1 Score=%.3f, Sharpe=%.2f, MaxDD=%.2f%%) -> %s\n",
+				winner.CompositeScore, winner.Result.SharpeRatio, winner.Result.MaxDrawdownPct, *optimalOut)
+		}
+	} else {
+		var monthlyMetrics []backtest.MonthlyTickMetric
+
+		fmt.Printf("\n[PiQuant] Streaming %d monthly high-resolution tick partitions through quantitative stack...\n", len(files))
+		for idx, fpath := range files {
+			monthStr := extractMonthFromPath(fpath)
+			monthStartEquity := sim.MonthlySnapshot(monthStr, 0).EndEquity
+			if idx == 0 {
+				monthStartEquity = *capital
+			}
+
+			fmt.Printf("  [%2d/%2d] Replaying %s (%s)...", idx+1, len(files), monthStr, filepath.Base(fpath))
+
+			ticksInMonth := int64(0)
+			_, err := backtest.LoadPQBinFile(fpath, func(tick *backtest.AggTradeTick) error {
+				sim.ProcessTick(tick)
+				ticksInMonth++
+				return nil
+			})
+			if err != nil {
+				fmt.Printf(" ERR: %v\n", err)
+				return fmt.Errorf("replaying %s: %w", fpath, err)
+			}
+
+			m := sim.MonthlySnapshot(monthStr, monthStartEquity)
+			monthlyMetrics = append(monthlyMetrics, m)
+
+			fmt.Printf(" done (%s ticks | Fills: %d | Return: %+.2f%% | Equity: $%.2f)\n",
+				formatNumber(ticksInMonth), m.TotalFills, m.NetReturnPct, m.EndEquity)
 		}
 
-		m := sim.MonthlySnapshot(monthStr, monthStartEquity)
-		monthlyMetrics = append(monthlyMetrics, m)
-
-		fmt.Printf(" done (%s ticks | Fills: %d | Return: %+.2f%% | Equity: $%.2f)\n",
-			formatNumber(ticksInMonth), m.TotalFills, m.NetReturnPct, m.EndEquity)
+		res = sim.FinalizeResult(monthlyMetrics)
 	}
-
-	res := sim.FinalizeResult(monthlyMetrics)
 
 	mdPath, jsonPath, err := backtest.GenerateTickReports(rDir, res)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 )
 
 // DynamicLeverageConfig defines risk parameters for automated leverage scaling.
@@ -13,6 +14,7 @@ type DynamicLeverageConfig struct {
 	BaseLeverage   float64 `json:"base_leverage"`    // Nominal leverage under calm market making (default: 2.5x)
 	TargetVolBps   float64 `json:"target_vol_bps"`   // Target tick volatility in basis points (default: 15.0 bps)
 	MaxDrawdownPct float64 `json:"max_drawdown_pct"` // Circuit breaker drawdown threshold (default: 2.0%)
+	ClipFraction   float64 `json:"clip_fraction"`    // Fraction of max symbol allocation per quote clip (default: 0.20)
 }
 
 // DefaultDynamicLeverageConfig returns standard quantitative risk parameters.
@@ -23,6 +25,7 @@ func DefaultDynamicLeverageConfig() DynamicLeverageConfig {
 		BaseLeverage:   2.5,
 		TargetVolBps:   15.0,
 		MaxDrawdownPct: 2.0,
+		ClipFraction:   0.20,
 	}
 }
 
@@ -42,6 +45,7 @@ type DynamicLeverageState struct {
 
 // DynamicLeverageController automatically computes optimal leverage on every tick.
 type DynamicLeverageController struct {
+	mu  sync.RWMutex
 	cfg DynamicLeverageConfig
 }
 
@@ -62,17 +66,39 @@ func NewDynamicLeverageController(cfg DynamicLeverageConfig) *DynamicLeverageCon
 	if cfg.MaxDrawdownPct <= 0 {
 		cfg.MaxDrawdownPct = 2.0
 	}
+	if cfg.ClipFraction <= 0 || cfg.ClipFraction > 1.0 {
+		cfg.ClipFraction = 0.20
+	}
 	return &DynamicLeverageController{cfg: cfg}
+}
+
+// UpdateCloudParams safely updates leverage and clip sizing parameters from hot-reloaded cloud configurations.
+func (c *DynamicLeverageController) UpdateCloudParams(baseLev, maxLev, clipFrac float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if baseLev > 0 {
+		c.cfg.BaseLeverage = baseLev
+	}
+	if maxLev > 0 {
+		c.cfg.MaxLeverage = maxLev
+	}
+	if clipFrac > 0 && clipFrac <= 1.0 {
+		c.cfg.ClipFraction = clipFrac
+	}
 }
 
 // Compute evaluates real-time market microstructure and computes optimal leverage and notional sizing.
 func (c *DynamicLeverageController) Compute(volBps float64, vpin float64, hawkesBranching float64, currentDDPct float64, isCircuitHalted bool) DynamicLeverageState {
+	c.mu.RLock()
+	cfg := c.cfg
+	c.mu.RUnlock()
+
 	if isCircuitHalted {
 		return DynamicLeverageState{
 			EffectiveLeverage: 0.0,
 			TargetLeverage:    0.0,
-			MaxLeverage:       c.cfg.MaxLeverage,
-			MinLeverage:       c.cfg.MinLeverage,
+			MaxLeverage:       cfg.MaxLeverage,
+			MinLeverage:       cfg.MinLeverage,
 			DrawdownFactor:    0.0,
 			RegimeName:        "HALTED",
 			RegimeDetail:      "Circuit breaker tripped: zero leverage / emergency halt",
@@ -81,7 +107,7 @@ func (c *DynamicLeverageController) Compute(volBps float64, vpin float64, hawkes
 
 	// 1. Volatility Scaling (Inverse volatility parity)
 	vol := math.Max(1.0, volBps)
-	volFactor := c.cfg.TargetVolBps / vol
+	volFactor := cfg.TargetVolBps / vol
 	if volFactor > 1.6 {
 		volFactor = 1.6
 	} else if volFactor < 0.4 {
@@ -106,8 +132,8 @@ func (c *DynamicLeverageController) Compute(volBps float64, vpin float64, hawkes
 
 	// 4. Drawdown Preservation Taper
 	ddFct := 1.0
-	if c.cfg.MaxDrawdownPct > 0 {
-		ddRatio := currentDDPct / c.cfg.MaxDrawdownPct
+	if cfg.MaxDrawdownPct > 0 {
+		ddRatio := currentDDPct / cfg.MaxDrawdownPct
 		if ddRatio >= 1.0 {
 			ddFct = 0.0
 		} else {
@@ -116,12 +142,12 @@ func (c *DynamicLeverageController) Compute(volBps float64, vpin float64, hawkes
 	}
 
 	// 5. Synthesize target & constrained effective leverage
-	targetLev := c.cfg.BaseLeverage * volFactor * toxFct * cascFct * ddFct
+	targetLev := cfg.BaseLeverage * volFactor * toxFct * cascFct * ddFct
 	effectiveLev := targetLev
-	if effectiveLev > c.cfg.MaxLeverage {
-		effectiveLev = c.cfg.MaxLeverage
-	} else if effectiveLev < c.cfg.MinLeverage {
-		effectiveLev = c.cfg.MinLeverage
+	if effectiveLev > cfg.MaxLeverage {
+		effectiveLev = cfg.MaxLeverage
+	} else if effectiveLev < cfg.MinLeverage {
+		effectiveLev = cfg.MinLeverage
 	}
 
 	// Determine descriptive regime
@@ -145,8 +171,8 @@ func (c *DynamicLeverageController) Compute(volBps float64, vpin float64, hawkes
 	return DynamicLeverageState{
 		EffectiveLeverage: effectiveLev,
 		TargetLeverage:    targetLev,
-		MaxLeverage:       c.cfg.MaxLeverage,
-		MinLeverage:       c.cfg.MinLeverage,
+		MaxLeverage:       cfg.MaxLeverage,
+		MinLeverage:       cfg.MinLeverage,
 		VolFactor:         volFactor,
 		ToxicityFactor:    toxFct,
 		CascadeFactor:     cascFct,
@@ -231,9 +257,16 @@ func (c *DynamicLeverageController) ComputeClipSizeForSymbol(symbol string, equi
 		}
 	}
 
-	// Each quote leg is 20% of the symbol's max target position (so 5 clips build up max inventory),
+	c.mu.RLock()
+	clipFrac := c.cfg.ClipFraction
+	c.mu.RUnlock()
+	if clipFrac <= 0 || clipFrac > 1.0 {
+		clipFrac = 0.20
+	}
+
+	// Each quote leg is clipFrac (default 20%) of the symbol's max target position,
 	// with a minimum clip notional of $6.00 USDT to strictly satisfy Binance Futures $5.00 min notional.
-	targetClip := maxInvQty * 0.20
+	targetClip := maxInvQty * clipFrac
 	minClip := 6.0 / price
 	if targetClip < minClip {
 		targetClip = minClip

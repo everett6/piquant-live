@@ -28,7 +28,7 @@ import (
 // StreamConfig configures the public Binance market stream ingestor.
 type StreamConfig struct {
 	// Endpoint is the Binance WebSocket URL.
-	// Default: wss://stream.binance.com:9443/stream?streams=btcusdt@depth20@100ms/ethusdt@depth20@100ms/btcusdt@trade/ethusdt@trade
+	// Default: wss://data-stream.binance.vision:9443/stream?streams=btcusdt@depth20@100ms/ethusdt@depth20@100ms/btcusdt@trade/ethusdt@trade
 	Endpoint string
 
 	// Symbols to track (default: BTCUSDT, ETHUSDT)
@@ -48,7 +48,7 @@ type StreamConfig struct {
 // DefaultStreamConfig returns institutional defaults for Binance public feeds.
 func DefaultStreamConfig() StreamConfig {
 	return StreamConfig{
-		Endpoint:       "wss://stream.binance.com:9443/stream?streams=btcusdt@depth20@100ms/ethusdt@depth20@100ms/btcusdt@trade/ethusdt@trade",
+		Endpoint:       "wss://data-stream.binance.vision:9443/stream?streams=btcusdt@depth20@100ms/ethusdt@depth20@100ms/btcusdt@trade/ethusdt@trade",
 		Symbols:        []string{"BTCUSDT", "ETHUSDT"},
 		ReconnectBase:  500 * time.Millisecond,
 		ReconnectMax:   15 * time.Second,
@@ -200,13 +200,21 @@ func (m *MarketStreamIngestor) runLoop(ctx context.Context) {
 // connectAndStream dials the public WebSocket, performs handshake, and reads frames.
 func (m *MarketStreamIngestor) connectAndStream(ctx context.Context) error {
 	endpoints := []string{m.cfg.Endpoint}
-	// If connecting to stream.binance.com, add data-stream.binance.vision as automatic fallback
-	// if restricted (HTTP 451) from US dev locations.
-	if strings.Contains(m.cfg.Endpoint, "stream.binance.com") {
+	var visionFallback string
+	// If connecting to data-stream.binance.vision, add stream.binance.com:9443 as secondary fallback.
+	// If connecting to stream.binance.com, add data-stream.binance.vision:9443 as fallback and promote on HTTP 451.
+	if strings.Contains(m.cfg.Endpoint, "data-stream.binance.vision") {
+		if u, err := url.Parse(m.cfg.Endpoint); err == nil {
+			comURL := *u
+			comURL.Host = "stream.binance.com:9443"
+			endpoints = append(endpoints, comURL.String())
+		}
+	} else if strings.Contains(m.cfg.Endpoint, "stream.binance.com") {
 		if u, err := url.Parse(m.cfg.Endpoint); err == nil {
 			visionURL := *u
 			visionURL.Host = "data-stream.binance.vision:9443"
-			endpoints = append(endpoints, visionURL.String())
+			visionFallback = visionURL.String()
+			endpoints = append(endpoints, visionFallback)
 		}
 	}
 
@@ -222,8 +230,11 @@ func (m *MarketStreamIngestor) connectAndStream(ctx context.Context) error {
 			return err
 		}
 		lastErr = err
-		// If returned 451 legal restriction, try next candidate immediately
+		// If returned 451 legal restriction, promote data-stream.binance.vision and try next candidate immediately
 		if strings.Contains(err.Error(), "451") {
+			if visionFallback != "" && strings.Contains(ep, "stream.binance.com") {
+				m.cfg.Endpoint = visionFallback
+			}
 			log.Printf("[MarketStreamIngestor] Endpoint %s returned HTTP 451 (geoblocked in US by Binance policy); failing over to public gateway...", ep)
 			continue
 		}

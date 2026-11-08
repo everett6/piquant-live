@@ -170,10 +170,11 @@ type SymbolMicrostructure struct {
 	Mlofi5s     float64
 	Ret1sBps    float64
 	Ret5sBps    float64
-	VolVarBps   float64
-	TradeBuy5s  float64
-	TradeSell5s float64
-	TradeRate1s float64
+	VolVarBps      float64
+	TradeBuy5s     float64
+	TradeSell5s    float64
+	TradeRate1s    float64
+	InventorySince time.Time
 }
 
 func newSymbolMicrostructure(symbol string, kylesLambda float64) *SymbolMicrostructure {
@@ -222,11 +223,13 @@ type DryRunEngine struct {
 	hawkesEst     *common.OnlineHawkesEstimator
 	leverageCtrl  *DynamicLeverageController
 
-	// Online tick tracking
-	recentFills []TradeRecord
-	running     atomic.Bool
-	stopCh      chan struct{}
-	wg          sync.WaitGroup
+	// Online tick tracking & autonomous cloud parameter hot-reload
+	minHalfSpreadFloorBps float64
+	lastCloudParamMod     time.Time
+	recentFills           []TradeRecord
+	running               atomic.Bool
+	stopCh                chan struct{}
+	wg                    sync.WaitGroup
 }
 
 // NewDryRunEngine constructs and recovers or initializes the paper trading engine.
@@ -292,27 +295,29 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	}
 
 	e := &DryRunEngine{
-		cfg:           cfg,
-		ring:          ring,
-		stream:        stream,
-		stopCh:        make(chan struct{}),
-		conformal:     common.NewSplitConformalCalibrator(0.10),
-		glftMM:        common.NewGLFTMarketMaker(1e-3, 0.05, cfg.MakerFeeBps),
-		carteaMM:      common.NewCarteaJaimungalMM(0.05, 1.5, 2.0, 0.001, 0.01, 0.5, 60.0),
-		adaHedge:      common.NewAdaHedgeEnsemble(7, 0.985),
-		circuitBrk:    experiment.NewMicrostructureCircuitBreaker(1.0),
-		driftGuard:    experiment.NewPageHinkleyDriftGuard(0.15, 12.0),
-		vpinCalc:      common.NewVPINCalculator(5.0, 50),
-		riskSafeguard: NewCircuitBreaker(DefaultCircuitBreakerConfig()),
-		kyleEst:       common.NewKylesLambdaEstimator(0.05, cfg.KylesLambda),
-		tcaTracker:    NewTCAMarkoutTracker(),
-		sor:           common.NewSmartOrderRouter(),
-		hawkesEst:     common.NewOnlineHawkesEstimator(5.0, 12.0, 20.0),
-		leverageCtrl:  levCtrl,
-		activeOrders:  make(map[string][]*ActiveMakerOrder),
-		symMicro:      symMicro,
-		recentFills:   make([]TradeRecord, 0, 32),
+		cfg:                   cfg,
+		ring:                  ring,
+		stream:                stream,
+		stopCh:                make(chan struct{}),
+		conformal:             common.NewSplitConformalCalibrator(0.10),
+		glftMM:                common.NewGLFTMarketMaker(1e-3, 0.05, cfg.MakerFeeBps),
+		carteaMM:              common.NewCarteaJaimungalMM(0.05, 1.5, 2.0, 0.001, 0.01, 0.5, 60.0),
+		adaHedge:              common.NewAdaHedgeEnsemble(7, 0.985),
+		circuitBrk:            experiment.NewMicrostructureCircuitBreaker(1.0),
+		driftGuard:            experiment.NewPageHinkleyDriftGuard(0.15, 12.0),
+		vpinCalc:              common.NewVPINCalculator(5.0, 50),
+		riskSafeguard:         NewCircuitBreaker(DefaultCircuitBreakerConfig()),
+		kyleEst:               common.NewKylesLambdaEstimator(0.05, cfg.KylesLambda),
+		tcaTracker:            NewTCAMarkoutTracker(),
+		sor:                   common.NewSmartOrderRouter(),
+		hawkesEst:             common.NewOnlineHawkesEstimator(5.0, 12.0, 20.0),
+		leverageCtrl:          levCtrl,
+		activeOrders:          make(map[string][]*ActiveMakerOrder),
+		symMicro:              symMicro,
+		minHalfSpreadFloorBps: 0.25,
+		recentFills:           make([]TradeRecord, 0, 32),
 	}
+	e.maybeReloadCloudParams()
 
 	// Attempt to restore existing state from checkpoint
 	if err := e.loadCheckpoint(); err != nil {
@@ -527,7 +532,7 @@ func (e *DryRunEngine) StreamStats() (total, depths, trades, gaps, reconnects, f
 	return 0, 0, 0, 0, 0, 0, 0
 }
 
-// runCheckpointLoop periodically persists state to dryrun_state.json.
+// runCheckpointLoop periodically persists state to dryrun_state.json and hot-reloads cloud optimal params.
 func (e *DryRunEngine) runCheckpointLoop(ctx context.Context) {
 	defer e.wg.Done()
 	ticker := time.NewTicker(e.cfg.CheckpointFreq)
@@ -540,9 +545,65 @@ func (e *DryRunEngine) runCheckpointLoop(ctx context.Context) {
 		case <-e.stopCh:
 			return
 		case <-ticker.C:
+			e.maybeReloadCloudParams()
 			_ = e.saveCheckpoint()
 		}
 	}
+}
+
+// cloudOptimalParams represents the JSON schema written by cloud/parallel grid search optimization.
+type cloudOptimalParams struct {
+	BaseLeverage     float64 `json:"base_leverage"`
+	MaxLeverageCap   float64 `json:"max_leverage_cap"`
+	MinHalfSpreadBps float64 `json:"min_half_spread_bps"`
+	ClipFraction     float64 `json:"clip_fraction"`
+}
+
+// maybeReloadCloudParams hot-reloads optimal parameters from cloud optimization without interrupting trading.
+func (e *DryRunEngine) maybeReloadCloudParams() {
+	candidates := []string{"/home/everett/piquant-data/config/optimal_params.json"}
+	if e.cfg.StateFile != "" {
+		candidates = append(candidates, filepath.Join(filepath.Dir(e.cfg.StateFile), "../config/optimal_params.json"))
+	}
+
+	var targetPath string
+	var modTime time.Time
+	for _, p := range candidates {
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			targetPath = p
+			modTime = info.ModTime()
+			break
+		}
+	}
+	if targetPath == "" {
+		return
+	}
+
+	e.mu.RLock()
+	lastMod := e.lastCloudParamMod
+	e.mu.RUnlock()
+	if !modTime.After(lastMod) {
+		return
+	}
+
+	raw, err := os.ReadFile(targetPath)
+	if err != nil {
+		return
+	}
+	var params cloudOptimalParams
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return
+	}
+
+	e.mu.Lock()
+	e.lastCloudParamMod = modTime
+	if params.MinHalfSpreadBps > 0 {
+		e.minHalfSpreadFloorBps = params.MinHalfSpreadBps
+	}
+	if e.leverageCtrl != nil {
+		e.leverageCtrl.UpdateCloudParams(params.BaseLeverage, params.MaxLeverageCap, params.ClipFraction)
+	}
+	e.mu.Unlock()
 }
 
 // saveCheckpoint serializes DryRunState to JSON.
@@ -771,15 +832,16 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 		e.state.TotalReturnPct = (e.state.Equity - e.state.InitialCapital) / e.state.InitialCapital * 100.0
 	}
 	sm := e.getOrCreateSymbolMicro(symbol)
-	e.mu.Unlock()
 
 	// Update TCA multi-horizon markouts on incoming live market tick
 	if e.tcaTracker != nil {
 		e.tcaTracker.OnTick(symbol, price, now.UnixNano())
 	}
+	isHalted := e.state.CircuitHalted
+	e.mu.Unlock()
 
 	// 2. Hard Portfolio Circuit Breaker Check
-	if e.state.CircuitHalted {
+	if isHalted {
 		return
 	}
 
@@ -1073,21 +1135,27 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	if sm.HawkesEst != nil {
 		hkRatio = sm.HawkesEst.BranchingRatio()
 	}
-	ddPct := 0.0
-	if e.state.PeakEquity > 0 {
-		ddPct = (e.state.PeakEquity - e.state.Equity) / e.state.PeakEquity * 100.0
-	}
-	levState := e.leverageCtrl.Compute(spreadBps, liveVpin, hkRatio, ddPct, e.state.CircuitHalted)
-	e.state.Leverage = levState
+	e.mu.RLock()
+	peakEq := e.state.PeakEquity
+	currEq := e.state.Equity
+	isHalted := e.state.CircuitHalted
+	e.mu.RUnlock()
 
-	// Compute institutional clip size (20% of symbol allocation) and max symbol inventory cap
-	clipQty, maxInvQty := e.leverageCtrl.ComputeClipSizeForSymbol(symbol, e.state.Equity, levState.EffectiveLeverage, midPrice, len(e.cfg.Symbols))
+	ddPct := 0.0
+	if peakEq > 0 {
+		ddPct = (peakEq - currEq) / peakEq * 100.0
+	}
+	levState := e.leverageCtrl.Compute(spreadBps, liveVpin, hkRatio, ddPct, isHalted)
+
+	// Compute institutional clip size and max symbol inventory cap
+	clipQty, maxInvQty := e.leverageCtrl.ComputeClipSizeForSymbol(symbol, currEq, levState.EffectiveLeverage, midPrice, len(e.cfg.Symbols))
 	if clipQty <= 0 {
 		clipQty = 0.001
 		maxInvQty = 0.005
 	}
 
-	e.mu.RLock()
+	e.mu.Lock()
+	e.state.Leverage = levState
 	pos := e.state.Positions[symbol]
 	currentInv := 0.0
 	avgEntry := midPrice
@@ -1097,7 +1165,18 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			avgEntry = pos.AvgEntryPrice
 		}
 	}
-	e.mu.RUnlock()
+	if math.Abs(currentInv) > 1e-8 {
+		if sm.InventorySince.IsZero() {
+			sm.InventorySince = now
+		}
+	} else {
+		sm.InventorySince = time.Time{}
+	}
+	holdSec := 0.0
+	if !sm.InventorySince.IsZero() {
+		holdSec = now.Sub(sm.InventorySince).Seconds()
+	}
+	e.mu.Unlock()
 
 	// Normalize inventory into [-5.0, +5.0] clip units so GLFT & Cartea-Jaimungal inventory risk aversion
 	// scales identically across high-price (BTC) and low-price (ETH/SOL) contracts.
@@ -1140,12 +1219,35 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 	sm.PrevPreds = currPreds
 	sm.HasPrevPreds = true
+
+	floorBps := e.minHalfSpreadFloorBps
+	if floorBps <= 0 {
+		floorBps = 0.25
+	}
+	var tcaPenaltyBps float64
+	if e.tcaTracker != nil {
+		tcaSnap := e.tcaTracker.Snapshot()
+		if tcaSnap.TotalFillsAnalyzed >= 4 && tcaSnap.MeanMarkout1sBps < -0.25 {
+			tcaPenaltyBps = math.Min(1.25, math.Abs(tcaSnap.MeanMarkout1sBps)*0.5)
+		}
+	}
 	e.mu.Unlock()
 
 	// Blend AdaHedge online meta-prediction with GLFT reservation skew
 	blendedSkewBps := 0.65*qd.ReservationBps + 0.35*metaPred
-	bidOffsetBps := math.Max(0.25, qd.HalfSpreadBps-blendedSkewBps)
-	askOffsetBps := math.Max(0.25, qd.HalfSpreadBps+blendedSkewBps)
+
+	// Ornstein-Uhlenbeck Inventory Holding-Age Urgency: accelerate mean-reverting exits after 20s
+	if holdSec > 20.0 {
+		urgencyBps := math.Min(1.20, (holdSec-20.0)*0.015)
+		if currentInv > 0 {
+			blendedSkewBps -= urgencyBps
+		} else if currentInv < 0 {
+			blendedSkewBps += urgencyBps
+		}
+	}
+
+	bidOffsetBps := math.Max(floorBps, qd.HalfSpreadBps-blendedSkewBps) + tcaPenaltyBps
+	askOffsetBps := math.Max(floorBps, qd.HalfSpreadBps+blendedSkewBps) + tcaPenaltyBps
 
 	targetBid := midPrice - (bidOffsetBps * midPrice * 1e-4)
 	targetAsk := midPrice + (askOffsetBps * midPrice * 1e-4)
