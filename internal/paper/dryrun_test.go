@@ -359,6 +359,43 @@ func TestTwelveHourShutdownRecovery(t *testing.T) {
 	}
 }
 
+func TestFuturesMarginFillAccounting(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.InitialCapital = 200.00
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	dryRun.mu.Lock()
+	// Open long 0.19 ETH @ $2238.89 (Notional ~$425.39 on $200 capital)
+	dryRun.executeMakerFillLocked("ETHUSDT", 2238.89, 0.19, "BUY", 1.5, "glft")
+	st := dryRun.state
+	dryRun.mu.Unlock()
+
+	// Cash should be initial capital minus 0 fee = 200.00 (NOT -$225!)
+	if st.Cash < 199.0 || st.Cash > 201.0 {
+		t.Errorf("Cash should remain ~200.00 on margin buy, got %.2f", st.Cash)
+	}
+
+	// Update mark tick at entry price
+	dryRun.processMarketEvent(&engine.MarketEvent{
+		SymbolID: 1,
+		Price:    2238.89,
+	})
+	st2 := dryRun.State()
+	if st2.Equity < 199.0 || st2.Equity > 201.0 {
+		t.Errorf("Equity should remain ~200.00 at entry price, got %.2f", st2.Equity)
+	}
+	if st2.CircuitHalted {
+		t.Errorf("Circuit breaker should NOT trip on leveraged open!")
+	}
+}
+
 func BenchmarkProcessMarketEvent(b *testing.B) {
 	tempDir := b.TempDir()
 	cfg := DefaultDryRunConfig(tempDir)

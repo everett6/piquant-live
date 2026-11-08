@@ -350,11 +350,10 @@ func (e *DryRunEngine) Stop() {
 
 				if pos.Size > 0 { // Long position liquidated
 					realizedPnL = pos.Size * (closePrice - pos.AvgEntryPrice)
-					e.state.Cash += valUSDT
 				} else { // Short position covered
 					realizedPnL = (-pos.Size) * (pos.AvgEntryPrice - closePrice)
-					e.state.Cash -= valUSDT
 				}
+				e.state.Cash += realizedPnL
 
 				pos.RealizedPnL += realizedPnL
 				pos.UnrealizedPnL = 0
@@ -1030,7 +1029,6 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 			}
 		}
 		pos.Size = newSize
-		e.state.Cash -= (valUSDT + feeUSDT)
 	} else {
 		if pos.Size > 0 { // Closing long
 			closeQty := math.Min(pos.Size, qty)
@@ -1045,8 +1043,9 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 			}
 		}
 		pos.Size = newSize
-		e.state.Cash += (valUSDT - feeUSDT)
 	}
+
+	e.state.Cash += (realizedPnL - feeUSDT)
 
 	pos.RealizedPnL += realizedPnL
 	pos.TotalTrades++
@@ -1148,7 +1147,6 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 			}
 		}
 		pos.Size = newSize
-		e.state.Cash -= (valUSDT + feeUSDT)
 	} else {
 		if pos.Size > 0 {
 			closeQty := math.Min(pos.Size, qty)
@@ -1163,8 +1161,9 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 			}
 		}
 		pos.Size = newSize
-		e.state.Cash += (valUSDT - feeUSDT)
 	}
+
+	e.state.Cash += (realizedPnL - feeUSDT)
 
 	pos.RealizedPnL += realizedPnL
 	pos.TotalTrades++
