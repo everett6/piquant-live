@@ -3,7 +3,9 @@ package paper
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -454,6 +456,78 @@ func TestMultiAssetMicrostructureIsolationAndClipSizing(t *testing.T) {
 	clipBTC, maxBTC := dryRun.leverageCtrl.ComputeClipSizeForSymbol("BTCUSDT", 200.0, 2.5, 71800.5, 2)
 	if clipBTC <= 0 || maxBTC <= clipBTC {
 		t.Errorf("Expected valid clip and max inventory for BTCUSDT, got clip=%f max=%f", clipBTC, maxBTC)
+	}
+}
+
+func TestQuantBugFixesVerification(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.MakerFeeBps = 1.5
+	cfg.TakerFeeBps = 4.0
+	cfg.InitialCapital = 200.00
+	cfg.StateFile = filepath.Join(tempDir, "state.json")
+
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	// 1. Verify Entry and Exit fills with net-of-fee profitability
+	// BUY 0.001 BTC at 50,000.00 (maker)
+	dryRun.mu.Lock()
+	dryRun.executeMakerFillLocked("BTCUSDT", 50000.00, 0.001, "BUY", 1.95, "GLFT_Maker")
+	pos := dryRun.state.Positions["BTCUSDT"]
+	if pos.Size != 0.001 {
+		t.Fatalf("expected pos size 0.001, got %f", pos.Size)
+	}
+	if pos.AvgEntryPrice != 50000.00 {
+		t.Fatalf("expected avg entry 50000, got %f", pos.AvgEntryPrice)
+	}
+	// Initial open trade fee: 50 * 0.00015 = 0.0075 USDT
+	openCash := dryRun.state.Cash
+	if math.Abs(openCash-(200.00-0.0075)) > 1e-4 {
+		t.Errorf("expected cash after open fee %f, got %f", 200.00-0.0075, openCash)
+	}
+
+	// SELL 0.001 BTC at 50,020.00 (maker) -> fully closing inventory
+	// Gross profit: (50020 - 50000) * 0.001 = +0.0200 USDT
+	// Exit fee: 50.02 * 0.00015 = 0.007503 USDT
+	// Net round-trip PnL: 0.0200 - 0.0075 - 0.007503 = +0.004997 USDT
+	dryRun.executeMakerFillLocked("BTCUSDT", 50020.00, 0.001, "SELL", 1.95, "GLFT_Maker")
+	if pos.Size != 0.0 {
+		t.Errorf("expected pos size 0.0 after full close, got %f", pos.Size)
+	}
+	if pos.AvgEntryPrice != 0.0 {
+		t.Errorf("expected avg entry price reset to 0.0 on zero size, got %f", pos.AvgEntryPrice)
+	}
+	if dryRun.state.WinningTrades != 1 || dryRun.state.LosingTrades != 0 {
+		t.Errorf("expected 1 win 0 loss, got wins=%d losses=%d", dryRun.state.WinningTrades, dryRun.state.LosingTrades)
+	}
+	if dryRun.state.WinRate != 100.0 {
+		t.Errorf("expected 100%% win rate, got %f", dryRun.state.WinRate)
+	}
+	dryRun.mu.Unlock()
+
+	// 2. Verify optimal_params.json gamma hot-reloading
+	configDir := filepath.Join(tempDir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	optPath := filepath.Join(configDir, "optimal_params.json")
+	optJSON := `{"gamma": 0.0005, "min_half_spread_bps": 1.25, "clip_fraction": 0.25, "base_leverage": 2.0, "max_leverage_cap": 4.0}`
+	if err := os.WriteFile(optPath, []byte(optJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dryRun.maybeReloadCloudParams()
+	if dryRun.glftMM.Gamma != 0.0005 {
+		t.Errorf("expected reloaded gamma 0.0005, got %f", dryRun.glftMM.Gamma)
+	}
+	if dryRun.minHalfSpreadFloorBps != 1.25 {
+		t.Errorf("expected reloaded minHalfSpreadFloorBps 1.25, got %f", dryRun.minHalfSpreadFloorBps)
 	}
 }
 

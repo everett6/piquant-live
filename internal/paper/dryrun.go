@@ -553,6 +553,7 @@ func (e *DryRunEngine) runCheckpointLoop(ctx context.Context) {
 
 // cloudOptimalParams represents the JSON schema written by cloud/parallel grid search optimization.
 type cloudOptimalParams struct {
+	Gamma            float64 `json:"gamma"`
 	BaseLeverage     float64 `json:"base_leverage"`
 	MaxLeverageCap   float64 `json:"max_leverage_cap"`
 	MinHalfSpreadBps float64 `json:"min_half_spread_bps"`
@@ -563,7 +564,11 @@ type cloudOptimalParams struct {
 func (e *DryRunEngine) maybeReloadCloudParams() {
 	candidates := []string{"/home/everett/piquant-data/config/optimal_params.json"}
 	if e.cfg.StateFile != "" {
-		candidates = append(candidates, filepath.Join(filepath.Dir(e.cfg.StateFile), "../config/optimal_params.json"))
+		candidates = append(candidates,
+			filepath.Join(filepath.Dir(e.cfg.StateFile), "../config/optimal_params.json"),
+			filepath.Join(filepath.Dir(e.cfg.StateFile), "config/optimal_params.json"),
+			filepath.Join(filepath.Dir(e.cfg.StateFile), "optimal_params.json"),
+		)
 	}
 
 	var targetPath string
@@ -597,6 +602,9 @@ func (e *DryRunEngine) maybeReloadCloudParams() {
 
 	e.mu.Lock()
 	e.lastCloudParamMod = modTime
+	if params.Gamma > 0 && e.glftMM != nil {
+		e.glftMM.Gamma = params.Gamma
+	}
 	if params.MinHalfSpreadBps > 0 {
 		e.minHalfSpreadFloorBps = params.MinHalfSpreadBps
 	}
@@ -615,15 +623,55 @@ func (e *DryRunEngine) saveCheckpoint() error {
 	// Protect against backward time jump before NTP sync on Raspberry Pi
 	if !e.state.StartTime.IsZero() && now.After(e.state.StartTime) {
 		elapsed := now.Sub(e.state.StartTime)
+		maxDays := e.state.TargetDays
+		if maxDays <= 0 {
+			maxDays = int(e.cfg.TargetDuration.Hours() / 24.0)
+			if maxDays <= 0 {
+				maxDays = 14
+			}
+			e.state.TargetDays = maxDays
+		}
 		e.state.DaysElapsed = int(elapsed.Hours()/24.0) + 1
-		if e.state.DaysElapsed > 14 {
-			e.state.DaysElapsed = 14
+		if e.state.DaysElapsed > maxDays {
+			e.state.DaysElapsed = maxDays
 		}
 		rem := e.state.TargetEndTime.Sub(now)
 		if rem < 0 {
 			rem = 0
 		}
 		e.state.HoursRemaining = rem.Hours()
+
+		// Daily returns tracking at day rollover
+		dayIndex := int(elapsed.Hours() / 24.0)
+		if dayIndex > len(e.state.DailyReturns) && dayIndex <= maxDays {
+			prevEquity := e.state.InitialCapital
+			if len(e.state.DailyReturns) > 0 {
+				eq := e.state.InitialCapital
+				for _, r := range e.state.DailyReturns {
+					eq *= (1.0 + r/100.0)
+				}
+				prevEquity = eq
+			}
+			if prevEquity > 0 {
+				dayRet := ((e.state.Equity - prevEquity) / prevEquity) * 100.0
+				e.state.DailyReturns = append(e.state.DailyReturns, dayRet)
+			}
+		}
+
+		// Recompute continuous annualized Sharpe ratio if daily returns are recorded
+		if len(e.state.DailyReturns) >= 2 {
+			n := float64(len(e.state.DailyReturns))
+			var sum, sumSq float64
+			for _, r := range e.state.DailyReturns {
+				sum += r
+				sumSq += r * r
+			}
+			mean := sum / n
+			variance := sumSq/n - mean*mean
+			if variance > 1e-12 {
+				e.state.SharpeRatio = (mean / math.Sqrt(variance)) * math.Sqrt(365.0)
+			}
+		}
 	}
 
 	data, err := json.MarshalIndent(e.state, "", "  ")
@@ -1097,8 +1145,12 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 
 	// Check dynamic portfolio risk safeguard for hard drawdown trip only
 	if e.riskSafeguard != nil {
-		rState, rReason := e.riskSafeguard.OnTick(e.state.Equity, spreadBps, liveVpin, now)
-		if rState == StateTripped && e.state.MaxDrawdownPct >= e.cfg.MaxDrawdownPct {
+		e.mu.RLock()
+		currEq := e.state.Equity
+		currDD := e.state.MaxDrawdownPct
+		e.mu.RUnlock()
+		rState, rReason := e.riskSafeguard.OnTick(currEq, spreadBps, liveVpin, now)
+		if rState == StateTripped && currDD >= e.cfg.MaxDrawdownPct {
 			e.mu.Lock()
 			e.state.CircuitHalted = true
 			e.state.CircuitHaltReason = rReason
@@ -1238,9 +1290,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	// Blend AdaHedge online meta-prediction with GLFT reservation skew
 	blendedSkewBps := 0.65*qd.ReservationBps + 0.35*metaPred
 
-	// Ornstein-Uhlenbeck Inventory Holding-Age Urgency: accelerate mean-reverting exits after 20s
-	if holdSec > 20.0 {
-		urgencyBps := math.Min(1.20, (holdSec-20.0)*0.015)
+	// Ornstein-Uhlenbeck Inventory Holding-Age Urgency: accelerate mean-reverting exits after 75s (not premature 20s)
+	if holdSec > 75.0 {
+		urgencyBps := math.Min(1.20, (holdSec-75.0)*0.015)
 		if currentInv > 0 {
 			blendedSkewBps -= urgencyBps
 		} else if currentInv < 0 {
@@ -1251,12 +1303,13 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	bidOffsetBps := math.Max(floorBps, qd.HalfSpreadBps-blendedSkewBps) + tcaPenaltyBps
 	askOffsetBps := math.Max(floorBps, qd.HalfSpreadBps+blendedSkewBps) + tcaPenaltyBps
 
-	// Ensure baseline half-spread covers round-trip maker fees (2 * MakerFeeBps) + positive expected edge
-	feeFloorBps := e.cfg.MakerFeeBps + 0.45
-	if bidOffsetBps < feeFloorBps && currentInv >= 0 {
+	// Ensure baseline half-spread covers round-trip maker fees (2 * MakerFeeBps) + positive expected edge.
+	// Both bid and ask must be floored so that entering and exiting inventory captures positive net edge.
+	feeFloorBps := math.Max(floorBps, e.cfg.MakerFeeBps+0.45)
+	if bidOffsetBps < feeFloorBps {
 		bidOffsetBps = feeFloorBps
 	}
-	if askOffsetBps < feeFloorBps && currentInv <= 0 {
+	if askOffsetBps < feeFloorBps {
 		askOffsetBps = feeFloorBps
 	}
 
@@ -1274,6 +1327,10 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		targetAsk = bestAsk
 	}
 
+	// Quantize to valid exchange price tick size ($0.01 for BTCUSDT and ETHUSDT)
+	targetBid = math.Floor(targetBid*100.0) / 100.0
+	targetAsk = math.Ceil(targetAsk*100.0) / 100.0
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -1287,9 +1344,10 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			target = targetAsk
 		}
 		// Preserve FIFO queue priority: only cancel & replace if target price moved > 2.5 bps
-		// or if order has rested for > 15 seconds without filling.
+		// or if order has rested for > 90 seconds without filling.
+		// Canceling every 15s resets queue priority (QueueAhead) repeatedly, preventing passive fills.
 		devBps := math.Abs(ord.Price-target) / target * 1e4
-		if devBps > 2.5 || now.Sub(ord.PlacedAt) > 15*time.Second {
+		if devBps > 2.5 || now.Sub(ord.PlacedAt) > 90*time.Second {
 			continue // cancel stale order
 		}
 		keptOrders = append(keptOrders, ord)
@@ -1407,6 +1465,8 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 			} else {
 				pos.AvgEntryPrice = orderPrice
 			}
+		} else if newSize == 0 {
+			pos.AvgEntryPrice = 0.0
 		}
 		pos.Size = newSize
 	} else {
@@ -1421,6 +1481,8 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 			} else {
 				pos.AvgEntryPrice = orderPrice
 			}
+		} else if newSize == 0 {
+			pos.AvgEntryPrice = 0.0
 		}
 		pos.Size = newSize
 	}
@@ -1531,6 +1593,8 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 			} else {
 				pos.AvgEntryPrice = execPrice
 			}
+		} else if newSize == 0 {
+			pos.AvgEntryPrice = 0.0
 		}
 		pos.Size = newSize
 	} else {
@@ -1545,18 +1609,21 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 			} else {
 				pos.AvgEntryPrice = execPrice
 			}
+		} else if newSize == 0 {
+			pos.AvgEntryPrice = 0.0
 		}
 		pos.Size = newSize
 	}
 
-	e.state.Cash += (realizedPnL - feeUSDT)
+	netRealizedPnL := realizedPnL - feeUSDT
+	e.state.Cash += netRealizedPnL
 
-	pos.RealizedPnL += realizedPnL
+	pos.RealizedPnL += netRealizedPnL
 	pos.TotalTrades++
 	pos.TakerTrades++
 	pos.TotalVolumeUSDT += valUSDT
 	if e.riskSafeguard != nil {
-		e.riskSafeguard.OnFill(realizedPnL, pos.Size)
+		e.riskSafeguard.OnFill(netRealizedPnL, pos.Size)
 	}
 	if e.tcaTracker != nil {
 		sideInt := int8(1)
@@ -1566,12 +1633,14 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 		e.tcaTracker.RecordFill(uint64(e.state.TotalTrades), symbol, sideInt, execPrice, midPrice, time.Now().UnixNano())
 	}
 
-	e.state.RealizedPnL += realizedPnL
+	e.state.RealizedPnL += netRealizedPnL
 	e.state.TotalTrades++
-	if realizedPnL > 0 {
-		e.state.WinningTrades++
-	} else if realizedPnL < 0 {
-		e.state.LosingTrades++
+	if realizedPnL != 0 {
+		if netRealizedPnL > 0 {
+			e.state.WinningTrades++
+		} else {
+			e.state.LosingTrades++
+		}
 	}
 
 	if closed := e.state.WinningTrades + e.state.LosingTrades; closed > 0 {
@@ -1596,7 +1665,7 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 		FeeUSDT:     feeUSDT,
 		EdgeBps:     alphaBps,
 		SlippageBps: slippageBps,
-		PnLRealized: realizedPnL,
+		PnLRealized: netRealizedPnL,
 		Strategy:    "AdaHedge_Conformal_Taker",
 		DataSource:  dataSource,
 	}
