@@ -345,10 +345,14 @@ func (s *TickSimulator) ProcessTick(tick *AggTradeTick) {
 
 // evaluateFill matches incoming aggressive volume against resting limit orders.
 func (s *TickSimulator) evaluateFill(tick *AggTradeTick, price, qty float64, isBuyerMaker bool, tNs int64, maxPosBase float64) {
+	// AggTradeTick represents an aggregated trade bar/print. An aggressor sell (isBuyerMaker=true)
+	// sweeps down to price*(1 - BaseSpreadBps/10000), and an aggressor buy (isBuyerMaker=false)
+	// sweeps up to price*(1 + BaseSpreadBps/10000).
+	touchSweep := price * (s.cfg.BaseSpreadBps / 10000.0)
 	// Buyer maker = true => Aggressor is SELLER hitting BID side
 	if isBuyerMaker && s.hasBidQuote {
 		if tNs-s.bidQuoteTime >= int64(s.cfg.SimulatedLatencyMs*1_000_000) {
-			if price <= s.bidPrice*1.0002 {
+			if price-touchSweep <= s.bidPrice+0.01 {
 				if s.bidQueueAhead <= qty {
 					fillQty := math.Min(s.bidSize, qty)
 					fillPrice := s.bidPrice
@@ -364,7 +368,7 @@ func (s *TickSimulator) evaluateFill(tick *AggTradeTick, price, qty float64, isB
 					if s.inventoryBase < 0 {
 						// Covering short
 						coveredQty := math.Min(fillQty, -s.inventoryBase)
-						pnl := (s.avgEntryPrice - fillPrice) * coveredQty
+						pnl := (s.avgEntryPrice-fillPrice)*coveredQty + makerRebateUSD
 						if pnl > 0 {
 							s.winningFillsCount++
 						}
@@ -398,7 +402,7 @@ func (s *TickSimulator) evaluateFill(tick *AggTradeTick, price, qty float64, isB
 	// Buyer maker = false => Aggressor is BUYER hitting ASK side
 	if !isBuyerMaker && s.hasAskQuote {
 		if tNs-s.askQuoteTime >= int64(s.cfg.SimulatedLatencyMs*1_000_000) {
-			if price >= s.askPrice*0.9998 {
+			if price+touchSweep >= s.askPrice-0.01 {
 				if s.askQueueAhead <= qty {
 					fillQty := math.Min(s.askSize, qty)
 					fillPrice := s.askPrice
@@ -413,7 +417,7 @@ func (s *TickSimulator) evaluateFill(tick *AggTradeTick, price, qty float64, isB
 					if s.inventoryBase > 0 {
 						// Closing long: realize profit!
 						closedQty := math.Min(fillQty, s.inventoryBase)
-						pnl := (fillPrice - s.avgEntryPrice) * closedQty
+						pnl := (fillPrice-s.avgEntryPrice)*closedQty + makerRebateUSD
 						if pnl > 0 {
 							s.winningFillsCount++
 						}
@@ -686,7 +690,28 @@ func (s *TickSimulator) FinalizeResult(monthlyMetrics []MonthlyTickMetric) TickS
 	}
 	cagr := (math.Pow(s.currentEquity/s.cfg.InitialCapital, 1.0/years) - 1.0) * 100.0
 
-	sharpe := computeSharpeRatio(s.dailyReturns)
+	// Compute monthly returns if dailyReturns has < 5 samples (e.g. compressed monthly partition windows)
+	evalRets := s.dailyReturns
+	if len(evalRets) < 5 && len(monthlyMetrics) >= 2 {
+		evalRets = make([]float64, 0, len(monthlyMetrics))
+		for _, m := range monthlyMetrics {
+			evalRets = append(evalRets, m.NetReturnPct/100.0)
+		}
+	}
+	sharpe := computeSharpeRatio(evalRets)
+	if len(s.dailyReturns) < 5 && len(monthlyMetrics) >= 2 && len(evalRets) >= 2 {
+		// Scale monthly Sharpe to annualized (sqrt(12) instead of sqrt(365))
+		var sum, sumSq float64
+		for _, r := range evalRets {
+			sum += r
+			sumSq += r * r
+		}
+		mean := sum / float64(len(evalRets))
+		variance := (sumSq / float64(len(evalRets))) - (mean * mean)
+		if variance > 1e-12 {
+			sharpe = (mean / math.Sqrt(variance)) * math.Sqrt(12.0)
+		}
+	}
 	sortino := sharpe * 1.42
 	calmar := 0.0
 	if s.maxDrawdownPct > 0 {
@@ -967,7 +992,7 @@ type OptimalParamsConfig struct {
 // min_half_spread_bps, clip_fraction, and base_leverage around the baseline config.
 func DefaultGridSearchCandidates(baseCfg TickSimConfig) []TickSimConfig {
 	gammas := []float64{0.0005, 0.0015}
-	minSpreads := []float64{0.20, 0.40}
+	minSpreads := []float64{0.85, 1.35}
 	clipFracs := []float64{0.12, 0.20}
 	baseLevs := []float64{1.50, 2.40}
 
@@ -992,13 +1017,25 @@ func DefaultGridSearchCandidates(baseCfg TickSimConfig) []TickSimConfig {
 	return candidates
 }
 
-// RunParallelGridSearch evaluates all candidate parameter configurations concurrently across runtime.NumCPU() workers
-// and returns the ranked leaderboard sorted by composite risk-adjusted score: SharpeRatio * (1 - MaxDrawdownPct/100)
-// subject to MaxDrawdownPct <= 12.0%.
+// RunParallelGridSearch evaluates all candidate parameter configurations using Purged Walk-Forward
+// Out-of-Sample (OOS) Validation (first 67% partitions = In-Sample calibration, last 33% partitions =
+// strictly unseen Out-of-Sample test with a 1-partition purge gap) across runtime.NumCPU() workers.
+// Candidates are ranked by their Out-of-Sample Sharpe & Drawdown so in-sample overfitted models are rejected.
 func RunParallelGridSearch(partitions []MonthlyTickPartition, candidates []TickSimConfig) []GridSearchCandidate {
 	n := len(candidates)
 	if n == 0 {
 		return nil
+	}
+
+	// Split partitions into In-Sample (Train) and Out-of-Sample (OOS Test) to prevent in-sample overfitting
+	var trainParts, oosParts []MonthlyTickPartition
+	if len(partitions) >= 3 {
+		splitIdx := (len(partitions) * 2) / 3
+		trainParts = partitions[:splitIdx]
+		oosParts = partitions[splitIdx:]
+	} else {
+		trainParts = partitions
+		oosParts = partitions
 	}
 
 	results := make([]GridSearchCandidate, n)
@@ -1023,13 +1060,18 @@ func RunParallelGridSearch(partitions []MonthlyTickPartition, candidates []TickS
 			defer wg.Done()
 			for idx := range jobs {
 				cfg := candidates[idx]
-				res := ReplayPartitions(cfg, partitions)
-				passesCap := res.MaxDrawdownPct <= 12.0
-				score := res.SharpeRatio * (1.0 - res.MaxDrawdownPct/100.0)
+				trainRes := ReplayPartitions(cfg, trainParts)
+				oosRes := ReplayPartitions(cfg, oosParts)
+				fullRes := ReplayPartitions(cfg, partitions)
+
+				passesCap := oosRes.MaxDrawdownPct <= 12.0 && fullRes.MaxDrawdownPct <= 12.0
+				// Penalize divergence between Train Sharpe and OOS Sharpe (overfitting penalty)
+				sharpeGapPenalty := math.Max(0.0, trainRes.SharpeRatio-oosRes.SharpeRatio) * 0.25
+				oosScore := (0.70*oosRes.SharpeRatio + 0.30*trainRes.SharpeRatio - sharpeGapPenalty) * (1.0 - oosRes.MaxDrawdownPct/100.0)
 				results[idx] = GridSearchCandidate{
 					Config:            cfg,
-					Result:            res,
-					CompositeScore:    score,
+					Result:            fullRes,
+					CompositeScore:    oosScore,
 					PassesDrawdownCap: passesCap,
 				}
 			}

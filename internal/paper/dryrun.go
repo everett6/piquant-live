@@ -50,13 +50,13 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		TargetDuration:    14 * 24 * time.Hour,
 		Symbols:           []string{"BTCUSDT", "ETHUSDT"},
 		MaxDrawdownPct:    2.0,
-		MakerFeeBps:       0.0,
+		MakerFeeBps:       1.5, // Realistic Binance Spot/Futures retail maker fee (1.5 bps = 0.015% cost per fill)
 		TakerFeeBps:       4.0,
 		KylesLambda:       0.25,
 		StateFile:         filepath.Join(paperDir, "dryrun_state.json"),
 		JournalFile:       filepath.Join(paperDir, "dryrun_journal.jsonl"),
 		CheckpointFreq:    5 * time.Second,
-		OrderLatency:      50 * time.Millisecond,
+		OrderLatency:      120 * time.Millisecond, // Realistic US-to-Tokyo exchange fiber latency (120ms)
 		ExtendOnShutdown:  true,
 		FlattenOnShutdown: true,
 		BaseLeverage:      2.5,
@@ -911,21 +911,27 @@ func (e *DryRunEngine) matchMakerOrders(symbol string, tradePrice float64, trade
 		}
 
 		filled := false
-		if ord.Side == "BUY" {
-			// BUY bid order fills if market trade sweeps through our price or consumes queue at our price
-			if tradePrice < ord.Price {
+		// Strict hftbacktest fill realism:
+		// 1. Price-through tolerance is 1 tick ($0.01), NOT 1.0 bps ($7.50).
+		// 2. Trade aggressor must be on the opposite side of our resting limit order:
+		//    - Resting BUY bid only fills against SELLER-initiated trades (tradeSide == 1 -> isBuyerMaker == true).
+		//    - Resting SELL ask only fills against BUYER-initiated trades (tradeSide == 2 -> isBuyerMaker == false).
+		tickTol := 0.01
+		if ord.Side == "BUY" && (tradeSide == 1 || tradePrice < ord.Price-tickTol) {
+			if tradePrice < ord.Price-tickTol {
+				// Market swept completely through our bid price level
 				filled = true
-			} else if math.Abs(tradePrice-ord.Price) <= math.Max(0.50, ord.Price*1e-4) {
+			} else if math.Abs(tradePrice-ord.Price) <= tickTol {
 				ord.QueueAhead -= tradeSize
 				if ord.QueueAhead <= 0 {
 					filled = true
 				}
 			}
-		} else if ord.Side == "SELL" {
-			// SELL ask order fills if market trade sweeps through our price or consumes queue at our price
-			if tradePrice > ord.Price {
+		} else if ord.Side == "SELL" && (tradeSide == 2 || tradePrice > ord.Price+tickTol) {
+			if tradePrice > ord.Price+tickTol {
+				// Market swept completely through our ask price level
 				filled = true
-			} else if math.Abs(tradePrice-ord.Price) <= math.Max(0.50, ord.Price*1e-4) {
+			} else if math.Abs(tradePrice-ord.Price) <= tickTol {
 				ord.QueueAhead -= tradeSize
 				if ord.QueueAhead <= 0 {
 					filled = true
@@ -1158,12 +1164,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	e.state.Leverage = levState
 	pos := e.state.Positions[symbol]
 	currentInv := 0.0
-	avgEntry := midPrice
 	if pos != nil {
 		currentInv = pos.Size
-		if pos.AvgEntryPrice > 0 {
-			avgEntry = pos.AvgEntryPrice
-		}
 	}
 	if math.Abs(currentInv) > 1e-8 {
 		if sm.InventorySince.IsZero() {
@@ -1249,25 +1251,22 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	bidOffsetBps := math.Max(floorBps, qd.HalfSpreadBps-blendedSkewBps) + tcaPenaltyBps
 	askOffsetBps := math.Max(floorBps, qd.HalfSpreadBps+blendedSkewBps) + tcaPenaltyBps
 
+	// Ensure baseline half-spread covers round-trip maker fees (2 * MakerFeeBps) + positive expected edge
+	feeFloorBps := e.cfg.MakerFeeBps + 0.45
+	if bidOffsetBps < feeFloorBps && currentInv >= 0 {
+		bidOffsetBps = feeFloorBps
+	}
+	if askOffsetBps < feeFloorBps && currentInv <= 0 {
+		askOffsetBps = feeFloorBps
+	}
+
 	targetBid := midPrice - (bidOffsetBps * midPrice * 1e-4)
 	targetAsk := midPrice + (askOffsetBps * midPrice * 1e-4)
 
-	// Profit-locking inventory exit floor: when holding moderate inventory (|normInv| < 3.5),
-	// anchor the closing maker quote so round-trip fills lock in positive net spread over AvgEntryPrice.
-	minProfitBps := math.Max(0.35, 2.0*e.cfg.MakerFeeBps+0.35)
-	if currentInv > 0 && normInv < 3.5 && avgEntry > 0 {
-		minProfitAsk := avgEntry * (1.0 + minProfitBps*1e-4)
-		if minProfitAsk > targetAsk && (minProfitAsk-midPrice)/midPrice*1e4 <= 12.0 {
-			targetAsk = minProfitAsk
-		}
-	} else if currentInv < 0 && normInv > -3.5 && avgEntry > 0 {
-		maxProfitBid := avgEntry * (1.0 - minProfitBps*1e-4)
-		if maxProfitBid < targetBid && (midPrice-maxProfitBid)/midPrice*1e4 <= 12.0 {
-			targetBid = maxProfitBid
-		}
-	}
-
-	// Clamp to the touch so resting quotes remain passive maker orders (never cross into taker territory)
+	// Clamp to the touch so resting quotes remain passive maker orders (never cross into taker territory).
+	// NOTE: We intentionally do NOT artificially force exit quotes above AvgEntryPrice ("profit-locking bias").
+	// If inventory goes underwater, GLFT reservation skew + O-U holding-age urgency naturally lowers the exit
+	// quote toward the current market so losing inventory can be cut honestly and win rate reflects true market risk.
 	if bestBid > 0 && targetBid > bestBid {
 		targetBid = bestBid
 	}
@@ -1305,12 +1304,16 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 
 	latency := e.cfg.OrderLatency
 	if latency <= 0 {
-		latency = 50 * time.Millisecond
+		latency = 120 * time.Millisecond
 	}
 
-	// Place resting BUY maker quote if not present, inventory limit not exceeded, and flow is not severely toxic downward
+	// Place resting BUY maker quote at the BACK of the real L1 queue (100% of bidSize ahead when joining at bestBid)
 	if !hasBuy && currentInv+clipQty <= maxInvQty && blendedSkewBps > -3.5 {
-		queueEst := math.Min(bidSize*0.35, 2.5*clipQty)
+		queueEst := bidSize
+		if bestBid > 0 && targetBid < bestBid*0.9999 {
+			// Resting deeper than L1 touch: proportional L2 level depth ahead
+			queueEst = math.Max(clipQty, bidSize*0.50)
+		}
 		orders = append(orders, &ActiveMakerOrder{
 			Symbol:     symbol,
 			Side:       "BUY",
@@ -1320,13 +1323,16 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			ActiveAt:   now.Add(latency),
 			QueueAhead: queueEst,
 			Strategy:   "GLFT_QueueReactive_Maker",
-			EdgeBps:    qd.HalfSpreadBps,
+			EdgeBps:    bidOffsetBps,
 		})
 	}
 
-	// Place resting SELL maker quote if not present, inventory limit not exceeded, and flow is not severely toxic upward
+	// Place resting SELL maker quote at the BACK of the real L1 queue (100% of askSize ahead when joining at bestAsk)
 	if !hasSell && currentInv-clipQty >= -maxInvQty && blendedSkewBps < 3.5 {
-		queueEst := math.Min(askSize*0.35, 2.5*clipQty)
+		queueEst := askSize
+		if bestAsk > 0 && targetAsk > bestAsk*1.0001 {
+			queueEst = math.Max(clipQty, askSize*0.50)
+		}
 		orders = append(orders, &ActiveMakerOrder{
 			Symbol:     symbol,
 			Side:       "SELL",
@@ -1336,7 +1342,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			ActiveAt:   now.Add(latency),
 			QueueAhead: queueEst,
 			Strategy:   "GLFT_QueueReactive_Maker",
-			EdgeBps:    qd.HalfSpreadBps,
+			EdgeBps:    askOffsetBps,
 		})
 	}
 	e.activeOrders[symbol] = orders
@@ -1419,14 +1425,16 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 		pos.Size = newSize
 	}
 
-	e.state.Cash += (realizedPnL - feeUSDT)
+	// Net PnL after exchange maker fee so WinRate and RealizedPnL reflect real net-of-fee profitability
+	netRealizedPnL := realizedPnL - feeUSDT
+	e.state.Cash += netRealizedPnL
 
-	pos.RealizedPnL += realizedPnL
+	pos.RealizedPnL += netRealizedPnL
 	pos.TotalTrades++
 	pos.MakerTrades++
 	pos.TotalVolumeUSDT += valUSDT
 	if e.riskSafeguard != nil {
-		e.riskSafeguard.OnFill(realizedPnL, pos.Size)
+		e.riskSafeguard.OnFill(netRealizedPnL, pos.Size)
 	}
 	if e.tcaTracker != nil {
 		sideInt := int8(1)
@@ -1440,12 +1448,14 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 		e.tcaTracker.RecordFill(uint64(e.state.TotalTrades), symbol, sideInt, orderPrice, mid, time.Now().UnixNano())
 	}
 
-	e.state.RealizedPnL += realizedPnL
+	e.state.RealizedPnL += netRealizedPnL
 	e.state.TotalTrades++
-	if realizedPnL > 0 {
-		e.state.WinningTrades++
-	} else if realizedPnL < 0 {
-		e.state.LosingTrades++
+	if realizedPnL != 0 { // Round-trip closing fill
+		if netRealizedPnL > 0 {
+			e.state.WinningTrades++
+		} else {
+			e.state.LosingTrades++
+		}
 	}
 
 	if closed := e.state.WinningTrades + e.state.LosingTrades; closed > 0 {
@@ -1470,7 +1480,7 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 		FeeUSDT:     feeUSDT,
 		EdgeBps:     edgeBps,
 		SlippageBps: 0.0,
-		PnLRealized: realizedPnL,
+		PnLRealized: netRealizedPnL,
 		Strategy:    strategy,
 		DataSource:  dataSource,
 	}
