@@ -1612,8 +1612,14 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		askOffsetBps *= macroSt.SpreadMultiplier
 	}
 
-	// Ensure baseline half-spread covers round-trip maker fees (2 * MakerFeeBps) + positive expected edge.
+	// Volatility-Adaptive Fee Floor (Avellaneda-Stoikov & GLFT):
+	// In calm markets (vol <= 0.40 bps), floor is tight (fee + 0.45 bps) for maximum fill turnover.
+	// In volatile markets, floor scales with volatility so liquidity provision is compensated with wider margins.
 	feeFloorBps := math.Max(floorBps, e.cfg.MakerFeeBps+0.45)
+	if sm.VolVarBps > 0.40 {
+		volScale := math.Min(2.5, sm.VolVarBps/0.40)
+		feeFloorBps *= volScale
+	}
 	if bidOffsetBps < feeFloorBps {
 		bidOffsetBps = feeFloorBps
 	}
@@ -1719,24 +1725,32 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 
 	// Place resting BUY maker quote at the BACK of the real L1 queue
-	// Adverse selection & inventory risk gating:
-	allowBuy := !hasBuy && currentInv+clipQty <= maxInvQty && blendedSkewBps > -3.5
-	if currentInv >= 2.0*clipQty {
-		allowBuy = false // Don't stack more long inventory into a falling market
-	}
-	if currentInv > 0 && (blendedSkewBps < -1.25 || sm.Ret5sBps < -1.5) {
-		allowBuy = false // Toxic cascade defense: do not buy more when market is falling
+	// If currently short (currentInv < 0), this is an inventory COVER order: unconditionally allowed!
+	// If currently flat or long (currentInv >= 0), this is opening/accumulating: apply risk gating.
+	allowBuy := !hasBuy
+	buySize := clipQty
+	if currentInv < 0 {
+		// Closing short inventory: order size matches entire open short to return cleanly to cash equilibrium
+		buySize = math.Abs(currentInv)
+	} else {
+		// Opening / accumulating long inventory
+		if currentInv+clipQty > maxInvQty || blendedSkewBps <= -3.5 || currentInv >= 2.0*clipQty {
+			allowBuy = false
+		}
+		if currentInv > 0 && (blendedSkewBps < -1.25 || sm.Ret5sBps < -1.5) {
+			allowBuy = false // Toxic cascade defense: do not stack long inventory into a falling knife
+		}
 	}
 	if allowBuy {
 		queueEst := bidSize
 		if bestBid > 0 && targetBid < bestBid*0.9999 {
-			queueEst = math.Max(clipQty, bidSize*0.50)
+			queueEst = math.Max(buySize, bidSize*0.50)
 		}
 		orders = append(orders, &ActiveMakerOrder{
 			Symbol:     symbol,
 			Side:       "BUY",
 			Price:      targetBid,
-			Size:       clipQty,
+			Size:       buySize,
 			PlacedAt:   now,
 			ActiveAt:   now.Add(latency),
 			QueueAhead: queueEst,
@@ -1746,24 +1760,32 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 
 	// Place resting SELL maker quote at the BACK of the real L1 queue
-	// Adverse selection & inventory risk gating:
-	allowSell := !hasSell && currentInv-clipQty >= -maxInvQty && blendedSkewBps < 3.5
-	if currentInv <= -2.0*clipQty {
-		allowSell = false // Don't stack more short inventory into a rising market
-	}
-	if currentInv < 0 && (blendedSkewBps > 1.25 || sm.Ret5sBps > 1.5) {
-		allowSell = false // Toxic cascade defense: do not sell more when market is surging
+	// If currently long (currentInv > 0), this is an inventory EXIT order: unconditionally allowed!
+	// If currently flat or short (currentInv <= 0), this is opening/accumulating: apply risk gating.
+	allowSell := !hasSell
+	sellSize := clipQty
+	if currentInv > 0 {
+		// Closing long inventory: order size matches entire open long to return cleanly to cash equilibrium
+		sellSize = math.Abs(currentInv)
+	} else {
+		// Opening / accumulating short inventory
+		if currentInv-clipQty < -maxInvQty || blendedSkewBps >= 3.5 || currentInv <= -2.0*clipQty {
+			allowSell = false
+		}
+		if currentInv < 0 && (blendedSkewBps > 1.25 || sm.Ret5sBps > 1.5) {
+			allowSell = false // Toxic cascade defense: do not stack short inventory into a surging knife
+		}
 	}
 	if allowSell {
 		queueEst := askSize
 		if bestAsk > 0 && targetAsk > bestAsk*1.0001 {
-			queueEst = math.Max(clipQty, askSize*0.50)
+			queueEst = math.Max(sellSize, askSize*0.50)
 		}
 		orders = append(orders, &ActiveMakerOrder{
 			Symbol:     symbol,
 			Side:       "SELL",
 			Price:      targetAsk,
-			Size:       clipQty,
+			Size:       sellSize,
 			PlacedAt:   now,
 			ActiveAt:   now.Add(latency),
 			QueueAhead: queueEst,

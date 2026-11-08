@@ -723,3 +723,73 @@ func TestBreakevenFloorAndProfitLockingRatchet(t *testing.T) {
 		t.Errorf("expected surge sell price >= 2230.78, got %f", surgeSell.Price)
 	}
 }
+
+func TestUnconditionalExitQuotingAndFullPositionSizing(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	engine, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	// 1. Establish an open LONG position of 0.035 ETH (larger than standard clip)
+	targetLongQty := 0.035
+	engine.mu.Lock()
+	engine.state.Positions["ETHUSDT"] = &Position{
+		Symbol:        "ETHUSDT",
+		Size:          targetLongQty,
+		AvgEntryPrice: 2230.00,
+		MarkPrice:     2230.00,
+	}
+	engine.mu.Unlock()
+
+	now := time.Now()
+	engine.evaluateQuotesAndGating("ETHUSDT", 2230.00, now)
+
+	st := engine.State()
+	var exitSellOrd *ActiveMakerOrder
+	for _, o := range st.ActiveOrders["ETHUSDT"] {
+		if o.Side == "SELL" {
+			exitSellOrd = &o
+			break
+		}
+	}
+	if exitSellOrd == nil {
+		t.Fatalf("expected active SELL exit order for open long position")
+	}
+	if math.Abs(exitSellOrd.Size-targetLongQty) > 1e-6 {
+		t.Errorf("expected exit SELL order size to match full open inventory (%f), got %f", targetLongQty, exitSellOrd.Size)
+	}
+
+	// 2. Establish an open SHORT position of -0.0045 BTC
+	targetShortQty := 0.0045
+	engine.mu.Lock()
+	engine.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          -targetShortQty,
+		AvgEntryPrice: 76000.00,
+		MarkPrice:     76000.00,
+	}
+	engine.mu.Unlock()
+
+	engine.evaluateQuotesAndGating("BTCUSDT", 76000.00, now)
+
+	stBTC := engine.State()
+	var exitBuyOrd *ActiveMakerOrder
+	for _, o := range stBTC.ActiveOrders["BTCUSDT"] {
+		if o.Side == "BUY" {
+			exitBuyOrd = &o
+			break
+		}
+	}
+	if exitBuyOrd == nil {
+		t.Fatalf("expected active BUY exit order for open short position")
+	}
+	if math.Abs(exitBuyOrd.Size-targetShortQty) > 1e-6 {
+		t.Errorf("expected exit BUY order size to match full open short inventory (%f), got %f", targetShortQty, exitBuyOrd.Size)
+	}
+}
