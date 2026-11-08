@@ -66,6 +66,20 @@ func TestMonitorRenderFrame(t *testing.T) {
 			RegimeName:        "TOXIC_DEFENSE",
 			RegimeDetail:      "Informed toxic flow (VPIN 0.61): leverage dialed down to 1.9x",
 		},
+		ActiveOrders: map[string][]paper.ActiveMakerOrder{
+			"BTCUSDT": {
+				{
+					Symbol:     "BTCUSDT",
+					Side:       "BUY",
+					Price:      75905.12,
+					Size:       0.0009,
+					PlacedAt:   now.Add(-10 * time.Second),
+					QueueAhead: 0.85,
+					Strategy:   "GLFT_QueueReactive",
+					EdgeBps:    1.95,
+				},
+			},
+		},
 	}
 
 	trades := []paper.TradeRecord{
@@ -115,6 +129,8 @@ func TestMonitorRenderFrame(t *testing.T) {
 		"BTCUSDT",
 		"ETHUSDT",
 		"ACTIVE PORTFOLIO INVENTORY",
+		"ACTIVE RESTING LIMIT ORDERS",
+		"QUEUE AHEAD",
 		"RECENT EXECUTIONS (BLOTTER)",
 		"[q] Quit",
 	}

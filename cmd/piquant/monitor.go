@@ -513,6 +513,34 @@ func renderTerminalFrame(w io.Writer, st *paper.DryRunState, trades []paper.Trad
 	}
 	fmt.Fprintf(w, "%s└%s┘%s\n", ansiYellow, thinBorder, ansiReset)
 
+	// 5.5 ACTIVE RESTING LIMIT ORDERS TABLE (L1/L2 BOOK)
+	var allActiveOrders []paper.ActiveMakerOrder
+	for _, ords := range st.ActiveOrders {
+		allActiveOrders = append(allActiveOrders, ords...)
+	}
+
+	fmt.Fprintf(w, "%s┌─ ACTIVE RESTING LIMIT ORDERS (L1/L2 BOOK) %s┐%s\n", ansiCyan, strings.Repeat("─", width-44), ansiReset)
+	fmt.Fprintf(w, "%s  %-10s %-6s %-14s %-10s %-14s %-12s %-8s %-20s%s\n",
+		ansiBold+ansiWhite, "SYMBOL", "SIDE", "PRICE", "SIZE", "QUEUE AHEAD", "EDGE", "AGE", "STRATEGY", ansiReset)
+
+	if len(allActiveOrders) == 0 {
+		fmt.Fprintf(w, "%s  No active resting orders (Quotes paused / Gating)%s\n", ansiGray, ansiReset)
+	} else {
+		for _, ord := range allActiveOrders {
+			sideCol := ansiBrightGreen + "BUY" + ansiReset
+			if ord.Side == "SELL" {
+				sideCol = ansiBrightMagenta + "SELL" + ansiReset
+			}
+			ageSec := now.Sub(ord.PlacedAt).Seconds()
+			if ageSec < 0 {
+				ageSec = 0
+			}
+			fmt.Fprintf(w, "  %-10s %-15s $%-13.2f %-10.4f %-14.4f %+7.2fbps %-7.1fs %-20s\n",
+				ord.Symbol, sideCol, ord.Price, ord.Size, ord.QueueAhead, ord.EdgeBps, ageSec, ord.Strategy)
+		}
+	}
+	fmt.Fprintf(w, "%s└%s┘%s\n", ansiCyan, thinBorder, ansiReset)
+
 	// 6. RECENT EXECUTION BLOTTER
 	fmt.Fprintf(w, "%s┌─ RECENT EXECUTIONS (BLOTTER) %s┐%s\n", ansiMagenta, strings.Repeat("─", width-33), ansiReset)
 	fmt.Fprintf(w, "%s  %-9s %-9s %-6s %-7s %-12s %-9s %-10s %-8s %-12s %-18s%s\n",

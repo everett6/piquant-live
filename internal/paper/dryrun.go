@@ -141,8 +141,9 @@ type DryRunState struct {
 	QuotingPaused          bool                 `json:"quoting_paused"`           // True when quoting/matching paused due to feed down
 	OfflineDowntimeSeconds float64              `json:"offline_downtime_seconds"` // Cumulative time system was shut down / offline
 	ShutdownCount          int                  `json:"shutdown_count"`           // Number of power-cycles/resumptions survived
-	LastResumeTime         time.Time            `json:"last_resume_time"`         // Timestamp of latest recovery after shutdown
-	Leverage               DynamicLeverageState `json:"leverage"`                 // Real-time automatic dynamic leverage and regime
+	LastResumeTime         time.Time                     `json:"last_resume_time"`         // Timestamp of latest recovery after shutdown
+	Leverage               DynamicLeverageState          `json:"leverage"`                 // Real-time automatic dynamic leverage and regime
+	ActiveOrders           map[string][]ActiveMakerOrder `json:"active_orders,omitempty"`   // Currently resting maker limit orders in the book
 }
 
 // SymbolMicrostructure maintains isolated per-symbol order-book dynamics,
@@ -492,6 +493,18 @@ func (e *DryRunEngine) State() DryRunState {
 	}
 	cp.DailyReturns = append([]float64(nil), e.state.DailyReturns...)
 
+	// Deep copy active resting maker orders for UI & telemetry
+	cp.ActiveOrders = make(map[string][]ActiveMakerOrder, len(e.activeOrders))
+	for sym, ords := range e.activeOrders {
+		if len(ords) > 0 {
+			copies := make([]ActiveMakerOrder, len(ords))
+			for i, o := range ords {
+				copies[i] = *o
+			}
+			cp.ActiveOrders[sym] = copies
+		}
+	}
+
 	// Update computed timing fields
 	now := time.Now()
 	elapsed := now.Sub(cp.StartTime)
@@ -679,6 +692,18 @@ func (e *DryRunEngine) saveCheckpoint() error {
 			if variance > 1e-12 {
 				e.state.SharpeRatio = (mean / math.Sqrt(variance)) * math.Sqrt(365.0)
 			}
+		}
+	}
+
+	// Capture active resting orders snapshot into checkpoint
+	e.state.ActiveOrders = make(map[string][]ActiveMakerOrder, len(e.activeOrders))
+	for sym, ords := range e.activeOrders {
+		if len(ords) > 0 {
+			copies := make([]ActiveMakerOrder, len(ords))
+			for i, o := range ords {
+				copies[i] = *o
+			}
+			e.state.ActiveOrders[sym] = copies
 		}
 	}
 
@@ -1532,6 +1557,26 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 
 	targetBid := midPrice - (bidOffsetBps * midPrice * 1e-4)
 	targetAsk := midPrice + (askOffsetBps * midPrice * 1e-4)
+
+	// Profit-Locking Ratchet:
+	// If current inventory has moved into confirmed net profit (> 2x round-trip maker fee + 1.0 bps net edge),
+	// pull the closing exit quote right to the inside touch (bestAsk for long, bestBid for short)
+	// so the position exits with confirmed net profit before market mean-reversion.
+	if pos != nil && math.Abs(pos.Size) > 1e-8 && pos.AvgEntryPrice > 0 {
+		netPnLBps := 0.0
+		if pos.Size > 0 && midPrice > pos.AvgEntryPrice {
+			netPnLBps = (midPrice - pos.AvgEntryPrice) / pos.AvgEntryPrice * 1e4 - (2.0 * e.cfg.MakerFeeBps)
+		} else if pos.Size < 0 && midPrice < pos.AvgEntryPrice {
+			netPnLBps = (pos.AvgEntryPrice - midPrice) / pos.AvgEntryPrice * 1e4 - (2.0 * e.cfg.MakerFeeBps)
+		}
+		if netPnLBps >= 1.0 { // Net green by >= 1.0 bps after covering all fees
+			if pos.Size > 0 && bestAsk > 0 {
+				targetAsk = bestAsk // Fast profit-lock exit at inside ask
+			} else if pos.Size < 0 && bestBid > 0 {
+				targetBid = bestBid // Fast profit-lock cover at inside bid
+			}
+		}
+	}
 
 	// Holding Urgency: after 90s, pull closing quote to the inside touch to expedite queue clearance
 	if holdSec > 90.0 {
