@@ -21,11 +21,11 @@ type DynamicLeverageConfig struct {
 func DefaultDynamicLeverageConfig() DynamicLeverageConfig {
 	return DynamicLeverageConfig{
 		MinLeverage:    0.5,
-		MaxLeverage:    5.0,
+		MaxLeverage:    3.5,
 		BaseLeverage:   2.5,
 		TargetVolBps:   15.0,
 		MaxDrawdownPct: 2.0,
-		ClipFraction:   0.20,
+		ClipFraction:   0.35,
 	}
 }
 

@@ -70,12 +70,12 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		ExtendOnShutdown:  true,
 		FlattenOnShutdown: true,
 		BaseLeverage:      2.5,
-		MaxLeverage:       5.0,
+		MaxLeverage:       3.5,
 		EnableMacroShield: true,
 		DataDir:           dataDir,
-		TargetProfitBps:   25.0,
-		EntryOffsetBps:    12.5,
-		StopLossBps:       75.0,
+		TargetProfitBps:   12.5,
+		EntryOffsetBps:    7.5,
+		StopLossBps:       60.0,
 		CleanReset:        false,
 	}
 }
@@ -297,13 +297,13 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		cfg.OrderLatency = 50 * time.Millisecond
 	}
 	if cfg.TargetProfitBps <= 0 {
-		cfg.TargetProfitBps = 25.0
+		cfg.TargetProfitBps = 12.5
 	}
 	if cfg.EntryOffsetBps <= 0 {
-		cfg.EntryOffsetBps = 12.5
+		cfg.EntryOffsetBps = 7.5
 	}
 	if cfg.StopLossBps <= 0 {
-		cfg.StopLossBps = 75.0
+		cfg.StopLossBps = 60.0
 	}
 
 	levCfg := DefaultDynamicLeverageConfig()
@@ -1638,18 +1638,27 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		askOffsetBps *= macroSt.SpreadMultiplier
 	}
 
-	// Volatility-Adaptive Entry Spread (Multi-Horizon Swing & Position Market Making):
-	// Entry quotes are placed at real liquidity discount levels (default: EntryOffsetBps = 12.5 bps),
-	// preventing premature fills on high-frequency noise and ensuring purchases happen on genuine dips.
+	// Volatility-Adaptive Entry Spread (Optimal Microstructure Formula):
+	// Entry quotes are placed at asset-calibrated liquidity discount levels:
+	// BTC (deeper order book, lower vol) quotes tighter (0.90x),
+	// ETH (wider order book, higher vol) quotes wider (1.15x).
+	// Both scale with real-time volatility variance sm.VolVarBps.
 	entrySpreadBps := e.cfg.EntryOffsetBps
 	if entrySpreadBps <= 0 {
-		entrySpreadBps = 12.5
+		entrySpreadBps = 7.5
 	}
-	feeFloorBps := math.Max(floorBps, entrySpreadBps)
+	symMultiplier := 1.0
+	if strings.Contains(strings.ToUpper(symbol), "BTC") {
+		symMultiplier = 0.90
+	} else if strings.Contains(strings.ToUpper(symbol), "ETH") {
+		symMultiplier = 1.15
+	}
+	effectiveEntryBps := entrySpreadBps * symMultiplier
 	if sm.VolVarBps > 0.40 {
-		volScale := math.Min(2.5, sm.VolVarBps/0.40)
-		feeFloorBps *= volScale
+		volScale := math.Min(2.5, math.Sqrt(sm.VolVarBps/0.40))
+		effectiveEntryBps *= volScale
 	}
+	feeFloorBps := math.Max(floorBps, effectiveEntryBps)
 	if bidOffsetBps < feeFloorBps {
 		bidOffsetBps = feeFloorBps
 	}
@@ -1660,21 +1669,34 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	targetBid := midPrice - (bidOffsetBps * midPrice * 1e-4)
 	targetAsk := midPrice + (askOffsetBps * midPrice * 1e-4)
 
-	// Institutional Breakeven Floor & Profit-Locking Ratchet (Multi-Minute to Multi-Day Horizon):
-	// When holding open inventory, the closing quote must mathematically guarantee net profitability
-	// of at least TargetProfitBps (default: 25.0 bps = 0.25% net) after covering all round-trip maker fees.
-	// Positions are patiently held across minutes, hours, or days until the profit target is reached.
-	// An exit is ONLY allowed below break-even if structural invalidation stop-loss (default: 75.0 bps) triggers.
+	// Institutional Breakeven Floor & Dynamic Profit Decay Ratchet:
+	// When holding open inventory, the closing quote guarantees net profitability
+	// after covering all round-trip maker fees (2 * MakerFeeBps).
+	// A dynamic exponential decay ratchet starts quoting at base target profit (default 12.5 bps)
+	// to capture fast momentum rebounds, then smoothly relaxes over holding time (15m half-life)
+	// towards guaranteed net profit floor (+6.0 bps net = 9.0 bps gross),
+	// ensuring positions never get trapped during quiet consolidation while ALWAYS banking green profits.
+	// An exit is ONLY allowed below break-even if structural stop-loss triggers.
 	if pos != nil && math.Abs(pos.Size) > 1e-8 && pos.AvgEntryPrice > 0 {
-		targetProfitBps := e.cfg.TargetProfitBps
-		if targetProfitBps <= 0 {
-			targetProfitBps = 25.0
+		baseTargetProfitBps := e.cfg.TargetProfitBps
+		if baseTargetProfitBps <= 0 {
+			baseTargetProfitBps = 12.5
 		}
 		stopLossBps := e.cfg.StopLossBps
 		if stopLossBps <= 0 {
-			stopLossBps = 75.0
+			stopLossBps = 60.0
 		}
 		roundTripFeeBps := 2.0 * e.cfg.MakerFeeBps
+
+		minNetFloorBps := math.Max(6.0, baseTargetProfitBps*0.50)
+		targetProfitBps := minNetFloorBps
+		if !sm.InventorySince.IsZero() {
+			holdSec := now.Sub(sm.InventorySince).Seconds()
+			decayFactor := math.Exp(-holdSec / 900.0) // 15-minute half-life decay
+			targetProfitBps = minNetFloorBps + (baseTargetProfitBps-minNetFloorBps)*decayFactor
+		} else {
+			targetProfitBps = baseTargetProfitBps
+		}
 
 		if pos.Size > 0 { // Holding LONG position
 			minProfitAsk := pos.AvgEntryPrice * (1.0 + (roundTripFeeBps+targetProfitBps)*1e-4)
@@ -1740,6 +1762,11 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		target := targetBid
 		if ord.Side == "SELL" {
 			target = targetAsk
+		}
+		// When holding inventory, exit order must match full position size and be priced at or above minProfitAsk
+		if (currentInv > 0 && ord.Side == "SELL" && math.Abs(ord.Size-math.Abs(currentInv)) > 1e-6) ||
+			(currentInv < 0 && ord.Side == "BUY" && math.Abs(ord.Size-math.Abs(currentInv)) > 1e-6) {
+			continue // cancel order to replace with correct full position exit size and price
 		}
 		// Preserve FIFO queue priority: only cancel & replace if target price moved > 2.5 bps.
 		// Avoid cancelling orders solely due to time elapsed, preserving queue position.

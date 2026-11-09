@@ -700,13 +700,13 @@ func TestBreakevenFloorAndProfitLockingRatchet(t *testing.T) {
 		t.Fatalf("expected active SELL order for ETHUSDT")
 	}
 
-	// Min profit ask = 2230.00 * (1.0 + (3.0 + 25.0)*1e-4) = 2236.24 -> rounded up to 2236.25
-	minExpectedAsk := 2236.24
+	// Min profit ask = 2230.00 * (1.0 + (3.0 + 12.5)*1e-4) = 2233.456 -> rounded up to 2233.46
+	minExpectedAsk := 2233.45
 	if sellOrd.Price < minExpectedAsk {
 		t.Errorf("expected sell order price >= %f (breakeven floor), got %f", minExpectedAsk, sellOrd.Price)
 	}
 
-	// 3. Test Profit-Locking: midPrice surges to $2240.00 (> 2230 + 28 bps profit threshold)
+	// 3. Test Profit-Locking: midPrice surges to $2240.00 (> 2230 + 15.5 bps profit threshold)
 	engine.evaluateQuotesAndGating("ETHUSDT", 2240.00, now)
 	stSurge := engine.State()
 	var surgeSell *ActiveMakerOrder
@@ -719,8 +719,8 @@ func TestBreakevenFloorAndProfitLockingRatchet(t *testing.T) {
 	if surgeSell == nil {
 		t.Fatalf("expected active SELL order during surge")
 	}
-	if surgeSell.Price < 2236.24 {
-		t.Errorf("expected surge sell price >= 2236.24, got %f", surgeSell.Price)
+	if surgeSell.Price < 2233.45 {
+		t.Errorf("expected surge sell price >= 2233.45, got %f", surgeSell.Price)
 	}
 }
 
@@ -852,4 +852,107 @@ func TestCleanResetPurgesLegacyStats(t *testing.T) {
 		t.Errorf("expected legacy journal backup file to exist: %v", err)
 	}
 }
+
+func TestAdaptiveMicrostructureFormulasAndProfitDecayRatchet(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.EntryOffsetBps = 7.5
+	cfg.TargetProfitBps = 12.5
+
+	ring := engine.NewSPSCRing(128)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+	engine, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	now := time.Now()
+
+	// 1. Test Volatility-Adaptive Entry Offset:
+	// BTC should receive 0.90x tighter spread, ETH should receive 1.15x wider spread
+	engine.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
+	engine.evaluateQuotesAndGating("ETHUSDT", 2200.00, now)
+
+	st := engine.State()
+	btcOrders := st.ActiveOrders["BTCUSDT"]
+	ethOrders := st.ActiveOrders["ETHUSDT"]
+
+	if len(btcOrders) < 2 || len(ethOrders) < 2 {
+		t.Fatalf("expected active 2-sided quotes for BTC and ETH")
+	}
+
+	// BTC expected entry spread: 7.5 * 0.90 = 6.75 bps
+	// BTC Bid = 75000 * (1 - 6.75*1e-4) = 74949.375 -> floor to 74949.37
+	var btcBid *ActiveMakerOrder
+	for _, o := range btcOrders {
+		if o.Side == "BUY" {
+			btcBid = &o
+			break
+		}
+	}
+	if btcBid == nil {
+		t.Fatalf("missing BTC bid")
+	}
+	expectedBtcBid := 75000.00 * (1.0 - 6.75*1e-4)
+	if math.Abs(btcBid.Price-expectedBtcBid) > 1.0 {
+		t.Errorf("expected BTC bid ~%f (6.75 bps), got %f", expectedBtcBid, btcBid.Price)
+	}
+
+	// ETH expected entry spread: 7.5 * 1.15 = 8.625 bps
+	// ETH Bid = 2200 * (1 - 8.625*1e-4) = 2198.1025 -> floor to 2198.10
+	var ethBid *ActiveMakerOrder
+	for _, o := range ethOrders {
+		if o.Side == "BUY" {
+			ethBid = &o
+			break
+		}
+	}
+	if ethBid == nil {
+		t.Fatalf("missing ETH bid")
+	}
+	expectedEthBid := 2200.00 * (1.0 - 8.625*1e-4)
+	if math.Abs(ethBid.Price-expectedEthBid) > 0.10 {
+		t.Errorf("expected ETH bid ~%f (8.625 bps), got %f", expectedEthBid, ethBid.Price)
+	}
+
+	// 2. Test Dynamic Profit Decay Ratchet:
+	// Establish LONG ETH position at $2200.00
+	engine.mu.Lock()
+	engine.state.Positions["ETHUSDT"] = &Position{
+		Symbol:        "ETHUSDT",
+		Size:          0.020,
+		AvgEntryPrice: 2200.00,
+		MarkPrice:     2200.00,
+	}
+	sm := engine.symMicro["ETHUSDT"]
+	sm.InventorySince = now.Add(-1800 * time.Second) // 30 minutes of holding
+	engine.mu.Unlock()
+
+	// Evaluate after 30m of holding:
+	// decayFactor = exp(-1800 / 900) = exp(-2) ≈ 0.1353
+	// targetProfit = 6.25 + (12.5 - 6.25) * 0.1353 ≈ 6.25 + 0.846 = 7.096 bps net
+	// minProfitAsk = 2200 * (1 + (3.0 + 7.096)*1e-4) ≈ 2200 * (1 + 10.096*1e-4) ≈ 2202.22
+	engine.evaluateQuotesAndGating("ETHUSDT", 2200.00, now)
+	stDecay := engine.State()
+	var exitAsk *ActiveMakerOrder
+	for _, o := range stDecay.ActiveOrders["ETHUSDT"] {
+		if o.Side == "SELL" {
+			exitAsk = &o
+			break
+		}
+	}
+	if exitAsk == nil {
+		t.Fatalf("missing ETH exit ask after 30m holding")
+	}
+
+	// Net edge must be >= 6.0 bps net and < 12.5 bps base target
+	netEdgeBps := (exitAsk.Price - 2200.00) / 2200.00 * 1e4 - 3.0 // subtracting 3.0 bps fee
+	if netEdgeBps < 6.0 {
+		t.Errorf("expected net edge >= 6.0 bps floor, got %f", netEdgeBps)
+	}
+	if netEdgeBps > 9.0 {
+		t.Errorf("expected net edge to have decayed towards floor (< 9.0 bps), got %f", netEdgeBps)
+	}
+}
+
 

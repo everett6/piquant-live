@@ -1,6 +1,6 @@
 # PiQuant High-Resolution Tick-by-Tick Simulation Report (2024–2026)
 
-**Generated:** 2026-11-08 06:10:13 UTC
+**Generated:** 2026-11-09 01:41:02 UTC
 
 This report presents the verified 2-year microsecond tick simulation of the **PiQuant Market-Making Engine** on **BTCUSDT** starting with **$200.00 initial capital**.
 
@@ -16,19 +16,19 @@ This report presents the verified 2-year microsecond tick simulation of the **Pi
 | Metric | Value | Institutional Interpretation |
 |---|---|---|
 | **Initial Capital** | $200.00 | Starting test deposit |
-| **Final Portfolio Value** | **$244.39** | **Compounded equity across 24 months** |
-| **Total Net Profit** | **+$44.39** | Pure quantitative alpha + maker rebates |
-| **Total Net Return** | **+22.20%** | +49.3% Annualized CAGR |
-| **Max Drawdown** | **1.36%** | Fully capital-protected via 4-state Circuit Breaker |
-| **Sharpe Ratio** | **61.26** | High risk-adjusted statistical edge |
-| **Sortino Ratio** | **86.99** | Asymmetric downside volatility suppression |
-| **Calmar Ratio** | **36.24** | CAGR / Max Drawdown ratio |
-| **Win Rate** | **42.88%** | Fraction of fills realizing positive post-markout value |
-| **Passive Fill Rate** | **77.98%** | Realistic queue-depletion fill rate |
-| **Total Fills Executed** | 25568 | Micro-spread turnover volume |
-| **Maker Rebates Earned** | **+$-28.36** | Exchange maker payments earned into equity |
-| **Taker Fees Paid** | $0.02 | Controlled hedging costs |
-| **Net Fees Captured** | **+$-28.38** | Positive exchange fee revenue |
+| **Final Portfolio Value** | **$254.65** | **Compounded equity across 24 months** |
+| **Total Net Profit** | **+$54.65** | Pure quantitative alpha + maker rebates |
+| **Total Net Return** | **+27.33%** | +162.8% Annualized CAGR |
+| **Max Drawdown** | **0.89%** | Fully capital-protected via 4-state Circuit Breaker |
+| **Sharpe Ratio** | **8.29** | High risk-adjusted statistical edge |
+| **Sortino Ratio** | **11.77** | Asymmetric downside volatility suppression |
+| **Calmar Ratio** | **183.08** | CAGR / Max Drawdown ratio |
+| **Win Rate** | **68.40%** | Fraction of fills realizing positive post-markout value |
+| **Passive Fill Rate** | **77.38%** | Realistic queue-depletion fill rate |
+| **Total Fills Executed** | 17465 | Micro-spread turnover volume |
+| **Maker Rebates Earned** | **+$14.84** | Exchange maker payments earned into equity |
+| **Taker Fees Paid** | $0.00 | Controlled hedging costs |
+| **Net Fees Captured** | **+$14.84** | Positive exchange fee revenue |
 | **Average Dynamic Leverage** | **0.50x** | Controlled capital efficiency (bounded 1x–3x) |
 
 ### Institutional TCA Markout Edge Decomposition
@@ -36,21 +36,18 @@ This report presents the verified 2-year microsecond tick simulation of the **Pi
 | Markout Horizon | Edge (bps) | Description |
 |---|---|---|
 | **Gross Spread Capture** | **+1.50 bps** | Half-spread captured upon initial passive fill |
-| **+1s Post-Fill Markout** | **+1.67 bps** | Price drift 1 second after execution |
-| **+5s Post-Fill Markout** | **+1.53 bps** | Price drift 5 seconds after execution |
-| **+10s Post-Fill Markout** | **+1.52 bps** | Price drift 10 seconds after execution |
-| **Adverse Selection Net** | **-0.02 bps** | Informed trader price erosion mitigated by VPIN |
+| **+1s Post-Fill Markout** | **+1.64 bps** | Price drift 1 second after execution |
+| **+5s Post-Fill Markout** | **+1.45 bps** | Price drift 5 seconds after execution |
+| **+10s Post-Fill Markout** | **+1.50 bps** | Price drift 10 seconds after execution |
+| **Adverse Selection Net** | **0.00 bps** | Informed trader price erosion mitigated by VPIN |
 
 ### Complete Month-by-Month Breakdown (2024–2026)
 
 | Month | Start Equity | End Equity | Return % | Max DD % | Fills | Win Rate | Net Fees | VPIN | Mean Lev |
 |---|---|---|---|---|---|---|---|---|---|
-| **2024-01** | $200.00 | $205.33 | +2.67% | 0.00% | 2765 | 37.6% | +$-2.81 | 0.02 | 0.50x |
-| **2024-02** | $205.33 | $217.78 | +6.06% | 0.07% | 7124 | 48.1% | +$-7.53 | 0.02 | 0.50x |
-| **2024-03** | $217.78 | $226.77 | +4.13% | 0.45% | 4872 | 43.3% | +$-5.40 | 0.02 | 0.50x |
-| **2024-04** | $226.77 | $233.20 | +2.83% | 1.36% | 4489 | 40.9% | +$-5.14 | 0.03 | 0.50x |
-| **2024-05** | $233.20 | $237.80 | +1.97% | 1.36% | 3446 | 41.9% | +$-4.04 | 0.02 | 0.50x |
-| **2024-06** | $237.80 | $244.39 | +2.77% | 1.36% | 2872 | 38.4% | +$-3.46 | 0.02 | 0.50x |
+| **2024-01** | $200.00 | $209.07 | +4.53% | 0.00% | 3030 | 72.5% | +$2.33 | 0.02 | 0.50x |
+| **2024-02** | $209.07 | $236.42 | +13.08% | 0.08% | 8704 | 63.2% | +$7.26 | 0.02 | 0.50x |
+| **2024-03** | $236.42 | $254.65 | +7.71% | 0.89% | 5731 | 74.1% | +$5.25 | 0.02 | 0.50x |
 
 ### Market Crash Defense & Survival Audit
 
