@@ -1078,5 +1078,61 @@ func TestSelfImprovingScalpingDefenseAndRecalibration(t *testing.T) {
 	}
 }
 
+func TestCoinbaseLeadLagOracleIntegrationInDryRun(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	cbOracle := NewCoinbaseSignalOracle([]string{"BTCUSDT"})
+	dryRun.SetCoinbaseOracle(cbOracle)
+
+	now := time.Now()
+
+	// 1. Initial State: Coinbase is aligned with Binance at 75000.00
+	cbOracle.UpdateTick("BTCUSDT", 75000.00, 74999.00, 75001.00, 0.5, true, now.Add(-1*time.Second))
+	dryRun.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
+
+	st1 := dryRun.State()
+	if st1.Coinbase == nil {
+		t.Fatalf("expected Coinbase signal state in dry run snapshot")
+	}
+	if btcSig := st1.Coinbase.Symbols["BTCUSDT"]; btcSig == nil || btcSig.CoinbasePrice != 75000.00 {
+		t.Errorf("expected btcSig with 75000.00, got %+v", btcSig)
+	}
+
+	// 2. Simulate US Institutional Bullish Surge on Coinbase:
+	// Coinbase leaps from 75000 to 75040 (+5.3 bps basis surge) with high positive velocity
+	cbOracle.UpdateTick("BTCUSDT", 75040.00, 75039.00, 75041.00, 2.0, true, now.Add(200*time.Millisecond))
+
+	// Binance mid price is still 75000.00
+	dryRun.evaluateQuotesAndGating("BTCUSDT", 75000.00, now.Add(250*time.Millisecond))
+	st2 := dryRun.State()
+	btcSig2 := st2.Coinbase.Symbols["BTCUSDT"]
+	if btcSig2 == nil {
+		t.Fatalf("expected btcSig2 in snapshot")
+	}
+	if btcSig2.BasisBps <= 0 {
+		t.Errorf("expected positive BasisBps on Coinbase surge, got %f", btcSig2.BasisBps)
+	}
+	if !btcSig2.IsAdverseAsk {
+		t.Errorf("expected IsAdverseAsk true during strong Coinbase upward surge, got false")
+	}
+
+	// Resting sell opening orders must be canceled or barred from placement during adverse ask surge!
+	orders := st2.ActiveOrders["BTCUSDT"]
+	for _, o := range orders {
+		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
+			t.Errorf("expected active SELL opening quote to be canceled or absent when IsAdverseAsk is true")
+		}
+	}
+}
+
+
 
 

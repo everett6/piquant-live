@@ -44,6 +44,8 @@ type dryRunFlags struct {
 	extendOnShutdown  bool
 	flattenOnShutdown bool
 	wsURL             string
+	enableCoinbase    bool
+	coinbaseWS        string
 }
 
 func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
@@ -76,6 +78,8 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.BoolVar(&f.extendOnShutdown, "extend-on-shutdown", true, "automatically extend target end time by offline duration upon shutdown/power-cycle recovery (default true)")
 	fs.BoolVar(&f.flattenOnShutdown, "flatten-on-shutdown", true, "automatically liquidate all open positions to cash at current mark price on shutdown (default true)")
 	fs.StringVar(&f.wsURL, "ws-url", "", "custom Binance public WebSocket URL (default auto)")
+	fs.BoolVar(&f.enableCoinbase, "coinbase", true, "enable Coinbase institutional USD lead-lag signal ingestor (default true)")
+	fs.StringVar(&f.coinbaseWS, "coinbase-ws", "", "custom Coinbase public WebSocket URL (default auto)")
 	return f
 }
 
@@ -197,6 +201,34 @@ func runDryRun(ctx context.Context, args []string) error {
 		return fmt.Errorf("failed to initialize dry run engine: %w", err)
 	}
 	dryRunEngine.SetAutonomousRecalibrator(backtest.RunAutonomousRecalibration)
+
+	// Initialize optional Coinbase institutional USD lead-lag signal ingestor
+	if f.enableCoinbase {
+		cbCfg := paper.DefaultCoinbaseStreamConfig()
+		if f.coinbaseWS != "" {
+			cbCfg.Endpoint = f.coinbaseWS
+		}
+		cbProds := make([]string, 0, len(symList))
+		for _, s := range symList {
+			if strings.HasPrefix(s, "BTC") {
+				cbProds = append(cbProds, "BTC-USD")
+			} else if strings.HasPrefix(s, "ETH") {
+				cbProds = append(cbProds, "ETH-USD")
+			} else if strings.HasPrefix(s, "SOL") {
+				cbProds = append(cbProds, "SOL-USD")
+			}
+		}
+		if len(cbProds) > 0 {
+			cbCfg.Products = cbProds
+		}
+		cbOracle := paper.NewCoinbaseSignalOracle(symList)
+		cbIngestor := paper.NewCoinbaseStreamIngestor(cbCfg, ring, cbOracle)
+		cbIngestor.Start(ctx)
+		defer cbIngestor.Stop()
+
+		dryRunEngine.SetCoinbaseOracle(cbOracle)
+	}
+
 	dryRunEngine.Start(ctx)
 	defer dryRunEngine.Stop()
 

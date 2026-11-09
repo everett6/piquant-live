@@ -164,6 +164,7 @@ type DryRunState struct {
 	ActiveOrders           map[string][]ActiveMakerOrder `json:"active_orders,omitempty"`   // Currently resting maker limit orders in the book
 	ScalpingState          map[string]ScalpingRegimeState `json:"scalping_state,omitempty"` // Per-symbol scalping viability & regime
 	SelfAdaptation         SelfAdaptationState           `json:"self_adaptation"`          // Autonomous parameter backtesting & hot-reloading
+	Coinbase               *CoinbaseSignalState          `json:"coinbase_signal,omitempty"` // Real-time institutional lead-lag oracle
 }
 
 // ScalpingRegimeState reports per-symbol scalping viability and mode (Scalp vs Patient Swing).
@@ -329,6 +330,9 @@ type DryRunEngine struct {
 	recalibrator    AutonomousRecalibrator
 	recalibrating   atomic.Bool
 	lastAutoRecalib time.Time
+
+	// Real-time Coinbase institutional lead-lag signal oracle
+	cbOracle *CoinbaseSignalOracle
 }
 
 // NewDryRunEngine constructs and recovers or initializes the paper trading engine.
@@ -684,6 +688,11 @@ func (e *DryRunEngine) State() DryRunState {
 		cp.Macro = e.macroGuardian.Evaluate(now)
 	}
 
+	if e.cbOracle != nil {
+		cbSnap := e.cbOracle.Snapshot()
+		cp.Coinbase = &cbSnap
+	}
+
 	return cp
 }
 
@@ -798,6 +807,13 @@ func (e *DryRunEngine) SetAutonomousRecalibrator(fn AutonomousRecalibrator) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.recalibrator = fn
+}
+
+// SetCoinbaseOracle configures the real-time institutional USD lead-lag oracle.
+func (e *DryRunEngine) SetCoinbaseOracle(oracle *CoinbaseSignalOracle) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cbOracle = oracle
 }
 
 // maybeTriggerAutoRecalibrationLocked asynchronously executes a fast walk-forward backtest grid search
@@ -962,6 +978,10 @@ func (e *DryRunEngine) saveCheckpoint() error {
 	}
 	if e.state.SelfAdaptation.Status == "" {
 		e.state.SelfAdaptation.Status = "MONITORING_CALM"
+	}
+	if e.cbOracle != nil {
+		cbSnap := e.cbOracle.Snapshot()
+		e.state.Coinbase = &cbSnap
 	}
 
 	data, err := json.MarshalIndent(e.state, "", "  ")
@@ -1814,8 +1834,12 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		invSkewBps = invFraction * 2.5        // +/- 2.5 bps restoring force
 	}
 
-	// Blend AdaHedge online meta-prediction with GLFT reservation skew
-	blendedSkewBps := 0.65*(qd.ReservationBps-invSkewBps) + 0.35*metaPred
+	// Blend AdaHedge online meta-prediction with GLFT reservation skew and Coinbase institutional lead-lag skew
+	var cbSig CoinbaseSymbolSignal
+	if e.cbOracle != nil {
+		cbSig = e.cbOracle.EvaluateAgainstBinance(symbol, midPrice, now)
+	}
+	blendedSkewBps := 0.60*(qd.ReservationBps-invSkewBps) + 0.25*metaPred + 0.15*cbSig.LeadLagSkewBps
 
 	bidOffsetBps := math.Max(floorBps, qd.HalfSpreadBps-blendedSkewBps) + tcaPenaltyBps
 	askOffsetBps := math.Max(floorBps, qd.HalfSpreadBps+blendedSkewBps) + tcaPenaltyBps
@@ -2008,8 +2032,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			continue
 		}
 		// Toxic momentum pull: immediately cancel resting opening quotes if flow becomes adverse
-		if (ord.Side == "SELL" && currentInv <= 0 && (sm.Ret5sBps > 1.5 || blendedSkewBps > 1.5)) ||
-			(ord.Side == "BUY" && currentInv >= 0 && (sm.Ret5sBps < -1.5 || blendedSkewBps < -1.5)) {
+		if (ord.Side == "SELL" && currentInv <= 0 && (sm.Ret5sBps > 1.5 || blendedSkewBps > 1.5 || cbSig.IsAdverseAsk)) ||
+			(ord.Side == "BUY" && currentInv >= 0 && (sm.Ret5sBps < -1.5 || blendedSkewBps < -1.5 || cbSig.IsAdverseBid)) {
 			ord.CancelingUntil = now.Add(cancelLatency)
 			keptOrders = append(keptOrders, ord)
 			continue
@@ -2052,7 +2076,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if currentInv+clipQty > maxInvQty || blendedSkewBps <= -3.5 || currentInv >= 2.0*clipQty {
 			allowBuy = false
 		}
-		if blendedSkewBps < -1.5 || sm.Ret5sBps < -1.5 || (!sm.BidCooldownUntil.IsZero() && now.Before(sm.BidCooldownUntil)) {
+		if blendedSkewBps < -1.5 || sm.Ret5sBps < -1.5 || cbSig.IsAdverseBid || (!sm.BidCooldownUntil.IsZero() && now.Before(sm.BidCooldownUntil)) {
 			allowBuy = false // Toxic cascade defense: do not catch falling knife whether flat or long!
 		}
 		if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
@@ -2090,7 +2114,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if currentInv-clipQty < -maxInvQty || blendedSkewBps >= 3.5 || currentInv <= -2.0*clipQty {
 			allowSell = false
 		}
-		if blendedSkewBps > 1.5 || sm.Ret5sBps > 1.5 || (!sm.AskCooldownUntil.IsZero() && now.Before(sm.AskCooldownUntil)) {
+		if blendedSkewBps > 1.5 || sm.Ret5sBps > 1.5 || cbSig.IsAdverseAsk || (!sm.AskCooldownUntil.IsZero() && now.Before(sm.AskCooldownUntil)) {
 			allowSell = false // Toxic cascade defense: do not short into surging knife whether flat or short!
 		}
 		if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
