@@ -404,22 +404,31 @@ func (c *CoinbaseStreamIngestor) connectAndStream(ctx context.Context) error {
 		}
 	}
 
-	d := net.Dialer{Timeout: 5 * time.Second}
-	dialCtx, dialCancel := context.WithTimeout(ctx, 6*time.Second)
+	d := net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 10 * time.Second,
+	}
+	dialCtx, dialCancel := context.WithTimeout(ctx, 8*time.Second)
 	defer dialCancel()
 
-	var conn net.Conn
-	if u.Scheme == "wss" {
-		conn, err = tls.DialWithDialer(&d, "tcp", host, &tls.Config{
-			ServerName: strings.Split(u.Host, ":")[0],
-		})
-	} else {
-		conn, err = d.DialContext(dialCtx, "tcp", host)
-	}
+	rawConn, err := d.DialContext(dialCtx, "tcp", host)
 	if err != nil {
 		return fmt.Errorf("Coinbase dial failed to %s: %w", host, err)
 	}
+
+	var conn net.Conn = rawConn
+	if u.Scheme == "wss" {
+		tlsConn := tls.Client(rawConn, &tls.Config{
+			ServerName: strings.Split(u.Host, ":")[0],
+		})
+		if err := tlsConn.HandshakeContext(dialCtx); err != nil {
+			_ = rawConn.Close()
+			return fmt.Errorf("Coinbase tls handshake failed to %s: %w", host, err)
+		}
+		conn = tlsConn
+	}
 	defer conn.Close()
+	defer c.oracle.connected.Store(false)
 
 	stopWatcher := make(chan struct{})
 	defer close(stopWatcher)
@@ -499,8 +508,9 @@ func (c *CoinbaseStreamIngestor) connectAndStream(ctx context.Context) error {
 			case <-pingCtx.Done():
 				return
 			case <-ticker.C:
-				// Coinbase RFC 6455 ping
+				// Coinbase RFC 6455 ping with bounded write deadline
 				pingFrame := []byte{0x89, 0x80, 0x11, 0x22, 0x33, 0x44}
+				_ = conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
 				if _, err := conn.Write(pingFrame); err != nil {
 					return
 				}
@@ -516,7 +526,7 @@ func (c *CoinbaseStreamIngestor) connectAndStream(ctx context.Context) error {
 		default:
 		}
 
-		_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
 		payload, op, err := readWSFrame(br)
 		if err != nil {
 			return err
@@ -525,8 +535,11 @@ func (c *CoinbaseStreamIngestor) connectAndStream(ctx context.Context) error {
 		if op == 0x8 {
 			return io.EOF
 		}
-		if op == 0x9 { // Ping
+		if op == 0x9 { // Ping from Coinbase
 			_ = sendWSPong(conn, payload)
+			continue
+		}
+		if op == 0xA { // Pong in reply to our ping
 			continue
 		}
 		if op != 0x1 && op != 0x2 {

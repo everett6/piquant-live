@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -337,6 +338,95 @@ type DryRunEngine struct {
 	cbOracle *CoinbaseSignalOracle
 }
 
+// atomicWriteFile safely writes data to a temporary file, fsyncs data to media, renames,
+// and fsyncs the parent directory to guarantee crash-consistency on ext4 (microSD / NVMe).
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	tmpFile, err := os.CreateTemp(dir, "atomic-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+
+	// Guarantee ext4 parent directory dentry is committed to physical storage
+	if df, err := os.Open(dir); err == nil {
+		_ = df.Sync()
+		_ = df.Close()
+	}
+	return nil
+}
+
+// sanitizeJournalTail validates that the journal file ends cleanly with a newline.
+// If a sudden power cut severed a JSON line write mid-sentence, it truncates the partial
+// unparseable bytes back to the last valid newline so append operations never fuse records.
+func sanitizeJournalTail(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0o644)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil || stat.Size() == 0 {
+		return err
+	}
+
+	readLen := int64(4096)
+	if stat.Size() < readLen {
+		readLen = stat.Size()
+	}
+
+	buf := make([]byte, readLen)
+	offset := stat.Size() - readLen
+	if _, err := f.ReadAt(buf, offset); err != nil && err != io.EOF {
+		return err
+	}
+
+	// Clean trailing nulls and whitespace
+	if len(buf) > 0 && buf[len(buf)-1] == '\n' {
+		return nil
+	}
+
+	// File was truncated mid-line on power cut or contains trailing null bytes.
+	// Find the last clean newline character.
+	lastNL := bytes.LastIndexByte(buf, '\n')
+	if lastNL == -1 {
+		// Entire tail has no newline; truncate file to start fresh
+		return f.Truncate(0)
+	}
+
+	validSize := offset + int64(lastNL) + 1
+	if validSize < stat.Size() {
+		return f.Truncate(validSize)
+	}
+	return nil
+}
+
 // NewDryRunEngine constructs and recovers or initializes the paper trading engine.
 func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStreamIngestor) (*DryRunEngine, error) {
 	if cfg.InitialCapital <= 0 {
@@ -515,6 +605,7 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 
 	// Ensure journal directory exists and start asynchronous background writer
 	if cfg.JournalFile != "" {
+		_ = sanitizeJournalTail(cfg.JournalFile)
 		_ = os.MkdirAll(filepath.Dir(cfg.JournalFile), 0o755)
 		f, err := os.OpenFile(cfg.JournalFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
@@ -533,7 +624,7 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	return e, nil
 }
 
-// Start launches the strategy evaluation loop and periodic state checkpointing.
+// Start launches the strategy evaluation loop, periodic state checkpointing, and independent feed watchdog.
 func (e *DryRunEngine) Start(ctx context.Context) {
 	if e.running.Swap(true) {
 		return
@@ -543,9 +634,10 @@ func (e *DryRunEngine) Start(ctx context.Context) {
 		e.macroGuardian.Start(ctx)
 	}
 
-	e.wg.Add(2)
+	e.wg.Add(3)
 	go e.runExecutionLoop(ctx)
 	go e.runCheckpointLoop(ctx)
+	go e.runFeedWatchdog(ctx)
 }
 
 // Stop terminates the engine, cancels all resting orders, optionally auto-liquidates open inventory to cash, and checkpoints state.
@@ -569,66 +661,7 @@ func (e *DryRunEngine) Stop() {
 	// 2. Auto TS (Trailing Stop / Liquidation) on Shutdown:
 	// If configured (default true), close any open inventory at current MarkPrice to convert all unrealized PnL to cash
 	if e.cfg.FlattenOnShutdown {
-		for sym, pos := range e.state.Positions {
-			if pos != nil && pos.Size != 0 && pos.MarkPrice > 0 {
-				closePrice := pos.MarkPrice
-				qty := math.Abs(pos.Size)
-				valUSDT := closePrice * qty
-				realizedPnL := 0.0
-
-				if pos.Size > 0 { // Long position liquidated
-					realizedPnL = pos.Size * (closePrice - pos.AvgEntryPrice)
-				} else { // Short position covered
-					realizedPnL = (-pos.Size) * (pos.AvgEntryPrice - closePrice)
-				}
-				e.state.Cash += realizedPnL
-
-				pos.RealizedPnL += realizedPnL
-				pos.UnrealizedPnL = 0
-				pos.Size = 0
-				pos.TotalTrades++
-
-				e.state.RealizedPnL += realizedPnL
-				e.state.TotalTrades++
-				if realizedPnL > 0 {
-					e.state.WinningTrades++
-				} else if realizedPnL < 0 {
-					e.state.LosingTrades++
-				}
-
-				// Record liquidation fill in journal/blotter
-				fillRec := TradeRecord{
-					Timestamp:   time.Now().UTC(),
-					Symbol:      sym,
-					Side:        "SHUTDOWN_AUTO_LIQUIDATE",
-					Role:        "TAKER_SAFETY",
-					Price:       closePrice,
-					Size:        qty,
-					ValueUSDT:   valUSDT,
-					FeeUSDT:     0.0,
-					EdgeBps:     0.0,
-					SlippageBps: 0.0,
-					PnLRealized: realizedPnL,
-					Strategy:    "Shutdown_Auto_TS_Flatten",
-					DataSource:  "live",
-				}
-				e.recentFills = append([]TradeRecord{fillRec}, e.recentFills...)
-				if len(e.recentFills) > 64 {
-					e.recentFills = e.recentFills[:64]
-				}
-				if e.journalCh != nil {
-					if b, err := json.Marshal(fillRec); err == nil {
-						select {
-						case e.journalCh <- append(b, '\n'):
-						default:
-						}
-					}
-				}
-			}
-		}
-		// Reset unrealized PnL and lock equity into cash
-		e.state.UnrealizedPnL = 0
-		e.state.Equity = e.state.Cash
+		e.emergencyFlattenLocked("Shutdown_Auto_TS_Flatten")
 	}
 	e.mu.Unlock()
 
@@ -644,17 +677,138 @@ func (e *DryRunEngine) Stop() {
 	}
 }
 
-// runJournalWriter provides non-blocking, asynchronous serialization of trade records to the journal file.
+// emergencyFlattenLocked liquidates all open inventory at current mark price and converts unrealized PnL to cash.
+// Caller MUST hold e.mu.
+func (e *DryRunEngine) emergencyFlattenLocked(reason string) {
+	for sym, pos := range e.state.Positions {
+		if pos != nil && pos.Size != 0 && pos.MarkPrice > 0 {
+			closePrice := pos.MarkPrice
+			qty := math.Abs(pos.Size)
+			valUSDT := closePrice * qty
+			realizedPnL := 0.0
+
+			if pos.Size > 0 { // Long position liquidated
+				realizedPnL = pos.Size * (closePrice - pos.AvgEntryPrice)
+			} else { // Short position covered
+				realizedPnL = (-pos.Size) * (pos.AvgEntryPrice - closePrice)
+			}
+			e.state.Cash += realizedPnL
+
+			pos.RealizedPnL += realizedPnL
+			pos.UnrealizedPnL = 0
+			pos.Size = 0
+			pos.TotalTrades++
+
+			e.state.RealizedPnL += realizedPnL
+			e.state.TotalTrades++
+			if realizedPnL > 0 {
+				e.state.WinningTrades++
+			} else if realizedPnL < 0 {
+				e.state.LosingTrades++
+			}
+
+			// Record liquidation fill in journal/blotter
+			fillRec := TradeRecord{
+				Timestamp:   time.Now().UTC(),
+				Symbol:      sym,
+				Side:        "EMERGENCY_PROTECTIVE_LIQUIDATE",
+				Role:        "TAKER_SAFETY",
+				Price:       closePrice,
+				Size:        qty,
+				ValueUSDT:   valUSDT,
+				FeeUSDT:     0.0,
+				EdgeBps:     0.0,
+				SlippageBps: 0.0,
+				PnLRealized: realizedPnL,
+				Strategy:    reason,
+				DataSource:  e.state.DataSource,
+			}
+			e.recentFills = append([]TradeRecord{fillRec}, e.recentFills...)
+			if len(e.recentFills) > 64 {
+				e.recentFills = e.recentFills[:64]
+			}
+			if e.journalCh != nil {
+				if b, err := json.Marshal(fillRec); err == nil {
+					select {
+					case e.journalCh <- append(b, '\n'):
+					default:
+					}
+				}
+			}
+		}
+	}
+	// Reset unrealized PnL and lock equity into cash
+	e.state.UnrealizedPnL = 0
+	e.state.Equity = e.state.Cash
+}
+
+// runJournalWriter provides non-blocking, asynchronous serialization of trade records to the journal file
+// with periodic fsync flushes to physical storage to guard against power-cut data loss.
 func (e *DryRunEngine) runJournalWriter() {
 	defer e.journalWg.Done()
 	if e.journal == nil {
 		return
 	}
-	for line := range e.journalCh {
-		_, _ = e.journal.Write(line)
+	syncTicker := time.NewTicker(2 * time.Second)
+	defer syncTicker.Stop()
+
+	for {
+		select {
+		case line, ok := <-e.journalCh:
+			if !ok {
+				_ = e.journal.Sync()
+				_ = e.journal.Close()
+				return
+			}
+			_, _ = e.journal.Write(line)
+		case <-syncTicker.C:
+			_ = e.journal.Sync()
+		}
 	}
-	_ = e.journal.Sync()
-	_ = e.journal.Close()
+}
+
+// runFeedWatchdog independently monitors market feed liveness and executes Cancel-On-Disconnect
+// to purge resting maker orders whenever the feed drops, stalls, or disconnects.
+func (e *DryRunEngine) runFeedWatchdog(ctx context.Context) {
+	defer e.wg.Done()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-e.stopCh:
+			return
+		case <-ticker.C:
+			e.checkFeedLiveness()
+		}
+	}
+}
+
+func (e *DryRunEngine) checkFeedLiveness() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	now := time.Now()
+	isLiveConnected := true
+	if e.stream != nil {
+		isLiveConnected = e.stream.IsConnected()
+	}
+
+	feedStale := e.lastTickTime.IsZero() || now.Sub(e.lastTickTime) > 1500*time.Millisecond
+	if !isLiveConnected || feedStale {
+		if !e.state.QuotingPaused {
+			e.state.QuotingPaused = true
+			e.state.DataSource = "disconnected"
+			// Cancel-On-Disconnect: immediately purge all resting maker orders so
+			// no stale quotes execute if the connection drops.
+			for sym := range e.activeOrders {
+				e.activeOrders[sym] = nil
+			}
+		}
+		e.state.FeedDownSeconds += 0.10
+	}
 }
 
 // State returns a thread-safe snapshot of the current 14-day dry run state.
@@ -911,58 +1065,63 @@ func (e *DryRunEngine) maybeTriggerAutoRecalibrationLocked(symbol string) {
 func (e *DryRunEngine) saveCheckpoint() error {
 	e.mu.Lock()
 	now := time.Now()
-	e.state.LastCheckpoint = now
 
-	// Protect against backward time jump before NTP sync on Raspberry Pi
-	if !e.state.StartTime.IsZero() && now.After(e.state.StartTime) {
-		elapsed := now.Sub(e.state.StartTime)
-		maxDays := e.state.TargetDays
-		if maxDays <= 0 {
-			maxDays = int(e.cfg.TargetDuration.Hours() / 24.0)
+	// Guard against un-synced clock on Raspberry Pi cold boot without RTC battery (fake-hwclock / 1970)
+	minSanityDate := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	clockValid := now.After(minSanityDate) && (e.state.LastCheckpoint.IsZero() || !now.Before(e.state.LastCheckpoint))
+
+	if clockValid {
+		e.state.LastCheckpoint = now
+		if !e.state.StartTime.IsZero() && now.After(e.state.StartTime) {
+			elapsed := now.Sub(e.state.StartTime)
+			maxDays := e.state.TargetDays
 			if maxDays <= 0 {
-				maxDays = 14
-			}
-			e.state.TargetDays = maxDays
-		}
-		e.state.DaysElapsed = int(elapsed.Hours()/24.0) + 1
-		if e.state.DaysElapsed > maxDays {
-			e.state.DaysElapsed = maxDays
-		}
-		rem := e.state.TargetEndTime.Sub(now)
-		if rem < 0 {
-			rem = 0
-		}
-		e.state.HoursRemaining = rem.Hours()
-
-		// Daily returns tracking at day rollover
-		dayIndex := int(elapsed.Hours() / 24.0)
-		if dayIndex > len(e.state.DailyReturns) && dayIndex <= maxDays {
-			prevEquity := e.state.InitialCapital
-			if len(e.state.DailyReturns) > 0 {
-				eq := e.state.InitialCapital
-				for _, r := range e.state.DailyReturns {
-					eq *= (1.0 + r/100.0)
+				maxDays = int(e.cfg.TargetDuration.Hours() / 24.0)
+				if maxDays <= 0 {
+					maxDays = 14
 				}
-				prevEquity = eq
+				e.state.TargetDays = maxDays
 			}
-			if prevEquity > 0 {
-				dayRet := ((e.state.Equity - prevEquity) / prevEquity) * 100.0
-				e.state.DailyReturns = append(e.state.DailyReturns, dayRet)
+			e.state.DaysElapsed = int(elapsed.Hours()/24.0) + 1
+			if e.state.DaysElapsed > maxDays {
+				e.state.DaysElapsed = maxDays
 			}
-		}
+			rem := e.state.TargetEndTime.Sub(now)
+			if rem < 0 {
+				rem = 0
+			}
+			e.state.HoursRemaining = rem.Hours()
 
-		// Recompute continuous annualized Sharpe ratio if daily returns are recorded
-		if len(e.state.DailyReturns) >= 2 {
-			n := float64(len(e.state.DailyReturns))
-			var sum, sumSq float64
-			for _, r := range e.state.DailyReturns {
-				sum += r
-				sumSq += r * r
+			// Daily returns tracking at day rollover
+			dayIndex := int(elapsed.Hours() / 24.0)
+			if dayIndex > len(e.state.DailyReturns) && dayIndex <= maxDays {
+				prevEquity := e.state.InitialCapital
+				if len(e.state.DailyReturns) > 0 {
+					eq := e.state.InitialCapital
+					for _, r := range e.state.DailyReturns {
+						eq *= (1.0 + r/100.0)
+					}
+					prevEquity = eq
+				}
+				if prevEquity > 0 {
+					dayRet := ((e.state.Equity - prevEquity) / prevEquity) * 100.0
+					e.state.DailyReturns = append(e.state.DailyReturns, dayRet)
+				}
 			}
-			mean := sum / n
-			variance := sumSq/n - mean*mean
-			if variance > 1e-12 {
-				e.state.SharpeRatio = (mean / math.Sqrt(variance)) * math.Sqrt(365.0)
+
+			// Recompute continuous annualized Sharpe ratio if daily returns are recorded
+			if len(e.state.DailyReturns) >= 2 {
+				n := float64(len(e.state.DailyReturns))
+				var sum, sumSq float64
+				for _, r := range e.state.DailyReturns {
+					sum += r
+					sumSq += r * r
+				}
+				mean := sum / n
+				variance := sumSq/n - mean*mean
+				if variance > 1e-12 {
+					e.state.SharpeRatio = (mean / math.Sqrt(variance)) * math.Sqrt(365.0)
+				}
 			}
 		}
 	}
@@ -1033,22 +1192,13 @@ func (e *DryRunEngine) saveCheckpoint() error {
 		return nil
 	}
 
-	_ = os.MkdirAll(filepath.Dir(e.cfg.StateFile), 0o755)
-	tmpFile := e.cfg.StateFile + ".tmp"
-	f, err := os.OpenFile(tmpFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
+	// Rotate existing valid checkpoint to .bak for dual-slot crash safety
+	if _, err := os.Stat(e.cfg.StateFile); err == nil {
+		_ = os.Rename(e.cfg.StateFile, e.cfg.StateFile+".bak")
 	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return err
-	}
-	// Flush kernel page cache to physical storage (SD card / NVMe) to prevent 0x00 null byte corruption on power loss
-	_ = f.Sync()
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpFile, e.cfg.StateFile)
+
+	// Write atomically with fsync and directory sync
+	return atomicWriteFile(e.cfg.StateFile, data, 0o644)
 }
 
 // loadCheckpoint deserializes state from JSON and handles shutdown gap recovery.
@@ -1056,27 +1206,51 @@ func (e *DryRunEngine) loadCheckpoint() error {
 	if e.cfg.StateFile == "" {
 		return os.ErrNotExist
 	}
-	data, err := os.ReadFile(e.cfg.StateFile)
+
+	var data []byte
+	var err error
+
+	data, err = os.ReadFile(e.cfg.StateFile)
+	if err != nil && os.IsNotExist(err) {
+		// Primary state file not found; attempt .bak fallback
+		data, err = os.ReadFile(e.cfg.StateFile + ".bak")
+	}
 	if err != nil {
 		return err
 	}
 
 	cleanData := bytes.Trim(data, "\x00\r\n \t")
-	if len(cleanData) == 0 {
-		// File was zeroed out by power-loss before dirty pages reached flash
-		_ = os.Rename(e.cfg.StateFile, e.cfg.StateFile+".corrupted")
-		return os.ErrNotExist
+	var st DryRunState
+	var unmarshalErr error
+	if len(cleanData) > 0 {
+		unmarshalErr = json.Unmarshal(cleanData, &st)
 	}
 
-	var st DryRunState
-	if err := json.Unmarshal(cleanData, &st); err != nil {
-		_ = os.Rename(e.cfg.StateFile, e.cfg.StateFile+".corrupted")
-		return os.ErrNotExist
+	if len(cleanData) == 0 || unmarshalErr != nil {
+		// Primary checkpoint file was zeroed or corrupted (e.g. power-loss mid-write).
+		// Attempt recovery from .bak secondary slot
+		bakData, bakErr := os.ReadFile(e.cfg.StateFile + ".bak")
+		if bakErr == nil {
+			cleanBak := bytes.Trim(bakData, "\x00\r\n \t")
+			if len(cleanBak) > 0 {
+				if err := json.Unmarshal(cleanBak, &st); err == nil {
+					unmarshalErr = nil
+					_ = os.Rename(e.cfg.StateFile, e.cfg.StateFile+".corrupted")
+				}
+			}
+		}
+		if unmarshalErr != nil {
+			_ = os.Rename(e.cfg.StateFile, e.cfg.StateFile+".corrupted")
+			return os.ErrNotExist
+		}
 	}
 
 	if st.Positions == nil {
 		st.Positions = make(map[string]*Position)
 	}
+
+	// Discard resting orders from checkpoint: old orders from prior process run are stale.
+	st.ActiveOrders = nil
 
 	now := time.Now()
 	// Detect shutdown gap and recover seamlessly
@@ -1390,6 +1564,14 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 		return
 	}
 
+	// If resuming from disconnected/paused state or feed staleness, purge resting orders so
+	// the first tick post-reconnection NEVER fills stale orders.
+	if e.state.QuotingPaused || (!e.lastTickTime.IsZero() && now.Sub(e.lastTickTime) > 1500*time.Millisecond) {
+		for sym := range e.activeOrders {
+			e.activeOrders[sym] = nil
+		}
+	}
+
 	e.state.DataSource = "live"
 	e.state.QuotingPaused = false
 	if !e.lastTickTime.IsZero() {
@@ -1434,6 +1616,7 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 			for sym := range e.activeOrders {
 				e.activeOrders[sym] = nil
 			}
+			e.emergencyFlattenLocked("Circuit_Breaker_Drawdown_Breach")
 		}
 	}
 
@@ -1505,6 +1688,11 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 // A maker order fills only when trades at or through its price deplete the queue ahead.
 func (e *DryRunEngine) matchMakerOrders(symbol string, tradePrice float64, tradeSize float64, tradeSide uint8, now time.Time) {
 	e.mu.Lock()
+	if e.state.QuotingPaused || (!e.lastTickTime.IsZero() && now.Sub(e.lastTickTime) > 1500*time.Millisecond) {
+		e.activeOrders[symbol] = nil
+		e.mu.Unlock()
+		return
+	}
 	orders := e.activeOrders[symbol]
 	if len(orders) == 0 {
 		e.mu.Unlock()
@@ -1721,7 +1909,10 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			e.mu.Lock()
 			e.state.CircuitHalted = true
 			e.state.CircuitHaltReason = rReason
-			e.activeOrders[symbol] = nil
+			for s := range e.activeOrders {
+				e.activeOrders[s] = nil
+			}
+			e.emergencyFlattenLocked("Circuit_Breaker_RiskGate_Tripped")
 			e.mu.Unlock()
 			return
 		}

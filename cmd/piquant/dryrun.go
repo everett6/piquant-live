@@ -224,7 +224,9 @@ func runDryRun(ctx context.Context, args []string) error {
 			cbCfg.Products = cbProds
 		}
 		cbOracle := paper.NewCoinbaseSignalOracle(symList)
-		cbIngestor := paper.NewCoinbaseStreamIngestor(cbCfg, ring, cbOracle)
+		// Decouple Coinbase from execution ring to preserve strict SPSC invariants (single producer).
+		// Coinbase is dedicated to cross-venue institutional lead-lag alpha oracle.
+		cbIngestor := paper.NewCoinbaseStreamIngestor(cbCfg, nil, cbOracle)
 		cbIngestor.Start(ctx)
 		defer cbIngestor.Stop()
 

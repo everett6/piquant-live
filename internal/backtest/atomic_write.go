@@ -33,5 +33,14 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := os.Chmod(tmpPath, perm); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+
+	// Guarantee ext4 parent directory dentry is committed to physical storage (microSD/NVMe)
+	if df, err := os.Open(dir); err == nil {
+		_ = df.Sync()
+		_ = df.Close()
+	}
+	return nil
 }
