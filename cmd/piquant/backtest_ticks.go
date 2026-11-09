@@ -25,6 +25,10 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	forceDownload := fs.Bool("force-download", false, "Force download of monthly tick archives from Binance Vision")
 	makerRebate := fs.Float64("maker-rebate-bps", -0.50, "Maker fee rebate in bps (negative for rebate earned)")
 	latencyMs := fs.Float64("latency-ms", 10.0, "Simulated tick-to-quote response delay in ms")
+	baseLev := fs.Float64("base-leverage", 2.50, "Base dynamic leverage multiplier (default: 2.5x)")
+	maxLev := fs.Float64("max-leverage", 3.50, "Maximum dynamic leverage cap (default: 3.5x)")
+	clipFrac := fs.Float64("clip-fraction", 0.35, "Order clip fraction of margin per quote leg (default: 0.35)")
+	spreadBps := fs.Float64("spread-bps", 1.25, "Base half-spread in bps (default: 1.25 bps)")
 	enableMacro := fs.Bool("enable-macro", true, "Enable Macro News Shield during tick replay (default true)")
 	gridSearch := fs.Bool("grid-search", false, "Run parallel multi-core parameter grid search across 16 configurations")
 	optimalOut := fs.String("optimal-out", "data/reports/optimal_params.json", "Output path for winning optimal_params.json")
@@ -64,6 +68,10 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	cfg.Months = *months
 	cfg.MakerFeeBps = *makerRebate
 	cfg.SimulatedLatencyMs = *latencyMs
+	cfg.BaseLeverage = *baseLev
+	cfg.MaxLeverage = *maxLev
+	cfg.ClipFraction = *clipFrac
+	cfg.BaseSpreadBps = *spreadBps
 	cfg.EnableMacroShield = *enableMacro
 	cfg.DataDir = filepath.Dir(tDataDir)
 
