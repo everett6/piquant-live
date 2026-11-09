@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"piquant-live/internal/backtest"
 	"piquant-live/internal/config"
 	"piquant-live/internal/dashboard"
 	"piquant-live/internal/discovery"
@@ -195,6 +196,7 @@ func runDryRun(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize dry run engine: %w", err)
 	}
+	dryRunEngine.SetAutonomousRecalibrator(backtest.RunAutonomousRecalibration)
 	dryRunEngine.Start(ctx)
 	defer dryRunEngine.Stop()
 

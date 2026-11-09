@@ -955,4 +955,128 @@ func TestAdaptiveMicrostructureFormulasAndProfitDecayRatchet(t *testing.T) {
 	}
 }
 
+func TestSelfImprovingScalpingDefenseAndRecalibration(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.EntryOffsetBps = 7.5
+	cfg.TargetProfitBps = 12.5
+
+	ring := engine.NewSPSCRing(128)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+	engine, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	recalibratedCh := make(chan string, 1)
+	engine.SetAutonomousRecalibrator(func(ctx context.Context, symbol string, currentCapital float64, dataDir string) error {
+		// Mock backtest recalibration: write optimal_params.json
+		optConfig := map[string]any{
+			"symbol":              symbol,
+			"gamma":               0.0025,
+			"min_half_spread_bps": 3.50,
+			"clip_fraction":       0.15,
+			"base_leverage":       1.50,
+			"max_leverage_cap":    2.50,
+		}
+		raw, _ := json.Marshal(optConfig)
+		_ = os.WriteFile(filepath.Join(tempDir, "optimal_params.json"), raw, 0644)
+		recalibratedCh <- symbol
+		return nil
+	})
+
+	now := time.Now()
+
+	// 1. Initial State: Scalping should be active, normal tight spread
+	sm := engine.symMicro["BTCUSDT"]
+	if sm.ScalpingDisabled {
+		t.Errorf("expected scalping to be enabled initially")
+	}
+
+	// 2. Simulate 3 consecutive closing losses to trigger money leakage defense
+	engine.mu.Lock()
+	engine.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          0.001,
+		AvgEntryPrice: 75000.00,
+		MarkPrice:     74950.00,
+	}
+	// Execute closing sell at a loss
+	engine.executeMakerFillLocked("BTCUSDT", 74900.00, 0.001, "SELL", 5.0, "TEST")
+
+	engine.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          0.001,
+		AvgEntryPrice: 75000.00,
+		MarkPrice:     74950.00,
+	}
+	engine.executeMakerFillLocked("BTCUSDT", 74900.00, 0.001, "SELL", 5.0, "TEST")
+
+	engine.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          0.001,
+		AvgEntryPrice: 75000.00,
+		MarkPrice:     74950.00,
+	}
+	engine.executeMakerFillLocked("BTCUSDT", 74900.00, 0.001, "SELL", 5.0, "TEST")
+	engine.mu.Unlock()
+
+	// 3. Verify Scalping is now DISABLED
+	if !sm.ScalpingDisabled {
+		t.Fatalf("expected scalping to be disabled after 3 consecutive losses, but got false")
+	}
+	if sm.ConsecutiveLosses != 3 {
+		t.Errorf("expected 3 consecutive losses, got %d", sm.ConsecutiveLosses)
+	}
+
+	// 4. Verify quotes are widened to Patient Swing mode (>= 18.0 bps)
+	engine.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
+	st := engine.State()
+	orders := st.ActiveOrders["BTCUSDT"]
+	if len(orders) == 0 {
+		t.Fatalf("expected resting orders for BTCUSDT")
+	}
+	for _, o := range orders {
+		offsetBps := math.Abs(o.Price-75000.00) / 75000.00 * 1e4
+		if offsetBps < 17.9 {
+			t.Errorf("expected patient swing spread >= 18.0 bps when scalping disabled, got %.2f bps", offsetBps)
+		}
+	}
+
+	// 5. Verify autonomous recalibrator was triggered and hot-reloads new parameters
+	select {
+	case sym := <-recalibratedCh:
+		if sym != "BTCUSDT" {
+			t.Errorf("expected recalibration for BTCUSDT, got %s", sym)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for autonomous recalibration to be triggered")
+	}
+
+	// Wait briefly for hot reload
+	time.Sleep(100 * time.Millisecond)
+	engine.maybeReloadCloudParams()
+
+	if engine.minHalfSpreadFloorBps != 3.50 {
+		t.Errorf("expected hot-reloaded minHalfSpreadFloorBps 3.50, got %.2f", engine.minHalfSpreadFloorBps)
+	}
+
+	// 6. Test Extreme Leakage Guard (ConsecutiveLosses >= 4): opening entries must be completely halted!
+	sm.ConsecutiveLosses = 4
+	engine.evaluateQuotesAndGating("BTCUSDT", 75000.00, now.Add(time.Second))
+	stHalt := engine.State()
+	activeOrders := stHalt.ActiveOrders["BTCUSDT"]
+	// Should contain no new opening quotes (only canceling existing)
+	var activeOpen int
+	for _, o := range activeOrders {
+		if o.CancelingUntil.IsZero() {
+			activeOpen++
+		}
+	}
+	if activeOpen > 0 {
+		t.Errorf("expected 0 active opening quotes when ConsecutiveLosses >= 4, got %d", activeOpen)
+	}
+}
+
+
 

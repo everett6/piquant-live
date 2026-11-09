@@ -162,6 +162,25 @@ type DryRunState struct {
 	Leverage               DynamicLeverageState          `json:"leverage"`                 // Real-time automatic dynamic leverage and regime
 	Macro                  macro.MacroState              `json:"macro"`                    // Zero-cost macro calendar event shield telemetry
 	ActiveOrders           map[string][]ActiveMakerOrder `json:"active_orders,omitempty"`   // Currently resting maker limit orders in the book
+	ScalpingState          map[string]ScalpingRegimeState `json:"scalping_state,omitempty"` // Per-symbol scalping viability & regime
+	SelfAdaptation         SelfAdaptationState           `json:"self_adaptation"`          // Autonomous parameter backtesting & hot-reloading
+}
+
+// ScalpingRegimeState reports per-symbol scalping viability and mode (Scalp vs Patient Swing).
+type ScalpingRegimeState struct {
+	ScalpingEnabled bool    `json:"scalping_enabled"`
+	Regime          string  `json:"regime"` // "ACTIVE_SCALP", "PATIENT_SWING", "DISABLED_LEAK_GUARD"
+	Reason          string  `json:"reason"`
+	ConsecutiveLoss int     `json:"consecutive_losses"`
+	RollingWinRate  float64 `json:"rolling_win_rate"`
+	RollingPnlUSDT  float64 `json:"rolling_pnl_usdt"`
+}
+
+// SelfAdaptationState reports autonomous parameter backtesting and hot-reloading progress.
+type SelfAdaptationState struct {
+	LastRecalibration  time.Time `json:"last_recalibration"`
+	RecalibrationCount int       `json:"recalibration_count"`
+	Status             string    `json:"status"` // "MONITORING_CALM", "LEAKAGE_DETECTED", "AUTONOMOUS_TUNING", "HOT_RELOADED"
 }
 
 // SymbolMicrostructure maintains isolated per-symbol order-book dynamics,
@@ -198,6 +217,12 @@ type SymbolMicrostructure struct {
 	InventorySince   time.Time
 	BidCooldownUntil time.Time
 	AskCooldownUntil time.Time
+
+	// Self-Improving Scalping Defense
+	ScalpingDisabled       bool
+	ScalpingDisabledReason string
+	ConsecutiveLosses      int
+	RecentPnlWindow        []float64
 }
 
 func newSymbolMicrostructure(symbol string, kylesLambda float64) *SymbolMicrostructure {
@@ -215,6 +240,51 @@ func newSymbolMicrostructure(symbol string, kylesLambda float64) *SymbolMicrostr
 		TradeRate1s: 4.0,
 	}
 }
+
+// EvaluateScalpingViability checks whether high-frequency scalping is profitable in the current regime.
+// If rolling win rate is low, net PnL is negative, or order book toxicity is high, scalping is disabled.
+func (sm *SymbolMicrostructure) EvaluateScalpingViability(tca *TCAMarkoutTracker) (bool, string) {
+	if len(sm.RecentPnlWindow) >= 3 {
+		sumPnL := 0.0
+		losses := 0
+		for _, p := range sm.RecentPnlWindow {
+			sumPnL += p
+			if p < 0 {
+				losses++
+			}
+		}
+		winRate := float64(len(sm.RecentPnlWindow)-losses) / float64(len(sm.RecentPnlWindow))
+
+		// 3+ consecutive losses or low rolling win rate with negative net PnL
+		if sm.ConsecutiveLosses >= 3 {
+			return false, fmt.Sprintf("%d consecutive losses: tight scalping halted", sm.ConsecutiveLosses)
+		}
+		if len(sm.RecentPnlWindow) >= 5 && winRate < 0.35 && sumPnL < 0 {
+			return false, fmt.Sprintf("Rolling win rate low (%.0f%%) with negative net PnL ($%.2f)", winRate*100.0, sumPnL)
+		}
+
+		// Adverse TCA markout (resting maker orders being systematically adverse-selected)
+		if tca != nil {
+			tcaSnap := tca.Snapshot()
+			if tcaSnap.TotalFillsAnalyzed >= 4 && tcaSnap.MeanMarkout1sBps < -1.0 {
+				return false, fmt.Sprintf("Toxic adverse markout (%.2f bps < -1.0 bps)", tcaSnap.MeanMarkout1sBps)
+			}
+		}
+	}
+
+	// Extreme order flow toxicity or cascade risk
+	if sm.VpinCalc != nil && sm.VpinCalc.VPIN() > 0.70 {
+		return false, "High VPIN order flow toxicity (>0.70)"
+	}
+	if sm.HawkesEst != nil && sm.HawkesEst.IsCascadeRisk() {
+		return false, "Hawkes self-exciting cascade event"
+	}
+
+	return true, ""
+}
+
+// AutonomousRecalibrator defines an injected function that runs backtest grid search and persists optimal parameters.
+type AutonomousRecalibrator func(ctx context.Context, symbol string, currentCapital float64, dataDir string) error
 
 // DryRunEngine orchestrates the 14-day autonomous dry run.
 type DryRunEngine struct {
@@ -254,6 +324,11 @@ type DryRunEngine struct {
 	running               atomic.Bool
 	stopCh                chan struct{}
 	wg                    sync.WaitGroup
+
+	// Autonomous self-improving recalibration
+	recalibrator    AutonomousRecalibrator
+	recalibrating   atomic.Bool
+	lastAutoRecalib time.Time
 }
 
 // NewDryRunEngine constructs and recovers or initializes the paper trading engine.
@@ -660,11 +735,18 @@ type cloudOptimalParams struct {
 // maybeReloadCloudParams hot-reloads optimal parameters from cloud optimization without interrupting trading.
 func (e *DryRunEngine) maybeReloadCloudParams() {
 	candidates := []string{"/home/everett/piquant-data/config/optimal_params.json"}
+	if e.cfg.DataDir != "" {
+		candidates = append(candidates,
+			filepath.Join(e.cfg.DataDir, "config/optimal_params.json"),
+			filepath.Join(e.cfg.DataDir, "optimal_params.json"),
+		)
+	}
 	if e.cfg.StateFile != "" {
 		candidates = append(candidates,
 			filepath.Join(filepath.Dir(e.cfg.StateFile), "../config/optimal_params.json"),
 			filepath.Join(filepath.Dir(e.cfg.StateFile), "config/optimal_params.json"),
 			filepath.Join(filepath.Dir(e.cfg.StateFile), "optimal_params.json"),
+			filepath.Join(filepath.Dir(filepath.Dir(e.cfg.StateFile)), "optimal_params.json"),
 		)
 	}
 
@@ -709,6 +791,65 @@ func (e *DryRunEngine) maybeReloadCloudParams() {
 		e.leverageCtrl.UpdateCloudParams(params.BaseLeverage, params.MaxLeverageCap, params.ClipFraction)
 	}
 	e.mu.Unlock()
+}
+
+// SetAutonomousRecalibrator configures the autonomous backtest grid search runner.
+func (e *DryRunEngine) SetAutonomousRecalibrator(fn AutonomousRecalibrator) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.recalibrator = fn
+}
+
+// maybeTriggerAutoRecalibrationLocked asynchronously executes a fast walk-forward backtest grid search
+// and hot-reloads optimal parameters when money leakage or consecutive losses occur.
+// Caller must hold e.mu.
+func (e *DryRunEngine) maybeTriggerAutoRecalibrationLocked(symbol string) {
+	recal := e.recalibrator
+	last := e.lastAutoRecalib
+
+	if recal == nil || e.recalibrating.Load() {
+		return
+	}
+	now := time.Now()
+	if now.Sub(last) < 3*time.Minute {
+		return // Cooldown: at most once every 3 minutes
+	}
+
+	e.recalibrating.Store(true)
+	e.lastAutoRecalib = now
+	e.state.SelfAdaptation.Status = "AUTONOMOUS_TUNING"
+
+	capVal := e.state.Equity
+	dDir := e.cfg.DataDir
+
+	go func() {
+		defer e.recalibrating.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		err := recal(ctx, symbol, capVal, dDir)
+		if err != nil {
+			fmt.Printf("[AUTO-ADAPT] %s: Recalibration error: %v\n", symbol, err)
+			e.mu.Lock()
+			e.state.SelfAdaptation.Status = "RECALIB_ERROR: " + err.Error()
+			e.mu.Unlock()
+			return
+		}
+
+		// Hot reload the newly written parameters immediately
+		e.maybeReloadCloudParams()
+
+		e.mu.Lock()
+		e.state.SelfAdaptation.Status = "HOT_RELOADED"
+		e.state.SelfAdaptation.LastRecalibration = time.Now()
+		e.state.SelfAdaptation.RecalibrationCount++
+		if sm, ok := e.symMicro[symbol]; ok {
+			sm.ConsecutiveLosses = 0
+			sm.RecentPnlWindow = nil
+		}
+		e.mu.Unlock()
+		fmt.Printf("[AUTO-ADAPT] %s: Successfully auto-recalibrated and hot-reloaded new optimal parameters!\n", symbol)
+	}()
 }
 
 // saveCheckpoint serializes DryRunState to JSON.
@@ -785,6 +926,42 @@ func (e *DryRunEngine) saveCheckpoint() error {
 
 	if e.macroGuardian != nil {
 		e.state.Macro = e.macroGuardian.Evaluate(now)
+	}
+
+	// Populate per-symbol scalping regime state for observability
+	e.state.ScalpingState = make(map[string]ScalpingRegimeState, len(e.symMicro))
+	for sym, sm := range e.symMicro {
+		regime := "ACTIVE_SCALP"
+		if sm.ScalpingDisabled {
+			if sm.ConsecutiveLosses >= 4 {
+				regime = "DISABLED_LEAK_GUARD"
+			} else {
+				regime = "PATIENT_SWING"
+			}
+		}
+		winRate := 0.0
+		sumPnL := 0.0
+		if len(sm.RecentPnlWindow) > 0 {
+			losses := 0
+			for _, p := range sm.RecentPnlWindow {
+				sumPnL += p
+				if p < 0 {
+					losses++
+				}
+			}
+			winRate = float64(len(sm.RecentPnlWindow)-losses) / float64(len(sm.RecentPnlWindow)) * 100.0
+		}
+		e.state.ScalpingState[sym] = ScalpingRegimeState{
+			ScalpingEnabled: !sm.ScalpingDisabled,
+			Regime:          regime,
+			Reason:          sm.ScalpingDisabledReason,
+			ConsecutiveLoss: sm.ConsecutiveLosses,
+			RollingWinRate:  winRate,
+			RollingPnlUSDT:  sumPnL,
+		}
+	}
+	if e.state.SelfAdaptation.Status == "" {
+		e.state.SelfAdaptation.Status = "MONITORING_CALM"
 	}
 
 	data, err := json.MarshalIndent(e.state, "", "  ")
@@ -1677,6 +1854,19 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		askOffsetBps = feeFloorBps
 	}
 
+	// Self-Improving Scalping Defense:
+	// If scalping ain't working (leakage / adverse markouts / consecutive losses):
+	// Disable tight micro-scalping entirely and transition to Patient Swing Liquidity Provision!
+	if sm.ScalpingDisabled {
+		swingOffsetBps := math.Max(18.0, feeFloorBps*2.5)
+		if bidOffsetBps < swingOffsetBps {
+			bidOffsetBps = swingOffsetBps
+		}
+		if askOffsetBps < swingOffsetBps {
+			askOffsetBps = swingOffsetBps
+		}
+	}
+
 	targetBid := midPrice - (bidOffsetBps * midPrice * 1e-4)
 	targetAsk := midPrice + (askOffsetBps * midPrice * 1e-4)
 
@@ -1824,6 +2014,14 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			keptOrders = append(keptOrders, ord)
 			continue
 		}
+		// Extreme leakage circuit: immediately cancel resting opening quotes if 4+ consecutive losses
+		if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
+			if (ord.Side == "SELL" && currentInv <= 0) || (ord.Side == "BUY" && currentInv >= 0) {
+				ord.CancelingUntil = now.Add(cancelLatency)
+				keptOrders = append(keptOrders, ord)
+				continue
+			}
+		}
 		// Preserve FIFO queue priority: only cancel & replace if target price moved > 2.5 bps.
 		devBps := math.Abs(ord.Price-target) / target * 1e4
 		if devBps > 2.5 {
@@ -1856,6 +2054,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		}
 		if blendedSkewBps < -1.5 || sm.Ret5sBps < -1.5 || (!sm.BidCooldownUntil.IsZero() && now.Before(sm.BidCooldownUntil)) {
 			allowBuy = false // Toxic cascade defense: do not catch falling knife whether flat or long!
+		}
+		if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
+			allowBuy = false // Extreme leakage circuit: halt opening new long positions until recalibrated!
 		}
 	}
 	if allowBuy {
@@ -1891,6 +2092,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		}
 		if blendedSkewBps > 1.5 || sm.Ret5sBps > 1.5 || (!sm.AskCooldownUntil.IsZero() && now.Before(sm.AskCooldownUntil)) {
 			allowSell = false // Toxic cascade defense: do not short into surging knife whether flat or short!
+		}
+		if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
+			allowSell = false // Extreme leakage circuit: halt opening new short positions until recalibrated!
 		}
 	}
 	if allowSell {
@@ -2022,10 +2226,42 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 	e.state.RealizedPnL += netRealizedPnL
 	e.state.TotalTrades++
 	if realizedPnL != 0 { // Round-trip closing fill
-		if netRealizedPnL > 0 {
-			e.state.WinningTrades++
+		sm := e.symMicro[symbol]
+		if sm != nil {
+			if netRealizedPnL > 0 {
+				e.state.WinningTrades++
+				sm.ConsecutiveLosses = 0
+			} else {
+				e.state.LosingTrades++
+				sm.ConsecutiveLosses++
+			}
+			sm.RecentPnlWindow = append(sm.RecentPnlWindow, netRealizedPnL)
+			if len(sm.RecentPnlWindow) > 10 {
+				sm.RecentPnlWindow = sm.RecentPnlWindow[1:]
+			}
+
+			// Autonomous Scalping Viability Evaluation:
+			// If tight scalping is leaking money or suffering adverse markouts, stop scalping entirely
+			viable, reason := sm.EvaluateScalpingViability(e.tcaTracker)
+			if !viable {
+				if !sm.ScalpingDisabled {
+					sm.ScalpingDisabled = true
+					sm.ScalpingDisabledReason = reason
+					fmt.Printf("[SELF-IMPROVING] %s: Scalping disabled (%s) -> Transitioned to Patient Swing Liquidity Provision.\n", symbol, reason)
+				}
+				// Money leakage detected: trigger autonomous walk-forward backtest recalibration!
+				e.maybeTriggerAutoRecalibrationLocked(symbol)
+			} else if sm.ScalpingDisabled && sm.ConsecutiveLosses == 0 && (sm.VpinCalc == nil || sm.VpinCalc.VPIN() < 0.55) {
+				sm.ScalpingDisabled = false
+				sm.ScalpingDisabledReason = ""
+				fmt.Printf("[SELF-IMPROVING] %s: Market conditions normalized -> Resuming standard two-sided GLFT scalping.\n", symbol)
+			}
 		} else {
-			e.state.LosingTrades++
+			if netRealizedPnL > 0 {
+				e.state.WinningTrades++
+			} else {
+				e.state.LosingTrades++
+			}
 		}
 	}
 
