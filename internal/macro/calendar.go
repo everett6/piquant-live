@@ -385,6 +385,29 @@ func getEmbeddedFallbackSchedule() []MacroEvent {
 		date   string
 		impact ImpactLevel
 	}{
+		// 2024 Historical Major Releases for Tick Backtesting
+		{"CPI m/m", "2024-01-11T13:30:00Z", ImpactHigh},
+		{"FOMC Rate Decision", "2024-01-31T19:00:00Z", ImpactHigh},
+		{"CPI m/m", "2024-02-13T13:30:00Z", ImpactHigh},
+		{"CPI m/m", "2024-03-12T13:30:00Z", ImpactHigh},
+		{"FOMC Rate Decision", "2024-03-20T18:00:00Z", ImpactHigh},
+		{"CPI m/m", "2024-04-10T12:30:00Z", ImpactHigh},
+		{"FOMC Rate Decision", "2024-05-01T18:00:00Z", ImpactHigh},
+		{"CPI m/m", "2024-05-15T12:30:00Z", ImpactHigh},
+		{"CPI m/m", "2024-06-12T12:30:00Z", ImpactHigh},
+		{"FOMC Rate Decision", "2024-06-12T18:00:00Z", ImpactHigh},
+		{"CPI m/m", "2024-07-11T12:30:00Z", ImpactHigh},
+		{"FOMC Rate Decision", "2024-07-31T18:00:00Z", ImpactHigh},
+		{"CPI m/m", "2024-08-14T12:30:00Z", ImpactHigh},
+		{"CPI m/m", "2024-09-11T12:30:00Z", ImpactHigh},
+		{"FOMC Rate Decision", "2024-09-18T18:00:00Z", ImpactHigh},
+		{"CPI m/m", "2024-10-10T12:30:00Z", ImpactHigh},
+		{"FOMC Rate Decision", "2024-11-07T19:00:00Z", ImpactHigh},
+		{"CPI m/m", "2024-11-13T13:30:00Z", ImpactHigh},
+		{"CPI m/m", "2024-12-11T13:30:00Z", ImpactHigh},
+		{"FOMC Rate Decision", "2024-12-18T19:00:00Z", ImpactHigh},
+
+		// 2026/2027 Live Schedule
 		{"FOMC Rate Decision", "2026-11-05T19:00:00Z", ImpactHigh},
 		{"Core CPI m/m", "2026-11-10T13:30:00Z", ImpactHigh},
 		{"CPI y/y", "2026-11-10T13:30:00Z", ImpactHigh},

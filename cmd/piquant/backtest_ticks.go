@@ -25,6 +25,7 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	forceDownload := fs.Bool("force-download", false, "Force download of monthly tick archives from Binance Vision")
 	makerRebate := fs.Float64("maker-rebate-bps", -0.50, "Maker fee rebate in bps (negative for rebate earned)")
 	latencyMs := fs.Float64("latency-ms", 10.0, "Simulated tick-to-quote response delay in ms")
+	enableMacro := fs.Bool("enable-macro", true, "Enable Macro News Shield during tick replay (default true)")
 	gridSearch := fs.Bool("grid-search", false, "Run parallel multi-core parameter grid search across 16 configurations")
 	optimalOut := fs.String("optimal-out", "data/reports/optimal_params.json", "Output path for winning optimal_params.json")
 
@@ -63,6 +64,8 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	cfg.Months = *months
 	cfg.MakerFeeBps = *makerRebate
 	cfg.SimulatedLatencyMs = *latencyMs
+	cfg.EnableMacroShield = *enableMacro
+	cfg.DataDir = filepath.Dir(tDataDir)
 
 	sim := backtest.NewTickSimulator(cfg)
 
@@ -185,6 +188,7 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	fmt.Printf("Exchange Fee Economics:  +$%.2f Maker Rebates Earned - $%.2f Taker Fees = +$%.2f Net\n",
 		res.MakerRebatesEarnedUSD, res.TakerFeesPaidUSD, res.NetFeesCapturedUSD)
 	fmt.Printf("Average Dynamic Lev:     %.2fx (Volatility-scaled Kelly, bounded 1x–3x)\n", res.AvgDynamicLeverage)
+	fmt.Printf("Macro Events Evaded:     %d high-impact releases (Quotes pulled during FOMC/CPI/NFP)\n", res.MacroEventsEvaded)
 	fmt.Printf("TCA Edge Decomposition:  +%.2f bps Spread Capture | +%.2f bps 10s Markout\n",
 		res.TCASpreadCaptureBps, res.TCAMarkout10sBps)
 	fmt.Printf(strings.Repeat("-", 80) + "\n")

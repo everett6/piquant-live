@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"piquant-live/internal/config"
@@ -32,6 +33,7 @@ type dryRunFlags struct {
 	entryOffsetBps    float64
 	stopLossBps       float64
 	cleanReset        bool
+	enableTaker       bool
 	statusOnly        bool
 	reportOnly        bool
 	watch             bool
@@ -62,6 +64,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.Float64Var(&f.targetProfitBps, "target-profit", 12.5, "net target profit margin per swing in bps (default: 12.5 bps = 0.125%)")
 	fs.Float64Var(&f.entryOffsetBps, "entry-offset", 7.5, "minimum maker entry distance from mid in bps (default: 7.5 bps = 0.075%)")
 	fs.Float64Var(&f.stopLossBps, "stop-loss", 60.0, "structural invalidation stop loss in bps (default: 60.0 bps = 0.60%)")
+	fs.BoolVar(&f.enableTaker, "enable-taker", false, "opt-in to tactical taker executions on high-conviction momentum (default false)")
 	fs.BoolVar(&f.cleanReset, "reset", false, "reset cumulative historical win/loss stats and trade count on start")
 	fs.BoolVar(&f.statusOnly, "status", false, "print terminal summary of active dry run and exit")
 	fs.BoolVar(&f.reportOnly, "report", false, "generate and print institutional EOD risk & tear-sheet report and exit")
@@ -107,6 +110,24 @@ func runDryRun(ctx context.Context, args []string) error {
 	if f.statusOnly {
 		return printDryRunStatus(stateFile)
 	}
+
+	// Exclusive file lock on dataDir prevents concurrent processes from clobbering state and accidental shutdown liquidations
+	lockFile := filepath.Join(dDir, "paper", ".dryrun.lock")
+	_ = os.MkdirAll(filepath.Dir(lockFile), 0o755)
+	fl, err := os.OpenFile(lockFile, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to open lock file %s: %w", lockFile, err)
+	}
+	defer fl.Close()
+	if err := syscall.Flock(int(fl.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return fmt.Errorf("another instance of piquant dryrun is already active on %s (use 'piquant top' to monitor)", dDir)
+	}
+	defer func() {
+		_ = syscall.Flock(int(fl.Fd()), syscall.LOCK_UN)
+		_ = os.Remove(lockFile)
+	}()
+	_ = fl.Truncate(0)
+	_, _ = fl.WriteString(fmt.Sprintf("%d\n", os.Getpid()))
 
 	store, err := openStore(f.secretsDir)
 	if err != nil {
@@ -165,6 +186,7 @@ func runDryRun(ctx context.Context, args []string) error {
 		paperCfg.StopLossBps = f.stopLossBps
 	}
 	paperCfg.CleanReset = f.cleanReset
+	paperCfg.EnableTaker = f.enableTaker
 	paperCfg.EnableAllModels = f.enableAllModels
 	paperCfg.ExtendOnShutdown = f.extendOnShutdown
 	paperCfg.FlattenOnShutdown = f.flattenOnShutdown

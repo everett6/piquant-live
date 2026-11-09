@@ -14,6 +14,7 @@ import (
 
 	"piquant-live/internal/engine"
 	"piquant-live/internal/event"
+	"piquant-live/internal/macro"
 	"piquant-live/internal/models/common"
 	"piquant-live/internal/orderbook"
 	"piquant-live/internal/paper"
@@ -36,6 +37,8 @@ type TickSimConfig struct {
 	KellyFraction      float64 `json:"kelly_fraction"`        // Fractional Kelly scaling (e.g. 0.35)
 	WarningDrawdownPct float64 `json:"warning_drawdown_pct"`  // Circuit breaker warning threshold (2.0%)
 	TrippedDrawdownPct float64 `json:"tripped_drawdown_pct"`  // Circuit breaker tripped threshold (3.5%)
+	EnableMacroShield  bool    `json:"enable_macro_shield"`   // Simulate Macro Guardian events (CPI, FOMC, NFP)
+	DataDir            string  `json:"data_dir"`               // Directory for macro cache and persistent logs
 }
 
 // DefaultTickSimConfig returns institutional standard parameters for BTCUSDT tick backtesting.
@@ -56,6 +59,8 @@ func DefaultTickSimConfig() TickSimConfig {
 		KellyFraction:      0.35,  // Conservative 35% fractional Kelly
 		WarningDrawdownPct: 2.00,
 		TrippedDrawdownPct: 3.50,
+		EnableMacroShield:  true,
+		DataDir:            "./data",
 	}
 }
 
@@ -120,6 +125,7 @@ type TickSimResult struct {
 	CircuitBreakerTrips   int                 `json:"circuit_breaker_trips"`
 	HawkesCascadeEvents   int                 `json:"hawkes_cascade_events"`
 	AvgDynamicLeverage    float64             `json:"avg_dynamic_leverage"`
+	MacroEventsEvaded     int                 `json:"macro_events_evaded"`
 	LatencyModel          LatencyComparison   `json:"latency_model"`
 	MonthlyBreakdown      []MonthlyTickMetric `json:"monthly_breakdown"`
 	CrashDefenseAudit     []string            `json:"crash_defense_audit"`
@@ -141,14 +147,16 @@ type TickSimulator struct {
 	tca            *paper.TCAMarkoutTracker
 	queueModel     common.QueueReactiveModel
 	circuitBreaker *paper.CircuitBreaker
+	macroGuardian  *macro.MacroGuardian
 
 	// Live portfolio state
-	currentEquity  float64
-	cashUSD        float64
-	inventoryBase  float64
-	avgEntryPrice  float64
-	peakEquity     float64
-	maxDrawdownPct float64
+	currentEquity      float64
+	cashUSD            float64
+	inventoryBase      float64
+	avgEntryPrice      float64
+	peakEquity         float64
+	maxDrawdownPct     float64
+	macroEventsEvaded  int
 
 	// Resting quote state
 	hasBidQuote   bool
@@ -230,6 +238,15 @@ func NewTickSimulator(cfg TickSimConfig) *TickSimulator {
 		CooldownDuration:         5 * time.Minute,
 	}
 
+	var guardian *macro.MacroGuardian
+	if cfg.EnableMacroShield {
+		dataDir := cfg.DataDir
+		if dataDir == "" {
+			dataDir = "./data"
+		}
+		guardian = macro.NewMacroGuardian(dataDir, "")
+	}
+
 	sim := &TickSimulator{
 		cfg:            cfg,
 		arena:          engine.NewEventArena(4096),
@@ -243,6 +260,7 @@ func NewTickSimulator(cfg TickSimConfig) *TickSimulator {
 		tca:            paper.NewTCAMarkoutTracker(),
 		queueModel:     common.NewQueueReactiveModel(),
 		circuitBreaker: paper.NewCircuitBreaker(cbCfg),
+		macroGuardian:  guardian,
 		currentEquity:  cfg.InitialCapital,
 		cashUSD:        cfg.InitialCapital,
 		peakEquity:     cfg.InitialCapital,
@@ -487,6 +505,27 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 		return
 	}
 
+	// 0. Macro News Shield: check economic calendar and evade high-impact toxicity
+	macroSpreadMult := 1.0
+	macroLevMult := 1.0
+	if s.macroGuardian != nil {
+		macroSt := s.macroGuardian.Evaluate(time.Unix(0, tNs).UTC())
+		if !macroSt.AllowQuoting {
+			if s.hasBidQuote || s.hasAskQuote {
+				s.macroEventsEvaded++
+			}
+			s.hasBidQuote = false
+			s.hasAskQuote = false
+			return
+		}
+		if macroSt.SpreadMultiplier > 1.0 {
+			macroSpreadMult = macroSt.SpreadMultiplier
+		}
+		if macroSt.LeverageMultiplier < 1.0 && macroSt.LeverageMultiplier > 0.0 {
+			macroLevMult = macroSt.LeverageMultiplier
+		}
+	}
+
 	// 1. Dynamic Leverage Distribution: Fractional Kelly scaled by volatility
 	localVolBps := math.Max(0.5, s.hawkes.Intensity()*0.12)
 	if s.hawkes.IsCascadeRisk() {
@@ -499,7 +538,7 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 	if baseLev <= 0 {
 		baseLev = 1.60
 	}
-	targetLev := math.Max(0.5, math.Min(s.cfg.MaxLeverage, baseLev*(8.0/localVolBps)*s.cfg.KellyFraction))
+	targetLev := math.Max(0.5, math.Min(s.cfg.MaxLeverage, baseLev*(8.0/localVolBps)*s.cfg.KellyFraction)) * macroLevMult
 	s.sumDynamicLeverage += targetLev
 	s.leverageSamples++
 
@@ -543,7 +582,7 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 		toxicityWidenBps += 5.0
 	}
 
-	halfSpreadBps := s.cfg.BaseSpreadBps + toxicityWidenBps
+	halfSpreadBps := (s.cfg.BaseSpreadBps + toxicityWidenBps) * macroSpreadMult
 	bidOffsetBps := halfSpreadBps + inventorySkewBps
 	askOffsetBps := halfSpreadBps - inventorySkewBps
 
@@ -765,6 +804,7 @@ func (s *TickSimulator) FinalizeResult(monthlyMetrics []MonthlyTickMetric) TickS
 		CircuitBreakerTrips:   0,
 		HawkesCascadeEvents:   s.hawkesCascadesSeen,
 		AvgDynamicLeverage:    meanLev,
+		MacroEventsEvaded:     s.macroEventsEvaded,
 		LatencyModel: LatencyComparison{
 			SanJoseToTokyoRTTMs:    108.0,
 			ColocationTokyoRTTMs:   1.2,
@@ -777,6 +817,7 @@ func (s *TickSimulator) FinalizeResult(monthlyMetrics []MonthlyTickMetric) TickS
 			"VPIN toxicity detector widened quotes by 3x-4x during informed order flow bursts, mitigating adverse selection.",
 			"Dynamic leverage model maintained 1.0x-2.2x exposure, reducing leverage to 0.5x during high-vol regimes with zero liquidation events.",
 			"4-State Intraday Circuit Breaker protected capital during high-vol wicks with zero catastrophic breaches.",
+			fmt.Sprintf("Macro News Shield evaded %d high-impact macro announcements (CPI/FOMC/NFP), pulling quotes or widening spreads to prevent adverse selection.", s.macroEventsEvaded),
 		},
 	}
 }

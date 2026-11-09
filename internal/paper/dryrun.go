@@ -47,6 +47,7 @@ type DryRunConfig struct {
 	EntryOffsetBps    float64       // Minimum maker entry distance from mid in bps (default: 12.5 bps = 0.125%)
 	StopLossBps       float64       // Structural invalidation stop loss in bps (default: 75.0 bps = 0.75%)
 	CleanReset        bool          // Reset cumulative historical win/loss stats on start
+	EnableTaker       bool          // Opt-in to tactical taker executions on high-conviction momentum (default: false)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -77,6 +78,7 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		EntryOffsetBps:    7.5,
 		StopLossBps:       60.0,
 		CleanReset:        false,
+		EnableTaker:       false,
 	}
 }
 
@@ -1861,9 +1863,10 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	e.activeOrders[symbol] = orders
 
 	// Tactical Taker Execution:
-	// In HFT market making, taker orders are strictly restricted to extreme momentum dislocations (>= 15.0 bps)
-	// that clear double round-trip cost hurdles, preventing fee bleed on high-frequency noise.
-	if math.Abs(metaPred) >= 15.0 && e.conformal.PassesConformalGate(metaPred, x[10], (e.cfg.TakerFeeBps+e.cfg.MakerFeeBps)*2.0) {
+	// Only permitted if explicitly opted in via EnableTaker configuration (default: false in pure MM).
+	// In pure market making, taker orders are disabled by default to eliminate taker fee drag (4 bps)
+	// and avoid crossing into adverse market momentum.
+	if e.cfg.EnableTaker && math.Abs(metaPred) >= 15.0 && e.conformal.PassesConformalGate(metaPred, x[10], (e.cfg.TakerFeeBps+e.cfg.MakerFeeBps)*2.0) {
 		e.simulateTakerFillLocked(symbol, midPrice, metaPred)
 	}
 }
