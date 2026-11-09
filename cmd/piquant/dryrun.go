@@ -62,7 +62,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.Float64Var(&f.maxLev, "max-leverage", 3.5, "maximum allowable leverage ceiling")
 	fs.StringVar(&f.symbols, "symbols", "BTCUSDT,ETHUSDT", "comma-separated trading symbols")
 	fs.Float64Var(&f.targetProfitBps, "target-profit", 12.5, "net target profit margin per swing in bps (default: 12.5 bps = 0.125%)")
-	fs.Float64Var(&f.entryOffsetBps, "entry-offset", 7.5, "minimum maker entry distance from mid in bps (default: 7.5 bps = 0.075%)")
+	fs.Float64Var(&f.entryOffsetBps, "entry-offset", 1.25, "minimum maker entry distance from mid in bps (default: 1.25 bps = 0.0125%)")
 	fs.Float64Var(&f.stopLossBps, "stop-loss", 60.0, "structural invalidation stop loss in bps (default: 60.0 bps = 0.60%)")
 	fs.BoolVar(&f.enableTaker, "enable-taker", false, "opt-in to tactical taker executions on high-conviction momentum (default false)")
 	fs.BoolVar(&f.cleanReset, "reset", false, "reset cumulative historical win/loss stats and trade count on start")

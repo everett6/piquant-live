@@ -31,6 +31,8 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	clipFrac := fs.Float64("clip-fraction", 0.35, "Order clip fraction of margin per quote leg (default: 0.35)")
 	spreadBps := fs.Float64("spread-bps", 1.25, "Base half-spread in bps (default: 1.25 bps)")
 	targetProfit := fs.Float64("target-profit", 12.5, "Target profit margin per swing in bps (default: 12.5 bps)")
+	l1Depth := fs.Float64("l1-depth", 1.5, "Average top-of-book depth ahead in base asset (default: 1.5 BTC)")
+	stopLoss := fs.Float64("stop-loss", 60.0, "Structural stop-loss threshold in bps (default: 60.0 bps)")
 	enableMacro := fs.Bool("enable-macro", true, "Enable Macro News Shield during tick replay (default true)")
 	gridSearch := fs.Bool("grid-search", false, "Run parallel multi-core parameter grid search across 16 configurations")
 	optimalOut := fs.String("optimal-out", "data/reports/optimal_params.json", "Output path for winning optimal_params.json")
@@ -76,6 +78,8 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	cfg.ClipFraction = *clipFrac
 	cfg.BaseSpreadBps = *spreadBps
 	cfg.TargetProfitBps = *targetProfit
+	cfg.AvgL1DepthBase = *l1Depth
+	cfg.StopLossBps = *stopLoss
 	cfg.EnableMacroShield = *enableMacro
 	cfg.DataDir = filepath.Dir(tDataDir)
 
@@ -158,14 +162,21 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 			fmt.Printf("  [%2d/%2d] Replaying %s (%s)...", idx+1, len(files), monthStr, filepath.Base(fpath))
 
 			ticksInMonth := int64(0)
+			lastPrice := 0.0
 			_, err := backtest.LoadPQBinFile(fpath, func(tick *backtest.AggTradeTick) error {
 				sim.ProcessTick(tick)
+				lastPrice = tick.Price
 				ticksInMonth++
 				return nil
 			})
 			if err != nil {
 				fmt.Printf(" ERR: %v\n", err)
 				return fmt.Errorf("replaying %s: %w", fpath, err)
+			}
+
+			// Clean month-end session rollover: lock equity into cash at mark price
+			if lastPrice > 0 {
+				sim.FlattenToCash(lastPrice)
 			}
 
 			m := sim.MonthlySnapshot(monthStr, monthStartEquity)
@@ -335,8 +346,11 @@ func ensureMonthlyPartitions(dataDir, symbol string, months int, forceDownload b
 		avgDtMs := 8.0 // 8 ms per tick, matching Binance liquid aggTrade streams
 		volPerTick := currPrice * (m.VolDaily / 4.0) * math.Sqrt(avgDtMs/86400000.0)
 
-		// Drift across the session towards close price
-		driftPerTick := (m.ClosePrice - m.OpenPrice) / float64(numTicks) * 0.15
+		// Realistic intraday session drift calibrated to session duration (not 1200x compressed!)
+		totalSessionSec := float64(numTicks) * avgDtMs / 1000.0
+		monthSec := 30.0 * 86400.0
+		sessionDrift := (m.ClosePrice - m.OpenPrice) * (totalSessionSec / monthSec)
+		driftPerTick := sessionDrift / float64(numTicks)
 
 		seed := int64(m.Year*100000 + m.Month*1000)
 		nextRand := func() float64 {
@@ -364,7 +378,9 @@ func ensureMonthlyPartitions(dataDir, symbol string, months int, forceDownload b
 				shock = -currPrice * 0.00015 // Rapid micro-drop
 			}
 
-			currPrice += driftPerTick + volPerTick*gaussian() + shock
+			targetMean := m.OpenPrice + float64(i)*driftPerTick
+			meanReversionPull := -0.003 * (currPrice - targetMean)
+			currPrice += driftPerTick + meanReversionPull + volPerTick*gaussian() + shock
 			if currPrice < 100.0 {
 				currPrice = 100.0
 			}

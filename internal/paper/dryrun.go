@@ -75,7 +75,7 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		EnableMacroShield: true,
 		DataDir:           dataDir,
 		TargetProfitBps:   12.5,
-		EntryOffsetBps:    7.5,
+		EntryOffsetBps:    1.25,
 		StopLossBps:       60.0,
 		CleanReset:        false,
 		EnableTaker:       false,
@@ -303,7 +303,7 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		cfg.TargetProfitBps = 12.5
 	}
 	if cfg.EntryOffsetBps <= 0 {
-		cfg.EntryOffsetBps = 7.5
+		cfg.EntryOffsetBps = 1.25
 	}
 	if cfg.StopLossBps <= 0 {
 		cfg.StopLossBps = 60.0
