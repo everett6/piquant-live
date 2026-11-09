@@ -115,15 +115,16 @@ type TradeRecord struct {
 
 // ActiveMakerOrder tracks an active resting limit maker order in the paper book.
 type ActiveMakerOrder struct {
-	Symbol     string    `json:"symbol"`
-	Side       string    `json:"side"` // "BUY" or "SELL"
-	Price      float64   `json:"price"`
-	Size       float64   `json:"size"`
-	PlacedAt   time.Time `json:"placed_at"`
-	ActiveAt   time.Time `json:"active_at"` // PlacedAt + OrderLatency
-	QueueAhead float64   `json:"queue_ahead"`
-	Strategy   string    `json:"strategy"`
-	EdgeBps    float64   `json:"edge_bps"`
+	Symbol         string    `json:"symbol"`
+	Side           string    `json:"side"` // "BUY" or "SELL"
+	Price          float64   `json:"price"`
+	Size           float64   `json:"size"`
+	PlacedAt       time.Time `json:"placed_at"`
+	ActiveAt       time.Time `json:"active_at"` // PlacedAt + OrderLatency
+	QueueAhead     float64   `json:"queue_ahead"`
+	Strategy       string    `json:"strategy"`
+	EdgeBps        float64   `json:"edge_bps"`
+	CancelingUntil time.Time `json:"canceling_until,omitempty"` // Cancel propagation transit delay (cancel race)
 }
 
 // DryRunState is the checkpointable state of the 14-day paper trading engine.
@@ -1263,6 +1264,11 @@ func (e *DryRunEngine) matchMakerOrders(symbol string, tradePrice float64, trade
 
 	var remaining []*ActiveMakerOrder
 	for _, ord := range orders {
+		// Cancel propagation delay: if order was canceled and cancel transit duration has passed, prune it
+		if !ord.CancelingUntil.IsZero() && now.After(ord.CancelingUntil) {
+			continue
+		}
+
 		// Feed + order latency: resting order does not participate in matching before ActiveAt
 		if now.Before(ord.ActiveAt) {
 			remaining = append(remaining, ord)
@@ -1757,10 +1763,24 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	defer e.mu.Unlock()
 
 	orders := e.activeOrders[symbol]
+	latency := e.cfg.OrderLatency
+	if latency <= 0 {
+		latency = 120 * time.Millisecond
+	}
+	cancelLatency := latency / 2 // Half-RTT cancel message transit to matching engine
+
 	var keptOrders []*ActiveMakerOrder
 	hasBuy := false
 	hasSell := false
 	for _, ord := range orders {
+		// In-flight cancel already dispatched: keep alive until cancel confirmation arrives
+		if !ord.CancelingUntil.IsZero() {
+			if now.Before(ord.CancelingUntil) {
+				keptOrders = append(keptOrders, ord)
+			}
+			continue
+		}
+
 		target := targetBid
 		if ord.Side == "SELL" {
 			target = targetAsk
@@ -1768,13 +1788,16 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		// When holding inventory, exit order must match full position size and be priced at or above minProfitAsk
 		if (currentInv > 0 && ord.Side == "SELL" && math.Abs(ord.Size-math.Abs(currentInv)) > 1e-6) ||
 			(currentInv < 0 && ord.Side == "BUY" && math.Abs(ord.Size-math.Abs(currentInv)) > 1e-6) {
-			continue // cancel order to replace with correct full position exit size and price
+			ord.CancelingUntil = now.Add(cancelLatency)
+			keptOrders = append(keptOrders, ord)
+			continue
 		}
 		// Preserve FIFO queue priority: only cancel & replace if target price moved > 2.5 bps.
-		// Avoid cancelling orders solely due to time elapsed, preserving queue position.
 		devBps := math.Abs(ord.Price-target) / target * 1e4
 		if devBps > 2.5 {
-			continue // cancel stale order
+			ord.CancelingUntil = now.Add(cancelLatency)
+			keptOrders = append(keptOrders, ord)
+			continue
 		}
 		keptOrders = append(keptOrders, ord)
 		if ord.Side == "BUY" {
@@ -1785,11 +1808,6 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		}
 	}
 	orders = keptOrders
-
-	latency := e.cfg.OrderLatency
-	if latency <= 0 {
-		latency = 120 * time.Millisecond
-	}
 
 	// Place resting BUY maker quote at the BACK of the real L1 queue
 	// If currently short (currentInv < 0), this is an inventory COVER order: unconditionally allowed!

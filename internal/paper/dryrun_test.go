@@ -936,7 +936,7 @@ func TestAdaptiveMicrostructureFormulasAndProfitDecayRatchet(t *testing.T) {
 	stDecay := engine.State()
 	var exitAsk *ActiveMakerOrder
 	for _, o := range stDecay.ActiveOrders["ETHUSDT"] {
-		if o.Side == "SELL" {
+		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
 			exitAsk = &o
 			break
 		}

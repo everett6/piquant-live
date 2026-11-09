@@ -25,10 +25,12 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	forceDownload := fs.Bool("force-download", false, "Force download of monthly tick archives from Binance Vision")
 	makerRebate := fs.Float64("maker-rebate-bps", -0.50, "Maker fee rebate in bps (negative for rebate earned)")
 	latencyMs := fs.Float64("latency-ms", 10.0, "Simulated tick-to-quote response delay in ms")
+	cancelLatencyMs := fs.Float64("cancel-latency-ms", 5.0, "In-flight cancel propagation delay in ms")
 	baseLev := fs.Float64("base-leverage", 2.50, "Base dynamic leverage multiplier (default: 2.5x)")
 	maxLev := fs.Float64("max-leverage", 3.50, "Maximum dynamic leverage cap (default: 3.5x)")
 	clipFrac := fs.Float64("clip-fraction", 0.35, "Order clip fraction of margin per quote leg (default: 0.35)")
 	spreadBps := fs.Float64("spread-bps", 1.25, "Base half-spread in bps (default: 1.25 bps)")
+	targetProfit := fs.Float64("target-profit", 12.5, "Target profit margin per swing in bps (default: 12.5 bps)")
 	enableMacro := fs.Bool("enable-macro", true, "Enable Macro News Shield during tick replay (default true)")
 	gridSearch := fs.Bool("grid-search", false, "Run parallel multi-core parameter grid search across 16 configurations")
 	optimalOut := fs.String("optimal-out", "data/reports/optimal_params.json", "Output path for winning optimal_params.json")
@@ -53,8 +55,8 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	fmt.Printf("[PiQuant] High-Resolution Monthly Tick Simulation Engine\n")
 	fmt.Printf("[PiQuant] Instrument: %s | Starting Capital: $%.2f | Timeframe: %d Months (2024–2026)\n",
 		sym, *capital, *months)
-	fmt.Printf("[PiQuant] Execution Modeling: %.2f bps Maker Rebate | %.1f ms Simulated Tick-to-Quote Delay\n",
-		*makerRebate, *latencyMs)
+	fmt.Printf("[PiQuant] Execution Modeling: %.2f bps Maker Rebate | %.1f ms Order Delay | %.1f ms Cancel Delay\n",
+		*makerRebate, *latencyMs, *cancelLatencyMs)
 	fmt.Printf("[PiQuant] Verifying local binary tick partitions in %s...\n", tDataDir)
 
 	// Ensure 24 monthly partitions exist (or build from Binance Vision / verified intraday archives)
@@ -68,10 +70,12 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	cfg.Months = *months
 	cfg.MakerFeeBps = *makerRebate
 	cfg.SimulatedLatencyMs = *latencyMs
+	cfg.CancelLatencyMs = *cancelLatencyMs
 	cfg.BaseLeverage = *baseLev
 	cfg.MaxLeverage = *maxLev
 	cfg.ClipFraction = *clipFrac
 	cfg.BaseSpreadBps = *spreadBps
+	cfg.TargetProfitBps = *targetProfit
 	cfg.EnableMacroShield = *enableMacro
 	cfg.DataDir = filepath.Dir(tDataDir)
 

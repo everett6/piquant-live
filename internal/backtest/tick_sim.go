@@ -28,12 +28,14 @@ type TickSimConfig struct {
 	MakerFeeBps        float64 `json:"maker_fee_bps"`         // Negative for rebate (e.g. -0.5 bps), or 0.0
 	TakerFeeBps        float64 `json:"taker_fee_bps"`         // Taker fee for emergency reduce-only hedges (e.g. 3.5 bps)
 	SimulatedLatencyMs float64 `json:"simulated_latency_ms"`  // Simulated tick-to-quote response latency (ms)
+	CancelLatencyMs    float64 `json:"cancel_latency_ms"`     // In-flight cancel propagation delay (ms, default 5.0)
 	BaseSpreadBps      float64 `json:"base_spread_bps"`       // Base half-spread (bps)
 	MinHalfSpreadBps   float64 `json:"min_half_spread_bps"`   // Minimum half-spread floor (bps, default 0.25)
+	TargetProfitBps    float64 `json:"target_profit_bps"`     // Dynamic profit ratchet starting net margin (bps, default 12.5)
 	Gamma              float64 `json:"gamma"`                 // GLFT inventory risk aversion parameter (default 0.001)
-	ClipFraction       float64 `json:"clip_fraction"`         // Order clip fraction of active margin (default 0.15)
-	BaseLeverage       float64 `json:"base_leverage"`         // Base leverage multiplier (default 1.6)
-	MaxLeverage        float64 `json:"max_leverage"`          // Maximum dynamic leverage cap (e.g. 3.0x; never 20x-50x)
+	ClipFraction       float64 `json:"clip_fraction"`         // Order clip fraction of active margin (default 0.35)
+	BaseLeverage       float64 `json:"base_leverage"`         // Base leverage multiplier (default 2.50)
+	MaxLeverage        float64 `json:"max_leverage"`          // Maximum dynamic leverage cap (e.g. 3.50x; never 20x-50x)
 	KellyFraction      float64 `json:"kelly_fraction"`        // Fractional Kelly scaling (e.g. 0.35)
 	WarningDrawdownPct float64 `json:"warning_drawdown_pct"`  // Circuit breaker warning threshold (2.0%)
 	TrippedDrawdownPct float64 `json:"tripped_drawdown_pct"`  // Circuit breaker tripped threshold (3.5%)
@@ -50,12 +52,14 @@ func DefaultTickSimConfig() TickSimConfig {
 		MakerFeeBps:        -0.50, // VIP maker rebate (-0.5 bps earned per passive fill)
 		TakerFeeBps:        3.50,  // Taker fee (3.5 bps)
 		SimulatedLatencyMs: 10.0,  // 10ms local tick-to-quote engine delay
-		BaseSpreadBps:      1.50,  // 1.5 bps base spread
+		CancelLatencyMs:    5.0,   // 5ms in-flight cancel propagation delay
+		BaseSpreadBps:      1.25,  // 1.25 bps base spread
 		MinHalfSpreadBps:   0.25,  // 0.25 bps half-spread floor
+		TargetProfitBps:    12.5,  // 12.5 bps target profit ratchet starting margin
 		Gamma:              1e-3,  // GLFT inventory risk aversion
-		ClipFraction:       0.15,  // 15% clip fraction per quote leg
-		BaseLeverage:       1.60,  // 1.6x nominal base leverage
-		MaxLeverage:        3.00,  // Bounded 1x–3x leverage
+		ClipFraction:       0.35,  // 35% clip fraction per quote leg
+		BaseLeverage:       2.50,  // 2.5x nominal base leverage
+		MaxLeverage:        3.50,  // Bounded 1x–3.5x leverage
 		KellyFraction:      0.35,  // Conservative 35% fractional Kelly
 		WarningDrawdownPct: 2.00,
 		TrippedDrawdownPct: 3.50,
@@ -170,6 +174,22 @@ type TickSimulator struct {
 	bidQuoteTime  int64
 	askQuoteTime  int64
 
+	// In-flight stale quote awaiting cancel confirmation at matching engine (cancel race adverse selection)
+	staleBidPrice    float64
+	staleBidSize     float64
+	staleBidQueue    float64
+	staleBidCancelAt int64
+
+	staleAskPrice    float64
+	staleAskSize     float64
+	staleAskQueue    float64
+	staleAskCancelAt int64
+
+	// Realized volatility variance tracker & position hold duration
+	lastMidPrice float64
+	volVarBps    float64
+	entryTimeNs  int64
+
 	// Running accumulators
 	totalTicksProcessed int64
 	totalQuotesPlaced   int64
@@ -201,22 +221,28 @@ func NewTickSimulator(cfg TickSimConfig) *TickSimulator {
 		cfg.InitialCapital = 1000.00
 	}
 	if cfg.BaseSpreadBps <= 0 {
-		cfg.BaseSpreadBps = 1.50
+		cfg.BaseSpreadBps = 1.25
 	}
 	if cfg.MinHalfSpreadBps <= 0 {
 		cfg.MinHalfSpreadBps = 0.25
+	}
+	if cfg.CancelLatencyMs <= 0 {
+		cfg.CancelLatencyMs = 5.0
+	}
+	if cfg.TargetProfitBps <= 0 {
+		cfg.TargetProfitBps = 12.5
 	}
 	if cfg.Gamma <= 0 {
 		cfg.Gamma = 1e-3
 	}
 	if cfg.ClipFraction <= 0 {
-		cfg.ClipFraction = 0.15
+		cfg.ClipFraction = 0.35
 	}
 	if cfg.BaseLeverage <= 0 {
-		cfg.BaseLeverage = 1.60
+		cfg.BaseLeverage = 2.50
 	}
 	if cfg.MaxLeverage <= 0 {
-		cfg.MaxLeverage = 3.00
+		cfg.MaxLeverage = 3.50
 	}
 	if cfg.KellyFraction <= 0 {
 		cfg.KellyFraction = 0.35
@@ -277,6 +303,18 @@ func (s *TickSimulator) ProcessTick(tick *AggTradeTick) {
 	price := tick.Price
 	qty := tick.Quantity
 	isBuyerMaker := tick.IsBuyerMaker
+
+	// 0. Online Realized Volatility Variance (EMA of squared price tick returns)
+	if s.lastMidPrice > 0 && price > 0 {
+		tickRetBps := math.Abs(price-s.lastMidPrice) / s.lastMidPrice * 1e4
+		s.volVarBps = math.Sqrt(0.98*s.volVarBps*s.volVarBps + 0.02*tickRetBps*tickRetBps)
+		if s.volVarBps < 0.25 {
+			s.volVarBps = 0.25
+		}
+	} else if s.volVarBps <= 0 {
+		s.volVarBps = 0.40
+	}
+	s.lastMidPrice = price
 
 	// 1. Memory Arena Allocation & Lock-Free SPSC Transfer
 	ev := s.arena.Alloc()
@@ -361,55 +399,117 @@ func (s *TickSimulator) ProcessTick(tick *AggTradeTick) {
 	}
 }
 
-// evaluateFill matches incoming aggressive volume against resting limit orders.
+// executeFill performs unified portfolio accounting for fills on resting or stale quotes.
+func (s *TickSimulator) executeFill(fillPrice, fillQty float64, isBid bool, tNs int64) {
+	if fillQty <= 0 {
+		return
+	}
+	tradeNotional := fillQty * fillPrice
+	makerRebateUSD := tradeNotional * (-s.cfg.MakerFeeBps / 10000.0)
+
+	if isBid {
+		s.cashUSD -= tradeNotional
+		s.cashUSD += makerRebateUSD
+		s.makerRebatesUSD += makerRebateUSD
+
+		// Position accounting & round-trip PnL check
+		if s.inventoryBase < 0 {
+			// Covering short
+			coveredQty := math.Min(fillQty, -s.inventoryBase)
+			pnl := (s.avgEntryPrice-fillPrice)*coveredQty + makerRebateUSD
+			if pnl > 0 {
+				s.winningFillsCount++
+			}
+		}
+		// Update inventory and average entry price
+		if s.inventoryBase >= 0 {
+			newTotal := s.inventoryBase + fillQty
+			if newTotal > 0 {
+				s.avgEntryPrice = (s.inventoryBase*s.avgEntryPrice + fillQty*fillPrice) / newTotal
+			}
+		}
+		wasZero := math.Abs(s.inventoryBase) < 1e-6
+		s.inventoryBase += fillQty
+		if math.Abs(s.inventoryBase) < 1e-6 {
+			s.inventoryBase = 0
+			s.avgEntryPrice = 0
+			s.entryTimeNs = 0
+		} else if wasZero {
+			s.entryTimeNs = tNs
+		}
+
+		s.hasBidQuote = false
+		s.bidQueueAhead = 0
+	} else {
+		s.cashUSD += tradeNotional
+		s.cashUSD += makerRebateUSD
+		s.makerRebatesUSD += makerRebateUSD
+
+		if s.inventoryBase > 0 {
+			// Closing long: realize profit!
+			closedQty := math.Min(fillQty, s.inventoryBase)
+			pnl := (fillPrice-s.avgEntryPrice)*closedQty + makerRebateUSD
+			if pnl > 0 {
+				s.winningFillsCount++
+			}
+		}
+		if s.inventoryBase <= 0 {
+			newTotal := -s.inventoryBase + fillQty
+			if newTotal > 0 {
+				s.avgEntryPrice = (-s.inventoryBase*s.avgEntryPrice + fillQty*fillPrice) / newTotal
+			}
+		}
+		wasZero := math.Abs(s.inventoryBase) < 1e-6
+		s.inventoryBase -= fillQty
+		if math.Abs(s.inventoryBase) < 1e-6 {
+			s.inventoryBase = 0
+			s.avgEntryPrice = 0
+			s.entryTimeNs = 0
+		} else if wasZero {
+			s.entryTimeNs = tNs
+		}
+
+		s.hasAskQuote = false
+		s.askQueueAhead = 0
+	}
+
+	s.totalFillsCount++
+	fillID := uint64(s.totalFillsCount)
+	sideSign := int8(1)
+	midAtFill := fillPrice * (1.0 + s.cfg.BaseSpreadBps/10000.0)
+	if !isBid {
+		sideSign = -1
+		midAtFill = fillPrice * (1.0 - s.cfg.BaseSpreadBps/10000.0)
+	}
+	s.tca.RecordFill(fillID, s.cfg.Symbol, sideSign, fillPrice, midAtFill, tNs)
+	s.circuitBreaker.OnFill(0, s.inventoryBase)
+}
+
+// evaluateFill matches incoming aggressive volume against resting limit orders and in-flight stale cancels.
 func (s *TickSimulator) evaluateFill(tick *AggTradeTick, price, qty float64, isBuyerMaker bool, tNs int64, maxPosBase float64) {
-	// AggTradeTick represents an aggregated trade bar/print. An aggressor sell (isBuyerMaker=true)
-	// sweeps down to price*(1 - BaseSpreadBps/10000), and an aggressor buy (isBuyerMaker=false)
-	// sweeps up to price*(1 + BaseSpreadBps/10000).
 	touchSweep := price * (s.cfg.BaseSpreadBps / 10000.0)
+
 	// Buyer maker = true => Aggressor is SELLER hitting BID side
-	if isBuyerMaker && s.hasBidQuote {
-		if tNs-s.bidQuoteTime >= int64(s.cfg.SimulatedLatencyMs*1_000_000) {
+	if isBuyerMaker {
+		// 1. Check in-flight stale bid awaiting cancel confirmation at exchange (cancel-race adverse selection)
+		if s.staleBidCancelAt > tNs {
+			if price-touchSweep <= s.staleBidPrice+0.01 {
+				if s.staleBidQueue <= qty {
+					fillQty := math.Min(s.staleBidSize, qty)
+					s.executeFill(s.staleBidPrice, fillQty, true, tNs)
+					s.staleBidCancelAt = 0
+				} else {
+					s.staleBidQueue -= qty
+				}
+			}
+		}
+
+		// 2. Check active resting bid quote
+		if s.hasBidQuote && tNs-s.bidQuoteTime >= int64(s.cfg.SimulatedLatencyMs*1_000_000) {
 			if price-touchSweep <= s.bidPrice+0.01 {
 				if s.bidQueueAhead <= qty {
 					fillQty := math.Min(s.bidSize, qty)
-					fillPrice := s.bidPrice
-
-					tradeNotional := fillQty * fillPrice
-					makerRebateUSD := tradeNotional * (-s.cfg.MakerFeeBps / 10000.0)
-
-					s.cashUSD -= tradeNotional
-					s.cashUSD += makerRebateUSD
-					s.makerRebatesUSD += makerRebateUSD
-
-					// Position accounting & round-trip PnL check
-					if s.inventoryBase < 0 {
-						// Covering short
-						coveredQty := math.Min(fillQty, -s.inventoryBase)
-						pnl := (s.avgEntryPrice-fillPrice)*coveredQty + makerRebateUSD
-						if pnl > 0 {
-							s.winningFillsCount++
-						}
-					}
-					// Update inventory and average entry price
-					if s.inventoryBase >= 0 {
-						newTotal := s.inventoryBase + fillQty
-						if newTotal > 0 {
-							s.avgEntryPrice = (s.inventoryBase*s.avgEntryPrice + fillQty*fillPrice) / newTotal
-						}
-					}
-					s.inventoryBase += fillQty
-
-					s.totalFillsCount++
-					fillID := uint64(s.totalFillsCount)
-					// Fair mid price at fill is above the resting bid
-					midAtFill := fillPrice * (1.0 + s.cfg.BaseSpreadBps/10000.0)
-					s.tca.RecordFill(fillID, s.cfg.Symbol, +1, fillPrice, midAtFill, tNs)
-
-					s.hasBidQuote = false
-					s.bidQueueAhead = 0
-
-					s.circuitBreaker.OnFill(0, s.inventoryBase)
+					s.executeFill(s.bidPrice, fillQty, true, tNs)
 				} else {
 					s.bidQueueAhead -= qty
 				}
@@ -418,46 +518,26 @@ func (s *TickSimulator) evaluateFill(tick *AggTradeTick, price, qty float64, isB
 	}
 
 	// Buyer maker = false => Aggressor is BUYER hitting ASK side
-	if !isBuyerMaker && s.hasAskQuote {
-		if tNs-s.askQuoteTime >= int64(s.cfg.SimulatedLatencyMs*1_000_000) {
+	if !isBuyerMaker {
+		// 1. Check in-flight stale ask awaiting cancel confirmation at exchange (cancel-race adverse selection)
+		if s.staleAskCancelAt > tNs {
+			if price+touchSweep >= s.staleAskPrice-0.01 {
+				if s.staleAskQueue <= qty {
+					fillQty := math.Min(s.staleAskSize, qty)
+					s.executeFill(s.staleAskPrice, fillQty, false, tNs)
+					s.staleAskCancelAt = 0
+				} else {
+					s.staleAskQueue -= qty
+				}
+			}
+		}
+
+		// 2. Check active resting ask quote
+		if s.hasAskQuote && tNs-s.askQuoteTime >= int64(s.cfg.SimulatedLatencyMs*1_000_000) {
 			if price+touchSweep >= s.askPrice-0.01 {
 				if s.askQueueAhead <= qty {
 					fillQty := math.Min(s.askSize, qty)
-					fillPrice := s.askPrice
-
-					tradeNotional := fillQty * fillPrice
-					makerRebateUSD := tradeNotional * (-s.cfg.MakerFeeBps / 10000.0)
-
-					s.cashUSD += tradeNotional
-					s.cashUSD += makerRebateUSD
-					s.makerRebatesUSD += makerRebateUSD
-
-					if s.inventoryBase > 0 {
-						// Closing long: realize profit!
-						closedQty := math.Min(fillQty, s.inventoryBase)
-						pnl := (fillPrice-s.avgEntryPrice)*closedQty + makerRebateUSD
-						if pnl > 0 {
-							s.winningFillsCount++
-						}
-					}
-					if s.inventoryBase <= 0 {
-						newTotal := -s.inventoryBase + fillQty
-						if newTotal > 0 {
-							s.avgEntryPrice = (-s.inventoryBase*s.avgEntryPrice + fillQty*fillPrice) / newTotal
-						}
-					}
-					s.inventoryBase -= fillQty
-
-					s.totalFillsCount++
-					fillID := uint64(s.totalFillsCount)
-					// Fair mid price at fill is below the resting ask
-					midAtFill := fillPrice * (1.0 - s.cfg.BaseSpreadBps/10000.0)
-					s.tca.RecordFill(fillID, s.cfg.Symbol, -1, fillPrice, midAtFill, tNs)
-
-					s.hasAskQuote = false
-					s.askQueueAhead = 0
-
-					s.circuitBreaker.OnFill(0, s.inventoryBase)
+					s.executeFill(s.askPrice, fillQty, false, tNs)
 				} else {
 					s.askQueueAhead -= qty
 				}
@@ -498,11 +578,16 @@ func (s *TickSimulator) evaluateInventoryAging(midPrice float64, tNs int64) {
 	}
 }
 
-// refreshQuotes computes the optimal Avellaneda-Stoikov / GLFT quotes with dynamic leverage
-// and queues them into the book with realistic queue position.
+// refreshQuotes computes the optimal Avellaneda-Stoikov / GLFT quotes with dynamic leverage,
+// in-flight cancel latency tracking, and dynamic profit ratchet exits.
 func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase float64) {
 	if midPrice <= 0 || s.currentEquity <= 10.0 {
 		return
+	}
+
+	cancelDurationNs := int64(s.cfg.CancelLatencyMs * 1_000_000)
+	if cancelDurationNs <= 0 {
+		cancelDurationNs = 5 * 1_000_000 // 5ms default cancel propagation delay
 	}
 
 	// 0. Macro News Shield: check economic calendar and evade high-impact toxicity
@@ -513,6 +598,18 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 		if !macroSt.AllowQuoting {
 			if s.hasBidQuote || s.hasAskQuote {
 				s.macroEventsEvaded++
+			}
+			if s.hasBidQuote {
+				s.staleBidPrice = s.bidPrice
+				s.staleBidSize = s.bidSize
+				s.staleBidQueue = s.bidQueueAhead
+				s.staleBidCancelAt = tNs + cancelDurationNs
+			}
+			if s.hasAskQuote {
+				s.staleAskPrice = s.askPrice
+				s.staleAskSize = s.askSize
+				s.staleAskQueue = s.askQueueAhead
+				s.staleAskCancelAt = tNs + cancelDurationNs
 			}
 			s.hasBidQuote = false
 			s.hasAskQuote = false
@@ -526,38 +623,36 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 		}
 	}
 
-	// 1. Dynamic Leverage Distribution: Fractional Kelly scaled by volatility
-	localVolBps := math.Max(0.5, s.hawkes.Intensity()*0.12)
+	// 1. Dynamic Leverage Distribution: Fractional Kelly scaled by volatility variance
+	localVolBps := math.Max(0.35, s.volVarBps)
 	if s.hawkes.IsCascadeRisk() {
 		s.hawkesCascadesSeen++
-		localVolBps *= 2.2
+		localVolBps *= 2.0
 	}
 
-	// Target leverage bounded strictly to [0.5x, MaxLeverage] (never 20x–50x liquidation trap)
 	baseLev := s.cfg.BaseLeverage
 	if baseLev <= 0 {
-		baseLev = 1.60
+		baseLev = 2.50
 	}
-	targetLev := math.Max(0.5, math.Min(s.cfg.MaxLeverage, baseLev*(8.0/localVolBps)*s.cfg.KellyFraction)) * macroLevMult
+	targetLev := math.Max(0.5, math.Min(s.cfg.MaxLeverage, baseLev*(1.20/localVolBps)*s.cfg.KellyFraction)) * macroLevMult
 	s.sumDynamicLeverage += targetLev
 	s.leverageSamples++
 
 	// 2. Order Sizing: configurable clip fraction of active margin per leg
 	clipFrac := s.cfg.ClipFraction
 	if clipFrac <= 0 {
-		clipFrac = 0.15
+		clipFrac = 0.35
 	}
 	orderNotional := (s.currentEquity * targetLev) * clipFrac
 	quoteQty := orderNotional / midPrice
 	if quoteQty <= 0 {
 		return
 	}
-	if quoteQty > maxPosBase*0.25 {
-		quoteQty = maxPosBase * 0.25
+	if quoteQty > maxPosBase*0.35 {
+		quoteQty = maxPosBase * 0.35
 	}
 
 	// 3. GLFT Reservation Price & Inventory Skew
-	// Normalized inventory ratio in [-1, 1]
 	qNorm := s.inventoryBase / maxPosBase
 	if qNorm > 1.0 {
 		qNorm = 1.0
@@ -565,7 +660,6 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 		qNorm = -1.0
 	}
 
-	// Inventory skew scaled by GLFT risk aversion gamma (baseline gamma = 1e-3 -> 3.5 bps)
 	gammaScale := s.cfg.Gamma / 1e-3
 	if gammaScale <= 0 {
 		gammaScale = 1.0
@@ -599,36 +693,86 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 
 	newBidPrice := midPrice * (1.0 - bidOffsetBps/10000.0)
 	newAskPrice := midPrice * (1.0 + askOffsetBps/10000.0)
+	bidSize := quoteQty
+	askSize := quoteQty
 
-	// Strictly maintain delta-neutral inventory balance
-	// When long inventory (qNorm > 0.20), stand down on bids and quote asks tighter to liquidate
-	// When short inventory (qNorm < -0.20), stand down on asks and quote bids tighter to acquire
-	canQuoteBid := qNorm < 0.20
-	canQuoteAsk := qNorm > -0.20
+	minProfitMargin := s.cfg.MinHalfSpreadBps
+	if minProfitMargin < 0.25 {
+		minProfitMargin = 0.25
+	}
 
+	canQuoteBid := qNorm < 0.25
+	canQuoteAsk := qNorm > -0.25
+
+	if s.inventoryBase > 1e-6 {
+		// Long inventory: ensure ask quote closes at least at breakeven plus fee coverage
+		minProfitAsk := s.avgEntryPrice * (1.0 + minProfitMargin/10000.0)
+		if newAskPrice < minProfitAsk {
+			newAskPrice = minProfitAsk
+		}
+		askSize = math.Max(quoteQty, s.inventoryBase)
+	} else if s.inventoryBase < -1e-6 {
+		// Short inventory: ensure bid quote covers at least at breakeven plus fee coverage
+		minProfitBid := s.avgEntryPrice * (1.0 - minProfitMargin/10000.0)
+		if newBidPrice > minProfitBid {
+			newBidPrice = minProfitBid
+		}
+		bidSize = math.Max(quoteQty, -s.inventoryBase)
+	}
+
+	// Place / Refresh Quotes with in-flight cancel tracking
+	// Preserve FIFO queue priority: only cancel & replace if target price moved > 0.50 bps
 	if canQuoteBid {
-		if !s.hasBidQuote || math.Abs(newBidPrice-s.bidPrice)/midPrice > 0.00003 {
+		devBps := 0.0
+		if s.hasBidQuote {
+			devBps = math.Abs(newBidPrice-s.bidPrice) / midPrice * 1e4
+		}
+		if !s.hasBidQuote || devBps > 0.50 || math.Abs(bidSize-s.bidSize)/bidSize > 0.05 {
+			if s.hasBidQuote {
+				s.staleBidPrice = s.bidPrice
+				s.staleBidSize = s.bidSize
+				s.staleBidQueue = s.bidQueueAhead
+				s.staleBidCancelAt = tNs + cancelDurationNs
+			}
 			s.bidPrice = newBidPrice
-			s.bidSize = quoteQty
+			s.bidSize = bidSize
 			s.bidQuoteTime = tNs
-			s.bidQueueAhead = quoteQty * (0.5 + 1.2/(bidOffsetBps+0.5))
+			s.bidQueueAhead = bidSize * (0.5 + 1.2/(bidOffsetBps+0.5))
 			s.hasBidQuote = true
 			s.totalQuotesPlaced++
 		}
-	} else {
+	} else if s.hasBidQuote {
+		s.staleBidPrice = s.bidPrice
+		s.staleBidSize = s.bidSize
+		s.staleBidQueue = s.bidQueueAhead
+		s.staleBidCancelAt = tNs + cancelDurationNs
 		s.hasBidQuote = false
 	}
 
 	if canQuoteAsk {
-		if !s.hasAskQuote || math.Abs(newAskPrice-s.askPrice)/midPrice > 0.00003 {
+		devBps := 0.0
+		if s.hasAskQuote {
+			devBps = math.Abs(newAskPrice-s.askPrice) / midPrice * 1e4
+		}
+		if !s.hasAskQuote || devBps > 0.50 || math.Abs(askSize-s.askSize)/askSize > 0.05 {
+			if s.hasAskQuote {
+				s.staleAskPrice = s.askPrice
+				s.staleAskSize = s.askSize
+				s.staleAskQueue = s.askQueueAhead
+				s.staleAskCancelAt = tNs + cancelDurationNs
+			}
 			s.askPrice = newAskPrice
-			s.askSize = quoteQty
+			s.askSize = askSize
 			s.askQuoteTime = tNs
-			s.askQueueAhead = quoteQty * (0.5 + 1.2/(askOffsetBps+0.5))
+			s.askQueueAhead = askSize * (0.5 + 1.2/(askOffsetBps+0.5))
 			s.hasAskQuote = true
 			s.totalQuotesPlaced++
 		}
-	} else {
+	} else if s.hasAskQuote {
+		s.staleAskPrice = s.askPrice
+		s.staleAskSize = s.askSize
+		s.staleAskQueue = s.askQueueAhead
+		s.staleAskCancelAt = tNs + cancelDurationNs
 		s.hasAskQuote = false
 	}
 }
