@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -96,9 +95,8 @@ func RunAutonomousRecalibration(ctx context.Context, symbol string, currentCapit
 		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
 	for _, outPath := range outPaths {
-		_ = os.MkdirAll(filepath.Dir(outPath), 0755)
 		raw, _ := json.MarshalIndent(analyticalConfig, "", "  ")
-		_ = os.WriteFile(outPath, raw, 0644)
+		_ = AtomicWriteFile(outPath, raw, 0644)
 	}
 
 	return nil

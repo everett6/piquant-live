@@ -289,10 +289,12 @@ type AutonomousRecalibrator func(ctx context.Context, symbol string, currentCapi
 
 // DryRunEngine orchestrates the 14-day autonomous dry run.
 type DryRunEngine struct {
-	cfg     DryRunConfig
-	ring    *engine.SPSCRing
-	stream  *MarketStreamIngestor
-	journal *os.File
+	cfg       DryRunConfig
+	ring      *engine.SPSCRing
+	stream    *MarketStreamIngestor
+	journal   *os.File
+	journalCh chan []byte
+	journalWg sync.WaitGroup
 
 	mu    sync.RWMutex
 	state DryRunState
@@ -511,7 +513,7 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		_ = e.saveCheckpoint()
 	}
 
-	// Ensure journal directory exists
+	// Ensure journal directory exists and start asynchronous background writer
 	if cfg.JournalFile != "" {
 		_ = os.MkdirAll(filepath.Dir(cfg.JournalFile), 0o755)
 		f, err := os.OpenFile(cfg.JournalFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -519,6 +521,9 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 			return nil, fmt.Errorf("failed to open dry run journal %s: %w", cfg.JournalFile, err)
 		}
 		e.journal = f
+		e.journalCh = make(chan []byte, 1024)
+		e.journalWg.Add(1)
+		go e.runJournalWriter()
 	}
 
 	if e.macroGuardian != nil {
@@ -611,9 +616,12 @@ func (e *DryRunEngine) Stop() {
 				if len(e.recentFills) > 64 {
 					e.recentFills = e.recentFills[:64]
 				}
-				if e.journal != nil {
+				if e.journalCh != nil {
 					if b, err := json.Marshal(fillRec); err == nil {
-						_, _ = e.journal.Write(append(b, '\n'))
+						select {
+						case e.journalCh <- append(b, '\n'):
+						default:
+						}
 					}
 				}
 			}
@@ -625,9 +633,28 @@ func (e *DryRunEngine) Stop() {
 	e.mu.Unlock()
 
 	_ = e.saveCheckpoint()
-	if e.journal != nil {
+	if e.journalCh != nil {
+		close(e.journalCh)
+		e.journalWg.Wait()
+		e.journalCh = nil
+		e.journal = nil
+	} else if e.journal != nil {
 		_ = e.journal.Close()
+		e.journal = nil
 	}
+}
+
+// runJournalWriter provides non-blocking, asynchronous serialization of trade records to the journal file.
+func (e *DryRunEngine) runJournalWriter() {
+	defer e.journalWg.Done()
+	if e.journal == nil {
+		return
+	}
+	for line := range e.journalCh {
+		_, _ = e.journal.Write(line)
+	}
+	_ = e.journal.Sync()
+	_ = e.journal.Close()
 }
 
 // State returns a thread-safe snapshot of the current 14-day dry run state.
@@ -790,11 +817,23 @@ func (e *DryRunEngine) maybeReloadCloudParams() {
 
 	e.mu.Lock()
 	e.lastCloudParamMod = modTime
-	if params.Gamma > 0 && e.glftMM != nil {
-		e.glftMM.Gamma = params.Gamma
+	if !math.IsNaN(params.Gamma) && !math.IsInf(params.Gamma, 0) && params.Gamma > 0 && e.glftMM != nil {
+		gamma := params.Gamma
+		if gamma < 0.0001 {
+			gamma = 0.0001
+		} else if gamma > 0.05 {
+			gamma = 0.05
+		}
+		e.glftMM.Gamma = gamma
 	}
-	if params.MinHalfSpreadBps > 0 {
-		e.minHalfSpreadFloorBps = params.MinHalfSpreadBps
+	if !math.IsNaN(params.MinHalfSpreadBps) && !math.IsInf(params.MinHalfSpreadBps, 0) && params.MinHalfSpreadBps > 0 {
+		mhs := params.MinHalfSpreadBps
+		if mhs < 0.5 {
+			mhs = 0.5
+		} else if mhs > 10.0 {
+			mhs = 10.0
+		}
+		e.minHalfSpreadFloorBps = mhs
 	}
 	if e.leverageCtrl != nil {
 		e.leverageCtrl.UpdateCloudParams(params.BaseLeverage, params.MaxLeverageCap, params.ClipFraction)
@@ -1218,6 +1257,17 @@ func (e *DryRunEngine) recoverStateFromJournal() (*DryRunState, error) {
 				st.LosingTrades++
 			}
 		}
+
+		st.Equity = st.Cash
+		if st.Equity > st.PeakEquity {
+			st.PeakEquity = st.Equity
+		}
+		if st.PeakEquity > 0 {
+			dd := (st.PeakEquity - st.Equity) / st.PeakEquity * 100.0
+			if dd > st.MaxDrawdownPct {
+				st.MaxDrawdownPct = dd
+			}
+		}
 	}
 
 	if st.TotalTrades > 0 {
@@ -1409,7 +1459,7 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 	// A resting maker order fills only when observed trades at or through its price
 	// consume the queue ahead (hftbacktest fill realism).
 	if ev.Kind == 0 {
-		isBuyerMaker := (ev.Side == 1)
+		isBuyerMaker := (ev.Side == 2)
 		// Update per-symbol microstructure estimators (prevents BTC/ETH price cross-contamination)
 		if sm.VpinCalc != nil {
 			sm.VpinCalc.UpdateTrade(price, ev.Size, isBuyerMaker)
@@ -1478,11 +1528,11 @@ func (e *DryRunEngine) matchMakerOrders(symbol string, tradePrice float64, trade
 		// Strict hftbacktest fill realism:
 		// 1. Price-through tolerance is half a tick, calibrated per symbol (e.g. $0.051 for BTCUSDT, $0.0051 for ETHUSDT).
 		// 2. Trade aggressor must be on the opposite side of our resting limit order:
-		//    - Resting BUY bid only fills against SELLER-initiated trades (tradeSide == 1 -> isBuyerMaker == true).
-		//    - Resting SELL ask only fills against BUYER-initiated trades (tradeSide == 2 -> isBuyerMaker == false).
+		//    - Resting BUY bid fills against SELLER-initiated trades (tradeSide == 2, isBuyerMaker == true) or downward price sweep.
+		//    - Resting SELL ask fills against BUYER-initiated trades (tradeSide == 1, isBuyerMaker == false) or upward price sweep.
 		tick := symbolTickSize(symbol)
 		tickTol := tick * 0.51
-		if ord.Side == "BUY" && (tradeSide == 1 || tradePrice < ord.Price-tickTol) {
+		if ord.Side == "BUY" && (tradeSide == 2 || tradePrice < ord.Price-tickTol) {
 			if tradePrice < ord.Price-tickTol {
 				// Market swept completely through our bid price level
 				filled = true
@@ -1492,7 +1542,7 @@ func (e *DryRunEngine) matchMakerOrders(symbol string, tradePrice float64, trade
 					filled = true
 				}
 			}
-		} else if ord.Side == "SELL" && (tradeSide == 2 || tradePrice > ord.Price+tickTol) {
+		} else if ord.Side == "SELL" && (tradeSide == 1 || tradePrice > ord.Price+tickTol) {
 			if tradePrice > ord.Price+tickTol {
 				// Market swept completely through our ask price level
 				filled = true
@@ -1759,9 +1809,13 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	pos := e.state.Positions[symbol]
 	currentInv := 0.0
 	if pos != nil {
+		if math.Abs(pos.Size) < 1e-7 {
+			pos.Size = 0.0
+			pos.AvgEntryPrice = 0.0
+		}
 		currentInv = pos.Size
 	}
-	if math.Abs(currentInv) > 1e-8 {
+	if math.Abs(currentInv) > 1e-7 {
 		if sm.InventorySince.IsZero() {
 			sm.InventorySince = now
 		}
@@ -2199,37 +2253,42 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 
 	pos := e.state.Positions[symbol]
 	realizedPnL := 0.0
+	isClosing := false
 
 	if side == "BUY" {
-		if pos.Size < 0 { // Closing short
+		if pos.Size < -1e-7 { // Closing short
+			isClosing = true
 			closeQty := math.Min(-pos.Size, qty)
 			realizedPnL = closeQty * (pos.AvgEntryPrice - orderPrice)
 		}
 		newSize := pos.Size + qty
-		if newSize > 0 {
+		if math.Abs(newSize) < 1e-7 {
+			newSize = 0.0
+			pos.AvgEntryPrice = 0.0
+		} else if newSize > 0 {
 			if pos.Size >= 0 {
 				pos.AvgEntryPrice = (pos.AvgEntryPrice*pos.Size + orderPrice*qty) / newSize
 			} else {
 				pos.AvgEntryPrice = orderPrice
 			}
-		} else if newSize == 0 {
-			pos.AvgEntryPrice = 0.0
 		}
 		pos.Size = newSize
 	} else {
-		if pos.Size > 0 { // Closing long
+		if pos.Size > 1e-7 { // Closing long
+			isClosing = true
 			closeQty := math.Min(pos.Size, qty)
 			realizedPnL = closeQty * (orderPrice - pos.AvgEntryPrice)
 		}
 		newSize := pos.Size - qty
-		if newSize < 0 {
+		if math.Abs(newSize) < 1e-7 {
+			newSize = 0.0
+			pos.AvgEntryPrice = 0.0
+		} else if newSize < 0 {
 			if pos.Size <= 0 {
 				pos.AvgEntryPrice = (pos.AvgEntryPrice*(-pos.Size) + orderPrice*qty) / (-newSize)
 			} else {
 				pos.AvgEntryPrice = orderPrice
 			}
-		} else if newSize == 0 {
-			pos.AvgEntryPrice = 0.0
 		}
 		pos.Size = newSize
 	}
@@ -2259,7 +2318,7 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 
 	e.state.RealizedPnL += netRealizedPnL
 	e.state.TotalTrades++
-	if realizedPnL != 0 { // Round-trip closing fill
+	if isClosing { // Round-trip closing fill
 		sm := e.symMicro[symbol]
 		if sm != nil {
 			if netRealizedPnL > 0 {
@@ -2359,37 +2418,42 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 
 	pos := e.state.Positions[symbol]
 	realizedPnL := 0.0
+	isClosing := false
 
 	if side == "BUY" {
-		if pos.Size < 0 {
+		if pos.Size < -1e-7 {
+			isClosing = true
 			closeQty := math.Min(-pos.Size, qty)
 			realizedPnL = closeQty * (pos.AvgEntryPrice - execPrice)
 		}
 		newSize := pos.Size + qty
-		if newSize > 0 {
+		if math.Abs(newSize) < 1e-7 {
+			newSize = 0.0
+			pos.AvgEntryPrice = 0.0
+		} else if newSize > 0 {
 			if pos.Size >= 0 {
 				pos.AvgEntryPrice = (pos.AvgEntryPrice*pos.Size + execPrice*qty) / newSize
 			} else {
 				pos.AvgEntryPrice = execPrice
 			}
-		} else if newSize == 0 {
-			pos.AvgEntryPrice = 0.0
 		}
 		pos.Size = newSize
 	} else {
-		if pos.Size > 0 {
+		if pos.Size > 1e-7 {
+			isClosing = true
 			closeQty := math.Min(pos.Size, qty)
 			realizedPnL = closeQty * (execPrice - pos.AvgEntryPrice)
 		}
 		newSize := pos.Size - qty
-		if newSize < 0 {
+		if math.Abs(newSize) < 1e-7 {
+			newSize = 0.0
+			pos.AvgEntryPrice = 0.0
+		} else if newSize < 0 {
 			if pos.Size <= 0 {
 				pos.AvgEntryPrice = (pos.AvgEntryPrice*(-pos.Size) + execPrice*qty) / (-newSize)
 			} else {
 				pos.AvgEntryPrice = execPrice
 			}
-		} else if newSize == 0 {
-			pos.AvgEntryPrice = 0.0
 		}
 		pos.Size = newSize
 	}
@@ -2414,7 +2478,7 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 
 	e.state.RealizedPnL += netRealizedPnL
 	e.state.TotalTrades++
-	if realizedPnL != 0 {
+	if isClosing {
 		if netRealizedPnL > 0 {
 			e.state.WinningTrades++
 		} else {
@@ -2458,11 +2522,15 @@ func (e *DryRunEngine) appendTradeRecord(rec TradeRecord) {
 	}
 	e.recentFills = append(e.recentFills, rec)
 
-	// Append to JSONL journal
-	if e.journal != nil {
+	// Append to JSONL journal asynchronously via non-blocking channel
+	if e.journalCh != nil {
 		line, err := json.Marshal(rec)
 		if err == nil {
-			_, _ = e.journal.Write(append(line, '\n'))
+			select {
+			case e.journalCh <- append(line, '\n'):
+			default:
+				// Buffer full fallback: drop non-critical journal line to preserve event-loop latency
+			}
 		}
 	}
 }

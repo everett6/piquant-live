@@ -103,7 +103,17 @@ func (m *GLFTMarketMaker) Quote(x *[FeatureCount]float64, inventory float64) Quo
 	reservationBps := totalAlpha - invSkew
 
 	// GLFT asymptotic half-spread: (1/gamma)*ln(1 + gamma/kappa) + 0.5*gamma*sigma^2
-	baseHalfSpread := (1.0/m.Gamma)*math.Log(1.0+m.Gamma/m.Kappa)*0.08 + 0.5*m.Gamma*sigma*0.25 + math.Max(0, m.MakerFeeBps)
+	kappa := m.Kappa
+	if kappa <= 1e-6 {
+		kappa = 1.5
+	}
+	var spreadTerm float64
+	if m.Gamma <= 1e-6 {
+		spreadTerm = (1.0 / kappa) * 0.08
+	} else {
+		spreadTerm = (1.0 / m.Gamma) * math.Log(1.0+m.Gamma/kappa) * 0.08
+	}
+	baseHalfSpread := spreadTerm + 0.5*m.Gamma*sigma*0.25 + math.Max(0, m.MakerFeeBps)
 
 	// Toxicity widening: widen quotes when trade imbalance (x[13]) or 1s return velocity (x[11]) is extreme
 	flowToxicity := math.Abs(x[13])*0.12 + math.Max(0, math.Abs(x[11])-3.0)*0.15

@@ -98,6 +98,7 @@ type StreamStats struct {
 	GapsDetected  atomic.Uint64
 	Reconnects    atomic.Uint64
 	FallbackTicks atomic.Uint64
+	RingDrops     atomic.Uint64
 	LastEventNs   atomic.Int64
 }
 
@@ -292,6 +293,16 @@ func (m *MarketStreamIngestor) dialAndStreamEndpoint(ctx context.Context, endpoi
 	}
 	defer conn.Close()
 
+	stopWatcher := make(chan struct{})
+	defer close(stopWatcher)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-stopWatcher:
+		}
+	}()
+
 	// WebSocket Client Handshake (RFC 6455)
 	wsKey := make([]byte, 16)
 	_, _ = rand.Read(wsKey)
@@ -343,6 +354,7 @@ func (m *MarketStreamIngestor) dialAndStreamEndpoint(ctx context.Context, endpoi
 		default:
 		}
 
+		_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
 		payload, op, err := readWSFrame(br)
 		if err != nil {
 			return err
@@ -611,11 +623,15 @@ func readWSFrame(r io.Reader) ([]byte, byte, error) {
 		if _, err := io.ReadFull(r, ext[:]); err != nil {
 			return nil, 0, err
 		}
-		payloadLen = int(binary.BigEndian.Uint64(ext[:]))
+		rawLen := binary.BigEndian.Uint64(ext[:])
+		if rawLen > 10*1024*1024 {
+			return nil, 0, errors.New("frame payload exceeds 10MB limit")
+		}
+		payloadLen = int(rawLen)
 	}
 
-	if payloadLen > 10*1024*1024 { // Protect against unbounded memory
-		return nil, 0, errors.New("frame payload exceeds 10MB limit")
+	if payloadLen < 0 || payloadLen > 10*1024*1024 { // Protect against unbounded memory
+		return nil, 0, errors.New("invalid frame payload length")
 	}
 
 	var maskKey [4]byte

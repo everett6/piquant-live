@@ -76,13 +76,22 @@ func NewDynamicLeverageController(cfg DynamicLeverageConfig) *DynamicLeverageCon
 func (c *DynamicLeverageController) UpdateCloudParams(baseLev, maxLev, clipFrac float64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if baseLev > 0 {
-		c.cfg.BaseLeverage = baseLev
-	}
-	if maxLev > 0 {
+	if !math.IsNaN(maxLev) && !math.IsInf(maxLev, 0) && maxLev >= 1.0 {
+		if maxLev > 5.0 {
+			maxLev = 5.0
+		}
 		c.cfg.MaxLeverage = maxLev
 	}
-	if clipFrac > 0 && clipFrac <= 1.0 {
+	if !math.IsNaN(baseLev) && !math.IsInf(baseLev, 0) && baseLev >= 1.0 {
+		if baseLev > c.cfg.MaxLeverage {
+			baseLev = c.cfg.MaxLeverage
+		}
+		c.cfg.BaseLeverage = baseLev
+	}
+	if !math.IsNaN(clipFrac) && !math.IsInf(clipFrac, 0) && clipFrac >= 0.05 {
+		if clipFrac > 0.35 {
+			clipFrac = 0.35
+		}
 		c.cfg.ClipFraction = clipFrac
 	}
 }
@@ -222,9 +231,9 @@ func (c *DynamicLeverageController) ComputeOrderSizeForSymbol(symbol string, equ
 	// Volatility parity weighting and decimal precision lookup
 	uSym := strings.ToUpper(symbol)
 	prof := SymbolRiskProfile{VolWeight: 1.0, Decimals: 3}
-	for symPrefix, p := range DefaultSymbolProfiles {
-		if strings.Contains(uSym, symPrefix) {
-			prof = p
+	for _, p := range []string{"BTC", "ETH", "SOL", "BNB", "DOGE", "XRP", "AVAX", "LINK"} {
+		if strings.HasPrefix(uSym, p) {
+			prof = DefaultSymbolProfiles[p]
 			break
 		}
 	}

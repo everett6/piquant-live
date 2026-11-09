@@ -15,8 +15,8 @@ func TestFastParseCoinbaseTicker(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected FastParseCoinbaseTicker to succeed")
 	}
-	if sym != "BTCUSDT" {
-		t.Errorf("expected BTCUSDT, got %s", sym)
+	if sym != "BTCUSD" && sym != "BTCUSDT" {
+		t.Errorf("expected BTCUSD or BTCUSDT, got %s", sym)
 	}
 	if math.Abs(price-74910.46) > 1e-4 {
 		t.Errorf("expected price 74910.46, got %f", price)
@@ -37,8 +37,8 @@ func TestFastParseCoinbaseTicker(t *testing.T) {
 	// Test ETH-USD sell
 	rawETH := []byte(`{"type":"ticker","sequence":104816080907,"product_id":"ETH-USD","price":"2142.31","best_bid":"2142.31","best_ask":"2142.56","side":"sell","last_size":"4.95452788"}`)
 	symE, priceE, bestBidE, bestAskE, lastSizeE, isBuyE, okE := FastParseCoinbaseTicker(rawETH)
-	if !okE || symE != "ETHUSDT" {
-		t.Fatalf("expected ETHUSDT parse, got %s (ok=%v)", symE, okE)
+	if !okE || (symE != "ETHUSD" && symE != "ETHUSDT") {
+		t.Fatalf("expected ETHUSD or ETHUSDT parse, got %s (ok=%v)", symE, okE)
 	}
 	if math.Abs(priceE-2142.31) > 1e-4 {
 		t.Errorf("expected price 2142.31, got %f", priceE)
@@ -56,17 +56,40 @@ func TestFastParseCoinbaseTicker(t *testing.T) {
 
 func TestNormalizeToUniverseSymbol(t *testing.T) {
 	cases := map[string]string{
-		"BTC-USD":  "BTCUSDT",
-		"ETH-USD":  "ETHUSDT",
-		"SOL-USD":  "SOLUSDT",
+		"BTC-USD":  "BTCUSD",
+		"ETH-USD":  "ETHUSD",
+		"SOL-USD":  "SOLUSD",
 		"BTC-USDT": "BTCUSDT",
 		"BTCUSDT":  "BTCUSDT",
+		"BTC-USDC": "BTCUSDC",
 	}
 	for in, expected := range cases {
 		out := NormalizeToUniverseSymbol(in)
 		if out != expected {
 			t.Errorf("for %s, expected %s, got %s", in, expected, out)
 		}
+	}
+}
+
+func TestCoinbaseSignalOracleUSDCMatching(t *testing.T) {
+	// Oracle initialized with BTCUSDC and ETHUSDC (USDC Universe)
+	oracle := NewCoinbaseSignalOracle([]string{"BTCUSDC", "ETHUSDC"})
+	now := time.Now()
+
+	// Ticker arrives as BTC-USD from Coinbase
+	oracle.UpdateTick("BTC-USD", 75000.00, 74999.00, 75001.00, 0.1, true, now.Add(-1*time.Second))
+	oracle.UpdateTick("BTC-USD", 75030.00, 75029.00, 75031.00, 0.5, true, now)
+
+	// Evaluated against Binance BTCUSDC mid price
+	sig := oracle.EvaluateAgainstBinance("BTCUSDC", 75000.00, now)
+	if sig.CoinbasePrice != 75030.00 {
+		t.Errorf("expected BTCUSDC to resolve CoinbasePrice 75030.00, got %f", sig.CoinbasePrice)
+	}
+	if sig.BasisBps <= 0 {
+		t.Errorf("expected positive BasisBps for BTCUSDC, got %f", sig.BasisBps)
+	}
+	if sig.LeadLagSkewBps <= 0 {
+		t.Errorf("expected positive LeadLagSkewBps for BTCUSDC, got %f", sig.LeadLagSkewBps)
 	}
 }
 

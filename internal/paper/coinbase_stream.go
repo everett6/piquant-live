@@ -111,56 +111,84 @@ func NewCoinbaseSignalOracle(symbols []string) *CoinbaseSignalOracle {
 	}
 }
 
+// extractBaseCurrency extracts the underlying asset symbol (e.g. BTC from BTC-USD, BTCUSDC, BTCUSDT).
+func extractBaseCurrency(s string) string {
+	u := strings.ToUpper(s)
+	u = strings.ReplaceAll(u, "-", "")
+	u = strings.ReplaceAll(u, "_", "")
+	for _, quote := range []string{"USDC", "USDT", "USD", "BUSD", "FDUSD"} {
+		if strings.HasSuffix(u, quote) {
+			return strings.TrimSuffix(u, quote)
+		}
+	}
+	return u
+}
+
 // UpdateTick records a new ticker tick from Coinbase.
 func (o *CoinbaseSignalOracle) UpdateTick(normSymbol string, price, bestBid, bestAsk, size float64, isBuy bool, now time.Time) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	sig, ok := o.signals[normSymbol]
-	if !ok {
-		sig = &CoinbaseSymbolSignal{Symbol: normSymbol}
-		o.signals[normSymbol] = sig
+	base := extractBaseCurrency(normSymbol)
+	keySet := make(map[string]struct{}, 4)
+	keySet[normSymbol] = struct{}{}
+	if base != normSymbol && base != "" {
+		keySet[base] = struct{}{}
 	}
-
-	sig.CoinbasePrice = price
-	sig.BestBid = bestBid
-	sig.BestAsk = bestAsk
-	if bestBid > 0 && bestAsk > 0 {
-		sig.MidPrice = (bestBid + bestAsk) / 2.0
-	} else if price > 0 {
-		sig.MidPrice = price
-	}
-	sig.LastUpdate = now
-	sig.TradesCount++
-	if size > 0 && price > 0 {
-		sig.TotalVolumeUSDT += size * price
-	}
-
-	// Update circular history buffer
-	idx := sig.histIdx
-	sig.history[idx] = CoinbasePricePoint{Price: sig.MidPrice, Time: now}
-	sig.histIdx = (idx + 1) % len(sig.history)
-	if sig.histLen < len(sig.history) {
-		sig.histLen++
-	}
-
-	// Compute rolling velocity over ~1 second window
-	var oldest *CoinbasePricePoint
-	cutoff := now.Add(-1500 * time.Millisecond)
-	for i := 0; i < sig.histLen; i++ {
-		pIdx := (sig.histIdx - 1 - i + len(sig.history)) % len(sig.history)
-		pt := &sig.history[pIdx]
-		if pt.Time.Before(cutoff) {
-			break
+	// Also update any registered universe symbol that shares this base asset
+	for registeredSym := range o.signals {
+		if extractBaseCurrency(registeredSym) == base {
+			keySet[registeredSym] = struct{}{}
 		}
-		oldest = pt
 	}
 
-	if oldest != nil && !oldest.Time.Equal(now) {
-		dt := now.Sub(oldest.Time).Seconds()
-		if dt >= 0.20 && oldest.Price > 0 {
-			retBps := (sig.MidPrice - oldest.Price) / oldest.Price * 1e4
-			sig.Velocity1sBps = retBps / dt
+	for k := range keySet {
+		sig, ok := o.signals[k]
+		if !ok {
+			sig = &CoinbaseSymbolSignal{Symbol: k}
+			o.signals[k] = sig
+		}
+
+		sig.CoinbasePrice = price
+		sig.BestBid = bestBid
+		sig.BestAsk = bestAsk
+		if bestBid > 0 && bestAsk > 0 {
+			sig.MidPrice = (bestBid + bestAsk) / 2.0
+		} else if price > 0 {
+			sig.MidPrice = price
+		}
+		sig.LastUpdate = now
+		sig.TradesCount++
+		if size > 0 && price > 0 {
+			sig.TotalVolumeUSDT += size * price
+		}
+
+		// Update circular history buffer
+		idx := sig.histIdx
+		sig.history[idx] = CoinbasePricePoint{Price: sig.MidPrice, Time: now}
+		sig.histIdx = (idx + 1) % len(sig.history)
+		if sig.histLen < len(sig.history) {
+			sig.histLen++
+		}
+
+		// Compute rolling velocity over ~1 second window
+		var oldest *CoinbasePricePoint
+		cutoff := now.Add(-1500 * time.Millisecond)
+		for i := 0; i < sig.histLen; i++ {
+			pIdx := (sig.histIdx - 1 - i + len(sig.history)) % len(sig.history)
+			pt := &sig.history[pIdx]
+			if pt.Time.Before(cutoff) {
+				break
+			}
+			oldest = pt
+		}
+
+		if oldest != nil && !oldest.Time.Equal(now) {
+			dt := now.Sub(oldest.Time).Seconds()
+			if dt >= 0.20 && oldest.Price > 0 {
+				retBps := (sig.MidPrice - oldest.Price) / oldest.Price * 1e4
+				sig.Velocity1sBps = retBps / dt
+			}
 		}
 	}
 
@@ -169,19 +197,25 @@ func (o *CoinbaseSignalOracle) UpdateTick(normSymbol string, price, bestBid, bes
 
 // EvaluateAgainstBinance evaluates the Coinbase lead-lag signal given Binance's current mid price.
 func (o *CoinbaseSignalOracle) EvaluateAgainstBinance(normSymbol string, binanceMid float64, now time.Time) CoinbaseSymbolSignal {
+	if math.IsNaN(binanceMid) || math.IsInf(binanceMid, 0) || binanceMid <= 0 {
+		return CoinbaseSymbolSignal{Symbol: normSymbol}
+	}
+
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
 	sig, ok := o.signals[normSymbol]
-	if !ok {
-		// Fallback: match equivalent quote pair (e.g. BTCUSDC <-> BTCUSDT)
-		if strings.HasSuffix(normSymbol, "USDC") {
-			sig = o.signals[strings.TrimSuffix(normSymbol, "USDC")+"USDT"]
-		} else if strings.HasSuffix(normSymbol, "USDT") {
-			sig = o.signals[strings.TrimSuffix(normSymbol, "USDT")+"USDC"]
+	if !ok || sig.MidPrice <= 0 {
+		// Multi-quote fallback: try base currency or equivalent quote pair
+		base := extractBaseCurrency(normSymbol)
+		for _, cand := range []string{base, base + "USD", base + "USDT", base + "USDC"} {
+			if s, found := o.signals[cand]; found && s.MidPrice > 0 {
+				sig = s
+				break
+			}
 		}
 	}
-	if sig == nil || sig.MidPrice <= 0 || binanceMid <= 0 {
+	if sig == nil || sig.MidPrice <= 0 {
 		return CoinbaseSymbolSignal{Symbol: normSymbol}
 	}
 
@@ -387,6 +421,16 @@ func (c *CoinbaseStreamIngestor) connectAndStream(ctx context.Context) error {
 	}
 	defer conn.Close()
 
+	stopWatcher := make(chan struct{})
+	defer close(stopWatcher)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-stopWatcher:
+		}
+	}()
+
 	// RFC 6455 Handshake
 	wsKey := make([]byte, 16)
 	_, _ = rand.Read(wsKey)
@@ -472,6 +516,7 @@ func (c *CoinbaseStreamIngestor) connectAndStream(ctx context.Context) error {
 		default:
 		}
 
+		_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
 		payload, op, err := readWSFrame(br)
 		if err != nil {
 			return err
@@ -521,8 +566,16 @@ func (c *CoinbaseStreamIngestor) HandleStreamPayload(payload []byte) {
 			side = 1
 		}
 		var symID uint16
-		if symbol == "ETHUSDT" {
+		base := extractBaseCurrency(symbol)
+		switch base {
+		case "BTC":
+			symID = 0
+		case "ETH":
 			symID = 1
+		case "SOL":
+			symID = 2
+		default:
+			symID = 0
 		}
 
 		c.ring.Push(engine.MarketEvent{
@@ -601,13 +654,10 @@ func fastExtractJSONFloat(payload, key []byte) float64 {
 	return val
 }
 
-// NormalizeToUniverseSymbol converts Coinbase product strings (e.g. BTC-USD) to standard universe keys (BTCUSDT).
+// NormalizeToUniverseSymbol converts Coinbase product strings (e.g. BTC-USD) to standard clean keys (e.g. BTCUSD).
 func NormalizeToUniverseSymbol(product string) string {
 	upper := strings.ToUpper(product)
 	upper = strings.ReplaceAll(upper, "-", "")
 	upper = strings.ReplaceAll(upper, "_", "")
-	if strings.HasSuffix(upper, "USD") {
-		upper = strings.TrimSuffix(upper, "USD") + "USDT"
-	}
 	return upper
 }

@@ -1428,5 +1428,5 @@ func SaveOptimalParams(outPath string, winner GridSearchCandidate) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(outPath, b, 0644)
+	return AtomicWriteFile(outPath, b, 0644)
 }
