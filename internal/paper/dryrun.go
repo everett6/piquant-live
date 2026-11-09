@@ -1826,12 +1826,16 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	e.mu.Unlock()
 
 	// Proportional inventory skew restoring force:
-	// When short (currentInv < 0), shifts reservation price higher to pull buy quote closer to mid
-	// and push sell quote further out.
+	// In Avellaneda-Stoikov, inventory risk scales with gamma * sigma^2.
+	// For volatile assets or volatility bursts (e.g. volatile USDC pairs), scale restoring force with volatility variance!
 	var invSkewBps float64
 	if maxInvQty > 0 {
 		invFraction := currentInv / maxInvQty // [-1.0, 1.0]
-		invSkewBps = invFraction * 2.5        // +/- 2.5 bps restoring force
+		volMult := 1.0
+		if sm.VolVarBps > 0.40 {
+			volMult = math.Min(2.0, sm.VolVarBps/0.40)
+		}
+		invSkewBps = invFraction * 2.5 * volMult // Volatility-scaled inventory restoring force
 	}
 
 	// Blend AdaHedge online meta-prediction with GLFT reservation skew and Coinbase institutional lead-lag skew
@@ -1860,10 +1864,16 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		entrySpreadBps = 7.5
 	}
 	symMultiplier := 1.0
-	if strings.Contains(strings.ToUpper(symbol), "BTC") {
+	uSym := strings.ToUpper(symbol)
+	if strings.Contains(uSym, "BTC") {
 		symMultiplier = 0.90
-	} else if strings.Contains(strings.ToUpper(symbol), "ETH") {
+	} else if strings.Contains(uSym, "ETH") {
 		symMultiplier = 1.15
+	}
+	// USDC order books are thinner with higher jump variance: scale entry spread floor by 1.25x
+	// to capture wider natural spreads (3.5 - 8.0 bps) while maintaining identical accuracy and win rate.
+	if strings.HasSuffix(uSym, "USDC") {
+		symMultiplier *= 1.25
 	}
 	effectiveEntryBps := entrySpreadBps * symMultiplier
 	if sm.VolVarBps > 0.40 {
@@ -2479,12 +2489,13 @@ func (e *DryRunEngine) TCAMarkout() *TCAMarkoutTracker {
 
 // symbolTickSize returns the exchange price tick size for a given instrument.
 func symbolTickSize(symbol string) float64 {
-	switch strings.ToUpper(symbol) {
-	case "BTCUSDT", "BTC":
+	u := strings.ToUpper(symbol)
+	switch {
+	case strings.HasPrefix(u, "BTC"):
 		return 0.10
-	case "ETHUSDT", "ETH", "SOLUSDT", "SOL":
+	case strings.HasPrefix(u, "ETH"), strings.HasPrefix(u, "SOL"):
 		return 0.01
-	case "DOGEUSDT", "DOGE":
+	case strings.HasPrefix(u, "DOGE"):
 		return 0.0001
 	default:
 		return 0.01

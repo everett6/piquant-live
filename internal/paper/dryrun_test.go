@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1132,6 +1133,93 @@ func TestCoinbaseLeadLagOracleIntegrationInDryRun(t *testing.T) {
 		}
 	}
 }
+
+func TestUSDCMarketMakingAndVolatilityAdaptiveQuoting(t *testing.T) {
+	// 1. Verify tick sizes for USDC pairs
+	if tick := symbolTickSize("BTCUSDC"); tick != 0.10 {
+		t.Errorf("expected BTCUSDC tick size 0.10, got %f", tick)
+	}
+	if tick := symbolTickSize("ETHUSDC"); tick != 0.01 {
+		t.Errorf("expected ETHUSDC tick size 0.01, got %f", tick)
+	}
+	if tick := symbolTickSize("SOLUSDC"); tick != 0.01 {
+		t.Errorf("expected SOLUSDC tick size 0.01, got %f", tick)
+	}
+
+	// 2. Verify dynamic Binance stream URL builder for USDC pairs
+	streamURL := BuildBinanceStreamURL([]string{"BTCUSDC", "ETHUSDC"})
+	if !strings.Contains(streamURL, "btcusdc@depth20@100ms") || !strings.Contains(streamURL, "ethusdc@trade") {
+		t.Errorf("expected USDC streams in URL, got %s", streamURL)
+	}
+
+	// 3. Test USDC market making quote placement with volatility adaptation
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.Symbols = []string{"BTCUSDC", "ETHUSDC"}
+	cfg.EntryOffsetBps = 7.5
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	cbOracle := NewCoinbaseSignalOracle([]string{"BTCUSDC"})
+	dryRun.SetCoinbaseOracle(cbOracle)
+
+	now := time.Now()
+	cbOracle.UpdateTick("BTCUSDT", 75000.00, 74999.00, 75001.00, 1.0, true, now)
+
+	// Simulate high volatility variance on BTCUSDC (0.80 VolVarBps vs 0.40 baseline)
+	sm := dryRun.symMicro["BTCUSDC"]
+	sm.VolVarBps = 0.80
+
+	dryRun.evaluateQuotesAndGating("BTCUSDC", 75000.00, now)
+
+	st := dryRun.State()
+	orders := st.ActiveOrders["BTCUSDC"]
+	if len(orders) == 0 {
+		t.Fatalf("expected active orders for BTCUSDC")
+	}
+
+	for _, o := range orders {
+		offsetBps := math.Abs(o.Price-75000.00) / 75000.00 * 1e4
+		// In USDC with 0.80 vol: effectiveEntry = 7.5 * 0.90 * 1.25 * sqrt(0.80/0.40) ≈ 11.9 bps
+		if offsetBps < 10.0 {
+			t.Errorf("expected wide volatility-adaptive quote offset >= 10.0 bps for volatile USDC pair, got %.2f bps", offsetBps)
+		}
+	}
+
+	// 4. Test accelerated inventory dampening under volatility spike
+	dryRun.mu.Lock()
+	dryRun.state.Positions["BTCUSDC"] = &Position{
+		Symbol:        "BTCUSDC",
+		Size:          0.001,
+		AvgEntryPrice: 75000.00,
+		MarkPrice:     75000.00,
+	}
+	dryRun.mu.Unlock()
+
+	dryRun.evaluateQuotesAndGating("BTCUSDC", 75000.00, now.Add(time.Second))
+	stInv := dryRun.State()
+	invOrders := stInv.ActiveOrders["BTCUSDC"]
+	var sellQuote *ActiveMakerOrder
+	for _, o := range invOrders {
+		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
+			sellQuote = &o
+			break
+		}
+	}
+	if sellQuote == nil {
+		t.Fatalf("expected resting inventory closing SELL quote for BTCUSDC")
+	}
+	// Holding long inventory: sell order size must match open inventory (0.001) to return to cash
+	if math.Abs(sellQuote.Size-0.001) > 1e-6 {
+		t.Errorf("expected inventory exit size 0.001, got %f", sellQuote.Size)
+	}
+}
+
 
 
 

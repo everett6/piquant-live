@@ -173,7 +173,15 @@ func (o *CoinbaseSignalOracle) EvaluateAgainstBinance(normSymbol string, binance
 	defer o.mu.Unlock()
 
 	sig, ok := o.signals[normSymbol]
-	if !ok || sig.MidPrice <= 0 || binanceMid <= 0 {
+	if !ok {
+		// Fallback: match equivalent quote pair (e.g. BTCUSDC <-> BTCUSDT)
+		if strings.HasSuffix(normSymbol, "USDC") {
+			sig = o.signals[strings.TrimSuffix(normSymbol, "USDC")+"USDT"]
+		} else if strings.HasSuffix(normSymbol, "USDT") {
+			sig = o.signals[strings.TrimSuffix(normSymbol, "USDT")+"USDC"]
+		}
+	}
+	if sig == nil || sig.MidPrice <= 0 || binanceMid <= 0 {
 		return CoinbaseSymbolSignal{Symbol: normSymbol}
 	}
 

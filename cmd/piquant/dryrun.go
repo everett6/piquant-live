@@ -161,6 +161,8 @@ func runDryRun(ctx context.Context, args []string) error {
 	streamCfg.EnableFallback = f.enableFallback
 	if f.wsURL != "" {
 		streamCfg.Endpoint = f.wsURL
+	} else {
+		streamCfg.Endpoint = paper.BuildBinanceStreamURL(symList)
 	}
 	ingestor := paper.NewMarketStreamIngestor(streamCfg, ring)
 	ingestor.Start(ctx)

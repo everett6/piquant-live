@@ -45,6 +45,22 @@ type StreamConfig struct {
 	EnableFallback bool
 }
 
+// BuildBinanceStreamURL constructs the Binance combined WebSocket URL for the given symbols.
+func BuildBinanceStreamURL(symbols []string) string {
+	if len(symbols) == 0 {
+		symbols = []string{"BTCUSDT", "ETHUSDT"}
+	}
+	streams := make([]string, 0, len(symbols)*2)
+	for _, s := range symbols {
+		clean := strings.ToLower(strings.TrimSpace(s))
+		if clean == "" {
+			continue
+		}
+		streams = append(streams, clean+"@depth20@100ms", clean+"@trade")
+	}
+	return "wss://data-stream.binance.vision:9443/stream?streams=" + strings.Join(streams, "/")
+}
+
 // DefaultStreamConfig returns institutional defaults for Binance public feeds.
 func DefaultStreamConfig() StreamConfig {
 	return StreamConfig{
