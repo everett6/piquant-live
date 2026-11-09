@@ -194,6 +194,10 @@ type TickSimulator struct {
 	volVarBps    float64
 	entryTimeNs  int64
 
+	// Directional post-stop cooldown timers
+	bidCooldownUntil int64
+	askCooldownUntil int64
+
 	// Running accumulators
 	totalTicksProcessed int64
 	totalQuotesPlaced   int64
@@ -491,11 +495,16 @@ func (s *TickSimulator) executeFill(fillPrice, fillQty float64, isBid bool, tNs 
 
 // evaluateFill matches incoming aggressive volume against resting limit orders and in-flight stale cancels.
 func (s *TickSimulator) evaluateFill(tick *AggTradeTick, price, qty float64, isBuyerMaker bool, tNs int64, maxPosBase float64) {
+	tickTol := 0.05
+	if strings.Contains(strings.ToUpper(s.cfg.Symbol), "ETH") {
+		tickTol = 0.005
+	}
+
 	// Buyer maker = true => Aggressor is SELLER hitting BID side
 	if isBuyerMaker {
 		// 1. Check in-flight stale bid awaiting cancel confirmation at exchange (cancel-race adverse selection)
 		if s.staleBidCancelAt > tNs {
-			if price <= s.staleBidPrice+0.01 {
+			if price <= s.staleBidPrice+tickTol {
 				fillQty := math.Min(s.staleBidSize, qty)
 				s.executeFill(s.staleBidPrice, fillQty, true, tNs)
 				s.staleBidCancelAt = 0
@@ -504,12 +513,12 @@ func (s *TickSimulator) evaluateFill(tick *AggTradeTick, price, qty float64, isB
 
 		// 2. Check active resting bid quote
 		if s.hasBidQuote && tNs-s.bidQuoteTime >= int64(s.cfg.SimulatedLatencyMs*1_000_000) {
-			if price < s.bidPrice-0.01 {
+			if price < s.bidPrice-tickTol {
 				// Market swept completely through our resting bid price level
 				fillQty := math.Min(s.bidSize, qty)
 				s.executeFill(s.bidPrice, fillQty, true, tNs)
-			} else if price <= s.bidPrice+(s.cfg.BaseSpreadBps/10000.0)*price+0.01 {
-				// Trades at or approaching our bid price: consume book depth / FIFO queue ahead
+			} else if math.Abs(price-s.bidPrice) <= tickTol {
+				// Trades at our bid price: consume book depth / FIFO queue ahead
 				if s.bidQueueAhead <= qty {
 					fillQty := math.Min(s.bidSize, qty)
 					s.executeFill(s.bidPrice, fillQty, true, tNs)
@@ -524,7 +533,7 @@ func (s *TickSimulator) evaluateFill(tick *AggTradeTick, price, qty float64, isB
 	if !isBuyerMaker {
 		// 1. Check in-flight stale ask awaiting cancel confirmation at exchange (cancel-race adverse selection)
 		if s.staleAskCancelAt > tNs {
-			if price >= s.staleAskPrice-0.01 {
+			if price >= s.staleAskPrice-tickTol {
 				fillQty := math.Min(s.staleAskSize, qty)
 				s.executeFill(s.staleAskPrice, fillQty, false, tNs)
 				s.staleAskCancelAt = 0
@@ -533,12 +542,12 @@ func (s *TickSimulator) evaluateFill(tick *AggTradeTick, price, qty float64, isB
 
 		// 2. Check active resting ask quote
 		if s.hasAskQuote && tNs-s.askQuoteTime >= int64(s.cfg.SimulatedLatencyMs*1_000_000) {
-			if price > s.askPrice+0.01 {
+			if price > s.askPrice+tickTol {
 				// Market swept completely through our resting ask price level
 				fillQty := math.Min(s.askSize, qty)
 				s.executeFill(s.askPrice, fillQty, false, tNs)
-			} else if price >= s.askPrice-(s.cfg.BaseSpreadBps/10000.0)*price-0.01 {
-				// Trades at or approaching our ask price: consume book depth / FIFO queue ahead
+			} else if math.Abs(price-s.askPrice) <= tickTol {
+				// Trades at our ask price: consume book depth / FIFO queue ahead
 				if s.askQueueAhead <= qty {
 					fillQty := math.Min(s.askSize, qty)
 					s.executeFill(s.askPrice, fillQty, false, tNs)
@@ -565,18 +574,16 @@ func (s *TickSimulator) evaluateInventoryAging(midPrice float64, tNs int64) {
 			posDD = (s.avgEntryPrice - midPrice) / s.avgEntryPrice
 		}
 
-		stopFrac := s.cfg.StopLossBps / 10000.0
-		if stopFrac <= 0 {
-			stopFrac = 0.0060 // 60 bps default
-		}
-
-		if posDD < -stopFrac {
+		posDDBps := posDD * 10000.0
+		if posDDBps < -s.cfg.StopLossBps {
 			closeQty := math.Abs(s.inventoryBase)
 			takerFee := (closeQty * midPrice) * (s.cfg.TakerFeeBps / 10000.0)
 			if s.inventoryBase > 0 {
 				s.cashUSD += closeQty * midPrice
+				s.bidCooldownUntil = tNs + int64(30*time.Second) // 30s post-stop cooldown against cascade
 			} else {
 				s.cashUSD -= closeQty * midPrice
+				s.askCooldownUntil = tNs + int64(30*time.Second) // 30s post-stop cooldown against cascade
 			}
 			s.cashUSD -= takerFee
 			s.takerFeesUSD += takerFee
@@ -737,22 +744,29 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 	canQuoteBid := qNorm < 0.75
 	canQuoteAsk := qNorm > -0.75
 
-	// Toxic cascade defense: do not stack quotes into aggressive opposing flow
-	if s.hawkes.IsCascadeRisk() || vpinVal > 0.65 {
-		if flowImbalance < -0.30 {
-			// Aggressive selling avalanche: pull bids, only allow asks/covers
-			canQuoteBid = false
-		} else if flowImbalance > 0.30 {
-			// Aggressive buying avalanche: pull asks, only allow bids/covers
-			canQuoteAsk = false
+	// Directional post-stop cooldown: do not immediately re-enter into an adverse cascade
+	if tNs < s.bidCooldownUntil {
+		canQuoteBid = false
+	}
+	if tNs < s.askCooldownUntil {
+		canQuoteAsk = false
+	}
+
+	// Toxic cascade defense: do not stack quotes into severe adverse momentum
+	if s.hawkes.IsCascadeRisk() || vpinVal > 0.70 {
+		if flowImbalance < -0.40 {
+			canQuoteBid = false // Severe selling avalanche: pull bids
+		} else if flowImbalance > 0.40 {
+			canQuoteAsk = false // Severe buying avalanche: pull asks
 		}
 	}
 
 	if s.inventoryBase > 1e-6 {
 		// Long inventory: ensure ask quote closes at target profit ratchet
 		minProfitAsk := s.avgEntryPrice * (1.0 + targetProfitBps/10000.0)
-		if holdSec > 90.0 {
-			// Held over 90s: clamp ask quote to inside market touch so it fills!
+		posDDBps := (midPrice - s.avgEntryPrice) / s.avgEntryPrice * 1e4
+		if holdSec > 90.0 || posDDBps < -10.0 || (posDDBps < -4.0 && flowImbalance < -0.15) {
+			// Dynamic Adverse Scratch: clamp ask quote to inside market touch so it fills passively and avoids taker stop loss!
 			if newAskPrice > midPrice {
 				newAskPrice = midPrice
 			}
@@ -763,8 +777,9 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 	} else if s.inventoryBase < -1e-6 {
 		// Short inventory: ensure bid quote covers at target profit ratchet
 		minProfitBid := s.avgEntryPrice * (1.0 - targetProfitBps/10000.0)
-		if holdSec > 90.0 {
-			// Held over 90s: clamp bid quote to inside market touch so it fills!
+		posDDBps := (s.avgEntryPrice - midPrice) / s.avgEntryPrice * 1e4
+		if holdSec > 90.0 || posDDBps < -10.0 || (posDDBps < -4.0 && flowImbalance > 0.15) {
+			// Dynamic Adverse Scratch: clamp bid quote to inside market touch so it fills passively and avoids taker stop loss!
 			if newBidPrice < midPrice {
 				newBidPrice = midPrice
 			}
@@ -852,9 +867,23 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 	}
 }
 
-// FlattenToCash closes any open inventory at the current mark price to lock equity into cash at session boundaries.
+// FlattenToCash closes any open inventory at the current mark price to lock equity into cash at session boundaries,
+// and unconditionally purges all resting limit orders and stale cancel timers.
 func (s *TickSimulator) FlattenToCash(markPrice float64) {
+	s.hasBidQuote = false
+	s.hasAskQuote = false
+	s.staleBidCancelAt = 0
+	s.staleAskCancelAt = 0
+	s.bidPrice = 0
+	s.askPrice = 0
+	s.bidQueueAhead = 0
+	s.askQueueAhead = 0
+	s.lastMidPrice = 0
+	s.bidCooldownUntil = 0
+	s.askCooldownUntil = 0
+
 	if math.Abs(s.inventoryBase) < 1e-6 {
+		s.currentEquity = s.cashUSD
 		return
 	}
 	closeQty := math.Abs(s.inventoryBase)
@@ -869,10 +898,6 @@ func (s *TickSimulator) FlattenToCash(markPrice float64) {
 	s.inventoryBase = 0
 	s.avgEntryPrice = 0
 	s.entryTimeNs = 0
-	s.hasBidQuote = false
-	s.hasAskQuote = false
-	s.staleBidCancelAt = 0
-	s.staleAskCancelAt = 0
 	s.currentEquity = s.cashUSD
 }
 

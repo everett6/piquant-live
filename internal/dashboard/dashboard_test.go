@@ -943,8 +943,9 @@ func TestTickSimEndpoint(t *testing.T) {
 		t.Fatalf("failed to decode tick sim JSON: %v", err)
 	}
 
-	if payload["symbol"] != "BTCUSDT" {
-		t.Errorf("expected symbol BTCUSDT, got %v", payload["symbol"])
+	sym, _ := payload["symbol"].(string)
+	if sym != "BTCUSDT" && sym != "ETHUSDT" {
+		t.Errorf("expected symbol BTCUSDT or ETHUSDT, got %v", payload["symbol"])
 	}
 	if _, ok := payload["final_equity"].(float64); !ok {
 		t.Errorf("expected final_equity in payload")

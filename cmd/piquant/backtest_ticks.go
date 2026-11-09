@@ -374,8 +374,8 @@ func ensureMonthlyPartitions(dataDir, symbol string, months int, forceDownload b
 
 			// High-volatility cascade shock during crash events (e.g. Yen carry crash Aug 2024)
 			shock := 0.0
-			if m.VolDaily > 0.040 && i > numTicks/3 && i < numTicks/3+800 {
-				shock = -currPrice * 0.00015 // Rapid micro-drop
+			if m.VolDaily > 0.040 && i > numTicks/3 && i < numTicks/3+120 {
+				shock = -currPrice * 0.00015 // Rapid micro-drop (~1.8% sudden wick)
 			}
 
 			targetMean := m.OpenPrice + float64(i)*driftPerTick
@@ -385,11 +385,14 @@ func ensureMonthlyPartitions(dataDir, symbol string, months int, forceDownload b
 				currPrice = 100.0
 			}
 
-			// Size distribution: power law / Pareto (0.001 to 5.0 BTC)
+			// Size distribution: power law / Pareto (0.001 to 5.0 BTC, 0.02 to 100.0 ETH)
 			u := nextRand()
 			size := 0.002 + 0.02/(math.Pow(1.0-u*0.92, 0.6))
-			if size > 10.0 {
-				size = 10.0
+			if sym == "ETHUSDT" {
+				size *= 20.0
+			}
+			if size > 100.0 {
+				size = 100.0
 			}
 
 			// Aggressor side: informed trades align with shock, random flow otherwise

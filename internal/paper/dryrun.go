@@ -194,8 +194,10 @@ type SymbolMicrostructure struct {
 	VolVarBps      float64
 	TradeBuy5s     float64
 	TradeSell5s    float64
-	TradeRate1s    float64
-	InventorySince time.Time
+	TradeRate1s      float64
+	InventorySince   time.Time
+	BidCooldownUntil time.Time
+	AskCooldownUntil time.Time
 }
 
 func newSymbolMicrostructure(symbol string, kylesLambda float64) *SymbolMicrostructure {
@@ -1277,11 +1279,12 @@ func (e *DryRunEngine) matchMakerOrders(symbol string, tradePrice float64, trade
 
 		filled := false
 		// Strict hftbacktest fill realism:
-		// 1. Price-through tolerance is 1 tick ($0.01), NOT 1.0 bps ($7.50).
+		// 1. Price-through tolerance is half a tick, calibrated per symbol (e.g. $0.051 for BTCUSDT, $0.0051 for ETHUSDT).
 		// 2. Trade aggressor must be on the opposite side of our resting limit order:
 		//    - Resting BUY bid only fills against SELLER-initiated trades (tradeSide == 1 -> isBuyerMaker == true).
 		//    - Resting SELL ask only fills against BUYER-initiated trades (tradeSide == 2 -> isBuyerMaker == false).
-		tickTol := 0.01
+		tick := symbolTickSize(symbol)
+		tickTol := tick * 0.51
 		if ord.Side == "BUY" && (tradeSide == 1 || tradePrice < ord.Price-tickTol) {
 			if tradePrice < ord.Price-tickTol {
 				// Market swept completely through our bid price level
@@ -1698,8 +1701,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 
 		minNetFloorBps := math.Max(6.0, baseTargetProfitBps*0.50)
 		targetProfitBps := minNetFloorBps
+		holdSec := 0.0
 		if !sm.InventorySince.IsZero() {
-			holdSec := now.Sub(sm.InventorySince).Seconds()
+			holdSec = now.Sub(sm.InventorySince).Seconds()
 			decayFactor := math.Exp(-holdSec / 900.0) // 15-minute half-life decay
 			targetProfitBps = minNetFloorBps + (baseTargetProfitBps-minNetFloorBps)*decayFactor
 		} else {
@@ -1715,6 +1719,16 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				if bestAsk > 0 {
 					targetAsk = bestAsk
 				}
+				sm.BidCooldownUntil = now.Add(30 * time.Second)
+			} else if (adverseDrawdownBps > 8.0 && (holdSec > 45.0 || sm.Ret5sBps < -1.0)) || (adverseDrawdownBps > 3.0 && holdSec > 180.0) {
+				// Dynamic Adverse Scratch: market is drifting against long position.
+				// Join inside ask to exit passively at the touch, taking a tiny scratch instead of waiting for 60 bps stop-loss!
+				if bestAsk > 0 {
+					targetAsk = bestAsk
+				} else {
+					targetAsk = midPrice
+				}
+				sm.BidCooldownUntil = now.Add(15 * time.Second)
 			} else {
 				// Normal market oscillation / swing holding: quote at or above minProfitAsk
 				if targetAsk < minProfitAsk {
@@ -1734,6 +1748,16 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				if bestBid > 0 {
 					targetBid = bestBid
 				}
+				sm.AskCooldownUntil = now.Add(30 * time.Second)
+			} else if (adverseDrawdownBps > 8.0 && (holdSec > 45.0 || sm.Ret5sBps > 1.0)) || (adverseDrawdownBps > 3.0 && holdSec > 180.0) {
+				// Dynamic Adverse Scratch: market is drifting against short position.
+				// Join inside bid to cover passively at the touch, taking a tiny scratch instead of waiting for 60 bps stop-loss!
+				if bestBid > 0 {
+					targetBid = bestBid
+				} else {
+					targetBid = midPrice
+				}
+				sm.AskCooldownUntil = now.Add(15 * time.Second)
 			} else {
 				// Normal market oscillation / swing holding: cover at or below maxProfitBid
 				if targetBid > maxProfitBid {
@@ -1755,9 +1779,10 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		targetAsk = bestAsk
 	}
 
-	// Quantize to valid exchange price tick size ($0.01 for BTCUSDT and ETHUSDT)
-	targetBid = math.Floor(targetBid*100.0) / 100.0
-	targetAsk = math.Ceil(targetAsk*100.0) / 100.0
+	// Quantize to valid exchange price tick size per symbol
+	tick := symbolTickSize(symbol)
+	targetBid = quantizePrice(targetBid, tick, false)
+	targetAsk = quantizePrice(targetAsk, tick, true)
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1792,6 +1817,13 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			keptOrders = append(keptOrders, ord)
 			continue
 		}
+		// Toxic momentum pull: immediately cancel resting opening quotes if flow becomes adverse
+		if (ord.Side == "SELL" && currentInv <= 0 && (sm.Ret5sBps > 1.5 || blendedSkewBps > 1.5)) ||
+			(ord.Side == "BUY" && currentInv >= 0 && (sm.Ret5sBps < -1.5 || blendedSkewBps < -1.5)) {
+			ord.CancelingUntil = now.Add(cancelLatency)
+			keptOrders = append(keptOrders, ord)
+			continue
+		}
 		// Preserve FIFO queue priority: only cancel & replace if target price moved > 2.5 bps.
 		devBps := math.Abs(ord.Price-target) / target * 1e4
 		if devBps > 2.5 {
@@ -1822,8 +1854,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if currentInv+clipQty > maxInvQty || blendedSkewBps <= -3.5 || currentInv >= 2.0*clipQty {
 			allowBuy = false
 		}
-		if currentInv > 0 && (blendedSkewBps < -1.25 || sm.Ret5sBps < -1.5) {
-			allowBuy = false // Toxic cascade defense: do not stack long inventory into a falling knife
+		if blendedSkewBps < -1.5 || sm.Ret5sBps < -1.5 || (!sm.BidCooldownUntil.IsZero() && now.Before(sm.BidCooldownUntil)) {
+			allowBuy = false // Toxic cascade defense: do not catch falling knife whether flat or long!
 		}
 	}
 	if allowBuy {
@@ -1857,8 +1889,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if currentInv-clipQty < -maxInvQty || blendedSkewBps >= 3.5 || currentInv <= -2.0*clipQty {
 			allowSell = false
 		}
-		if currentInv < 0 && (blendedSkewBps > 1.25 || sm.Ret5sBps > 1.5) {
-			allowSell = false // Toxic cascade defense: do not stack short inventory into a surging knife
+		if blendedSkewBps > 1.5 || sm.Ret5sBps > 1.5 || (!sm.AskCooldownUntil.IsZero() && now.Before(sm.AskCooldownUntil)) {
+			allowSell = false // Toxic cascade defense: do not short into surging knife whether flat or short!
 		}
 	}
 	if allowSell {
@@ -2183,4 +2215,35 @@ func (e *DryRunEngine) VPIN() *common.VPINCalculator {
 // TCAMarkout returns the institutional post-trade transaction cost analysis tracker.
 func (e *DryRunEngine) TCAMarkout() *TCAMarkoutTracker {
 	return e.tcaTracker
+}
+
+// symbolTickSize returns the exchange price tick size for a given instrument.
+func symbolTickSize(symbol string) float64 {
+	switch strings.ToUpper(symbol) {
+	case "BTCUSDT", "BTC":
+		return 0.10
+	case "ETHUSDT", "ETH", "SOLUSDT", "SOL":
+		return 0.01
+	case "DOGEUSDT", "DOGE":
+		return 0.0001
+	default:
+		return 0.01
+	}
+}
+
+// quantizePrice rounds a price to the exchange tick grid without IEEE-754 floating point artifacts.
+func quantizePrice(price float64, tick float64, roundUp bool) float64 {
+	if tick <= 0 {
+		tick = 0.01
+	}
+	var steps float64
+	if roundUp {
+		steps = math.Ceil(price/tick - 1e-9)
+	} else {
+		steps = math.Floor(price/tick + 1e-9)
+	}
+	quantized := steps * tick
+	decimals := int(math.Max(0, math.Round(-math.Log10(tick))))
+	p10 := math.Pow10(decimals)
+	return math.Round(quantized*p10) / p10
 }
