@@ -259,9 +259,9 @@ func (c *DynamicLeverageController) ComputeClipSizeForSymbol(symbol string, equi
 
 	uSym := strings.ToUpper(symbol)
 	prof := SymbolRiskProfile{VolWeight: 1.0, Decimals: 3}
-	for symPrefix, p := range DefaultSymbolProfiles {
-		if strings.Contains(uSym, symPrefix) {
-			prof = p
+	for _, p := range []string{"BTC", "ETH", "SOL", "BNB", "DOGE", "XRP", "AVAX", "LINK"} {
+		if strings.HasPrefix(uSym, p) {
+			prof = DefaultSymbolProfiles[p]
 			break
 		}
 	}

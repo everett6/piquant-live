@@ -59,7 +59,7 @@ func RunAutonomousRecalibration(ctx context.Context, symbol string, currentCapit
 			baseCfg := TickSimConfig{
 				Symbol:             sym,
 				InitialCapital:     currentCapital,
-				MakerFeeBps:        -0.50,
+				MakerFeeBps:        1.50,
 				TakerFeeBps:        4.0,
 				SimulatedLatencyMs: 10.0,
 				CancelLatencyMs:    5.0,

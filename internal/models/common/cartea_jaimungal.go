@@ -79,13 +79,22 @@ func (m *CarteaJaimungalMM) ComputeQuotes(midPrice, inventory, targetInventory, 
 	invPenalty := netInv * (2.0*m.Phi*timeRemaining + m.Alpha)
 	reservationPrice = midPrice - invPenalty - m.Rho*ofi
 
+	gamma := m.Gamma
+	if gamma <= 1e-6 {
+		gamma = 0.05
+	}
+	kappa := m.Kappa
+	if kappa <= 1e-6 {
+		kappa = 1.5
+	}
+
 	// Asymptotic / finite-horizon half-spread terms:
 	// spreadBase = (1 / gamma) * ln(1 + gamma / kappa)
-	spreadBase := (1.0 / m.Gamma) * math.Log(1.0+m.Gamma/m.Kappa)
+	spreadBase := (1.0 / gamma) * math.Log(1.0+gamma/kappa)
 
 	// Spread inventory skew term:
 	// rad = sqrt( (sigma^2 * gamma) / (2 * kappa) + phi / kappa )
-	rad := math.Sqrt((m.Sigma*m.Sigma*m.Gamma)/(2.0*m.Kappa) + m.Phi/m.Kappa)
+	rad := math.Sqrt((m.Sigma*m.Sigma*gamma)/(2.0*kappa) + m.Phi/kappa)
 
 	// Half spreads under Cartea-Jaimungal HJB:
 	// delta^{a*} = spreadBase + ((-2*netInv + 1) / 2) * rad

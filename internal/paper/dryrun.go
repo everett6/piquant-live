@@ -692,18 +692,22 @@ func (e *DryRunEngine) emergencyFlattenLocked(reason string) {
 			} else { // Short position covered
 				realizedPnL = (-pos.Size) * (pos.AvgEntryPrice - closePrice)
 			}
-			e.state.Cash += realizedPnL
+			feeUSDT := valUSDT * (e.cfg.TakerFeeBps * 1e-4)
+			netRealizedPnL := realizedPnL - feeUSDT
+			e.state.Cash += netRealizedPnL
 
-			pos.RealizedPnL += realizedPnL
+			pos.RealizedPnL += netRealizedPnL
 			pos.UnrealizedPnL = 0
 			pos.Size = 0
 			pos.TotalTrades++
+			pos.TakerTrades++
+			pos.TotalVolumeUSDT += valUSDT
 
-			e.state.RealizedPnL += realizedPnL
+			e.state.RealizedPnL += netRealizedPnL
 			e.state.TotalTrades++
-			if realizedPnL > 0 {
+			if netRealizedPnL > 0 {
 				e.state.WinningTrades++
-			} else if realizedPnL < 0 {
+			} else if netRealizedPnL < 0 {
 				e.state.LosingTrades++
 			}
 
@@ -716,10 +720,10 @@ func (e *DryRunEngine) emergencyFlattenLocked(reason string) {
 				Price:       closePrice,
 				Size:        qty,
 				ValueUSDT:   valUSDT,
-				FeeUSDT:     0.0,
+				FeeUSDT:     feeUSDT,
 				EdgeBps:     0.0,
 				SlippageBps: 0.0,
-				PnLRealized: realizedPnL,
+				PnLRealized: netRealizedPnL,
 				Strategy:    reason,
 				DataSource:  e.state.DataSource,
 			}
@@ -1400,26 +1404,28 @@ func (e *DryRunEngine) recoverStateFromJournal() (*DryRunState, error) {
 
 		if r.Side == "BUY" {
 			newSize := pos.Size + r.Size
-			if newSize > 0 {
+			if math.Abs(newSize) < 1e-7 {
+				newSize = 0.0
+				pos.AvgEntryPrice = 0.0
+			} else if newSize > 0 {
 				if pos.Size >= 0 {
 					pos.AvgEntryPrice = (pos.AvgEntryPrice*pos.Size + r.Price*r.Size) / newSize
 				} else {
 					pos.AvgEntryPrice = r.Price
 				}
-			} else if newSize == 0 {
-				pos.AvgEntryPrice = 0.0
 			}
 			pos.Size = newSize
 		} else if r.Side == "SELL" {
 			newSize := pos.Size - r.Size
-			if newSize < 0 {
+			if math.Abs(newSize) < 1e-7 {
+				newSize = 0.0
+				pos.AvgEntryPrice = 0.0
+			} else if newSize < 0 {
 				if pos.Size <= 0 {
 					pos.AvgEntryPrice = (pos.AvgEntryPrice*(-pos.Size) + r.Price*r.Size) / (-newSize)
 				} else {
 					pos.AvgEntryPrice = r.Price
 				}
-			} else if newSize == 0 {
-				pos.AvgEntryPrice = 0.0
 			}
 			pos.Size = newSize
 		}
@@ -2264,13 +2270,22 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	cancelLatency := latency / 2 // Half-RTT cancel message transit to matching engine
 
 	var keptOrders []*ActiveMakerOrder
+	var cancelingBuy *ActiveMakerOrder
+	var cancelingSell *ActiveMakerOrder
 	hasBuy := false
 	hasSell := false
 	for _, ord := range orders {
 		// In-flight cancel already dispatched: keep alive until cancel confirmation arrives
+		// Cap in-flight canceling orders to at most 1 per side to prevent stale quote accumulation
 		if !ord.CancelingUntil.IsZero() {
 			if now.Before(ord.CancelingUntil) {
-				keptOrders = append(keptOrders, ord)
+				if ord.Side == "BUY" && cancelingBuy == nil {
+					cancelingBuy = ord
+					keptOrders = append(keptOrders, ord)
+				} else if ord.Side == "SELL" && cancelingSell == nil {
+					cancelingSell = ord
+					keptOrders = append(keptOrders, ord)
+				}
 			}
 			continue
 		}
@@ -2773,7 +2788,7 @@ func quantizePrice(price float64, tick float64, roundUp bool) float64 {
 		steps = math.Floor(price/tick + 1e-9)
 	}
 	quantized := steps * tick
-	decimals := int(math.Max(0, math.Round(-math.Log10(tick))))
+	decimals := int(math.Max(0, math.Ceil(-math.Log10(tick)-1e-9)))
 	p10 := math.Pow10(decimals)
 	return math.Round(quantized*p10) / p10
 }

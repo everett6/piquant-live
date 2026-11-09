@@ -1,5 +1,7 @@
 package paper
 
+import "sync"
+
 // TCAMarkoutRingCapacity is the fixed power-of-two ring capacity for tracking in-flight fills.
 const TCAMarkoutRingCapacity = 256
 
@@ -47,6 +49,7 @@ type TCAMarkoutSnapshot struct {
 // TCAMarkoutTracker tracks executed fills and computes post-trade multi-horizon price markouts
 // and execution edge decomposition in a fixed ring buffer without heap allocations.
 type TCAMarkoutTracker struct {
+	mu    sync.RWMutex
 	Ring  [TCAMarkoutRingCapacity]PendingMarkout
 	Head  uint32
 	Count uint32
@@ -81,6 +84,9 @@ func (t *TCAMarkoutTracker) RecordFill(fillID uint64, symbol string, side int8, 
 	if fillPrice <= 0 || midPrice <= 0 {
 		return
 	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	idx := t.Head & (TCAMarkoutRingCapacity - 1)
 	t.Head++
@@ -125,6 +131,9 @@ func (t *TCAMarkoutTracker) OnTick(symbol string, midPrice float64, tickTimeNs i
 	if midPrice <= 0 {
 		return
 	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	var sym [16]byte
 	copy(sym[:], symbol)
@@ -185,6 +194,9 @@ func (t *TCAMarkoutTracker) OnTick(symbol string, midPrice float64, tickTimeNs i
 //
 // Hot path: 0 B/op, 0 allocs/op.
 func (t *TCAMarkoutTracker) Snapshot() TCAMarkoutSnapshot {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
 	var snap TCAMarkoutSnapshot
 	snap.TotalFillsAnalyzed = t.TotalFills
 
