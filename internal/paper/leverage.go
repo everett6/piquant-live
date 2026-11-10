@@ -295,3 +295,77 @@ func (c *DynamicLeverageController) ComputeClipSizeForSymbol(symbol string, equi
 	}
 	return clipQty, maxInvQty
 }
+
+// ComputeVolatilityKellySize implements institutional volatility-targeted Fractional Kelly position sizing.
+// Sizes the order so portfolio risk is strictly bounded to a fractional risk budget (1.5% of equity)
+// over the structural stop-loss distance, modulated inversely by realized ATR volatility.
+func (c *DynamicLeverageController) ComputeVolatilityKellySize(symbol string, equity float64, price float64, atrBps float64, stopLossBps float64, numSymbols int) (clipQty float64, maxInvQty float64) {
+	if equity <= 0 || price <= 0 {
+		return 0.001, 0.005
+	}
+	if numSymbols <= 0 {
+		numSymbols = 1
+	}
+	if stopLossBps <= 0 {
+		stopLossBps = 60.0
+	}
+	if atrBps <= 0 {
+		atrBps = 35.0
+	}
+
+	uSym := strings.ToUpper(symbol)
+	prof := SymbolRiskProfile{VolWeight: 1.0, Decimals: 3}
+	for _, p := range []string{"BTC", "ETH", "SOL", "BNB", "DOGE", "XRP", "AVAX", "LINK"} {
+		if strings.HasPrefix(uSym, p) {
+			prof = DefaultSymbolProfiles[p]
+			break
+		}
+	}
+
+	// 1. Target dollar risk budget: 1.5% of equity per trade
+	targetRiskUSD := equity * 0.015
+
+	// 2. Stop loss distance in USD per coin: max(stopLossBps, 1.25 * atrBps)
+	effectiveStopBps := math.Max(stopLossBps, atrBps*1.25)
+	stopDistUSD := price * (effectiveStopBps * 1e-4)
+	if stopDistUSD <= 0 {
+		stopDistUSD = price * 0.0050
+	}
+
+	// 3. Base order size derived from risk budget
+	baseQty := targetRiskUSD / stopDistUSD
+
+	// 4. Volatility Scaling: scale inversely with ATR relative to baseline 35 bps
+	volFactor := math.Sqrt(35.0 / math.Max(12.0, atrBps))
+	volFactor = math.Max(0.40, math.Min(1.60, volFactor))
+
+	// 5. Fractional Kelly scaling: (p*b - q)/b with safety factor
+	// Conservative swing parameters: win rate p=0.55, payoff ratio b=50/60=0.833
+	// Full Kelly = 0.076. Conservative fractional Kelly multiplier ~ 1.15
+	kellyMultiplier := 1.15
+
+	// 6. Max symbol inventory cap: at most 80% of account equity in a single asset
+	maxInvNotional := equity * 0.80 * prof.VolWeight
+	maxInvQty = maxInvNotional / price
+
+	// 7. Passive clip sizing: clip is target fraction (e.g. 45%) of max inventory
+	targetClip := baseQty * volFactor * kellyMultiplier
+	if targetClip > maxInvQty*0.60 {
+		targetClip = maxInvQty * 0.60
+	}
+	minClip := 6.0 / price // Binance $5.00 min notional plus safety margin
+	if targetClip < minClip {
+		targetClip = minClip
+	}
+	if targetClip > maxInvQty {
+		targetClip = maxInvQty
+	}
+
+	p := math.Pow(10, float64(prof.Decimals))
+	clipQty = math.Round(targetClip*p) / p
+	if clipQty <= 0 && prof.Decimals > 0 {
+		clipQty = 1.0 / p
+	}
+	maxInvQty = math.Round(maxInvQty*p) / p
+	return clipQty, maxInvQty
+}

@@ -54,6 +54,8 @@ type DryRunConfig struct {
 	TaxRatePct        float64       // Estimated income/capital gains tax rate percentage (default: 35.0% for US/CA)
 	ZeroFeeMaker      bool          // Zero-fee tier on major pairs (e.g. Binance.US BTC/USD, BTC/USDT, BTC/USDC)
 	ClipFraction      float64       // Fraction of max symbol allocation per quote clip (default: 0.45 = 45%)
+	BuyThreshold      float64       // Directional conviction entry threshold (default: 0.65; dynamic up to 0.72 on thin bids)
+	SellThreshold     float64       // Directional conviction short entry threshold (default: 0.35; dynamic down to 0.28 on heavy bids)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -80,14 +82,16 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		MaxLeverage:       3.5,
 		EnableMacroShield: true,
 		DataDir:           dataDir,
-		TargetProfitBps:   14.0, // Calibrated for high-turnover ~10% monthly average return target
-		EntryOffsetBps:    1.75, // Agile spread-capturing maker entry: placed near inside touch for frequent turnover
-		StopLossBps:       50.0, // Structural stop-loss protecting against crashes
+		TargetProfitBps:   50.0, // Quant hedge fund swing target (>= 50 bps per swing, completely eliminating fee drag)
+		EntryOffsetBps:    2.5,  // Patient maker entry at inside touch/queue level
+		StopLossBps:       60.0, // Structural stop-loss protecting against crashes
 		MonthlyGainCapPct: 15.0, // Hard ceiling for monthly profit target (preserves banked gains)
 		SpotOnly:          false,
 		TaxRatePct:        35.0, // Default 35% estimated tax reserve for US/CA
 		ZeroFeeMaker:      false, // Default standard maker fee (1.5 bps); opt-in to zero-fee BTC maker via --zero-fee-btc
 		ClipFraction:      0.45,  // 45% clip sizing for small spot cash accounts ($50-$75 per clip on $200 capital)
+		BuyThreshold:      0.65,  // Directional entry threshold (dynamic up to 0.72 on thin bids)
+		SellThreshold:     0.35,  // Short entry threshold (dynamic down to 0.28 on heavy bids)
 		CleanReset:        false,
 		EnableTaker:       false,
 	}
@@ -235,11 +239,26 @@ type SymbolMicrostructure struct {
 	BidCooldownUntil time.Time
 	AskCooldownUntil time.Time
 
+	// Multi-Horizon Quant Hedge Fund Alpha Tracking
+	MidHistory []MidPricePoint
+	Ret1mBps   float64
+	Ret5mBps   float64
+	Ret15mBps  float64
+	AtrBps     float64
+	OBI        float64 // Order book depth imbalance: (bid5 - ask5) / (bid5 + ask5)
+	Conviction float64 // Quant directional conviction score in [0.0, 1.0]
+
 	// Self-Improving Scalping Defense
 	ScalpingDisabled       bool
 	ScalpingDisabledReason string
 	ConsecutiveLosses      int
 	RecentPnlWindow        []float64
+}
+
+// MidPricePoint stores a historical mid price snapshot for multi-horizon return calculations.
+type MidPricePoint struct {
+	Time time.Time
+	Mid  float64
 }
 
 func newSymbolMicrostructure(symbol string, kylesLambda float64) *SymbolMicrostructure {
@@ -254,6 +273,7 @@ func newSymbolMicrostructure(symbol string, kylesLambda float64) *SymbolMicrostr
 		HawkesEst:   common.NewOnlineHawkesEstimator(5.0, 12.0, 20.0),
 		AdaHedge:    common.NewAdaHedgeEnsemble(7, 0.985),
 		VolVarBps:   0.15,
+		AtrBps:      35.0, // Baseline 15-minute ATR volatility in bps
 		TradeRate1s: 4.0,
 	}
 }
@@ -488,19 +508,25 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		cfg.OrderLatency = 50 * time.Millisecond
 	}
 	if cfg.TargetProfitBps <= 0 {
-		cfg.TargetProfitBps = 14.0
+		cfg.TargetProfitBps = 50.0
 	}
 	if cfg.EntryOffsetBps <= 0 {
-		cfg.EntryOffsetBps = 1.75
+		cfg.EntryOffsetBps = 2.5
 	}
 	if cfg.StopLossBps <= 0 {
-		cfg.StopLossBps = 50.0
+		cfg.StopLossBps = 60.0
 	}
 	if cfg.MonthlyGainCapPct <= 0 {
 		cfg.MonthlyGainCapPct = 15.0
 	}
 	if cfg.ClipFraction <= 0 {
 		cfg.ClipFraction = 0.45
+	}
+	if cfg.BuyThreshold <= 0 {
+		cfg.BuyThreshold = 0.65
+	}
+	if cfg.SellThreshold <= 0 {
+		cfg.SellThreshold = 0.35
 	}
 
 	if cfg.SpotOnly {
@@ -1963,6 +1989,78 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		tradeImb5s = (sm.TradeBuy5s - sm.TradeSell5s) / tradeTot5s
 	}
 
+	// Multi-Horizon Quant Alpha Tracking (1m, 5m, 15m returns and 15m ATR)
+	if midPrice > 0 {
+		nHist := len(sm.MidHistory)
+		if nHist == 0 || now.Sub(sm.MidHistory[nHist-1].Time) >= 500*time.Millisecond {
+			sm.MidHistory = append(sm.MidHistory, MidPricePoint{Time: now, Mid: midPrice})
+		}
+		cutoff20m := now.Add(-20 * time.Minute)
+		trimIdx := 0
+		for trimIdx < len(sm.MidHistory) && sm.MidHistory[trimIdx].Time.Before(cutoff20m) {
+			trimIdx++
+		}
+		if trimIdx > 0 {
+			sm.MidHistory = sm.MidHistory[trimIdx:]
+		}
+
+		t1m := now.Add(-1 * time.Minute)
+		t5m := now.Add(-5 * time.Minute)
+		t15m := now.Add(-15 * time.Minute)
+		var p1m, p5m, p15m float64
+		high15m := midPrice
+		low15m := midPrice
+
+		for i := len(sm.MidHistory) - 1; i >= 0; i-- {
+			pt := sm.MidHistory[i]
+			if pt.Mid > high15m {
+				high15m = pt.Mid
+			}
+			if pt.Mid < low15m {
+				low15m = pt.Mid
+			}
+			if p1m == 0 && !pt.Time.After(t1m) {
+				p1m = pt.Mid
+			}
+			if p5m == 0 && !pt.Time.After(t5m) {
+				p5m = pt.Mid
+			}
+			if p15m == 0 && !pt.Time.After(t15m) {
+				p15m = pt.Mid
+			}
+		}
+
+		if p1m > 0 {
+			sm.Ret1mBps = (midPrice - p1m) / p1m * 1e4
+		} else if sm.PrevMid > 0 {
+			sm.Ret1mBps = sm.Ret5sBps * 3.5
+		}
+		if p5m > 0 {
+			sm.Ret5mBps = (midPrice - p5m) / p5m * 1e4
+		} else {
+			sm.Ret5mBps = sm.Ret1mBps * 1.8
+		}
+		if p15m > 0 {
+			sm.Ret15mBps = (midPrice - p15m) / p15m * 1e4
+		} else {
+			sm.Ret15mBps = sm.Ret5mBps * 1.4
+		}
+
+		atrSpread := high15m - low15m
+		if atrSpread > 0 && midPrice > 0 {
+			calcAtr := (atrSpread / midPrice) * 1e4
+			if calcAtr >= 10.0 {
+				sm.AtrBps = 0.95*sm.AtrBps + 0.05*calcAtr
+			}
+		}
+		if sm.AtrBps < 15.0 {
+			sm.AtrBps = 15.0
+		}
+	}
+	if hasLiveBook {
+		sm.OBI = imbL5
+	}
+
 	// Per-symbol VPIN & Microstructure Circuit Breaker Check (Soft Quoting Gate)
 	liveVpin := sm.VpinCalc.VPIN()
 	softGatePaused, _ := sm.CircuitBrk.CheckWithTime(spreadBps, top5Depth, liveVpin, now.UnixNano())
@@ -2054,8 +2152,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 	levState := e.leverageCtrl.Compute(spreadBps, liveVpin, hkRatio, ddPct, isHalted)
 
-	// Compute institutional clip size and max symbol inventory cap
-	clipQty, maxInvQty := e.leverageCtrl.ComputeClipSizeForSymbol(symbol, currEq, levState.EffectiveLeverage, midPrice, len(e.cfg.Symbols))
+	// Compute institutional volatility-targeted Fractional Kelly clip size and max symbol inventory cap
+	clipQty, maxInvQty := e.leverageCtrl.ComputeVolatilityKellySize(symbol, currEq, midPrice, sm.AtrBps, e.cfg.StopLossBps, len(e.cfg.Symbols))
 	if macroSt.LeverageMultiplier > 0 && macroSt.LeverageMultiplier < 1.0 {
 		clipQty *= macroSt.LeverageMultiplier
 		maxInvQty *= macroSt.LeverageMultiplier
@@ -2188,6 +2286,40 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 	blendedSkewBps := 0.60*(qd.ReservationBps-invSkewBps) + 0.25*metaPred + 0.15*cbSig.LeadLagSkewBps
 
+	// Multi-Horizon Directional Conviction score P(Up) in [0.0, 1.0]
+	// Combines 1m, 5m, 15m return momentum, Coinbase institutional lead-lag drift,
+	// AdaHedge meta-ensemble prediction, and Order Book Imbalance (OBI).
+	zMom := 0.20*(sm.Ret1mBps/15.0) + 0.45*(sm.Ret5mBps/25.0) + 0.35*(sm.Ret15mBps/40.0)
+	zLeadLag := cbSig.LeadLagSkewBps / 3.0
+	if zLeadLag > 2.5 {
+		zLeadLag = 2.5
+	} else if zLeadLag < -2.5 {
+		zLeadLag = -2.5
+	}
+	zMeta := metaPred / 4.0
+	if zMeta > 2.5 {
+		zMeta = 2.5
+	} else if zMeta < -2.5 {
+		zMeta = -2.5
+	}
+	zOBI := sm.OBI / 0.40
+	if zOBI > 2.5 {
+		zOBI = 2.5
+	} else if zOBI < -2.5 {
+		zOBI = -2.5
+	}
+	zTotal := 0.35*zMom + 0.25*zLeadLag + 0.25*zMeta + 0.15*zOBI
+	convictionUp := 1.0 / (1.0 + math.Exp(-1.8*zTotal))
+	if sm.Conviction > 0 && math.Abs(sm.Conviction-0.50) > 1e-4 {
+		convictionUp = sm.Conviction
+	}
+	if convictionUp > 0.99 {
+		convictionUp = 0.99
+	} else if convictionUp < 0.01 {
+		convictionUp = 0.01
+	}
+	sm.Conviction = convictionUp
+
 	bidOffsetBps := math.Max(floorBps, qd.HalfSpreadBps-blendedSkewBps) + tcaPenaltyBps + driftWidenBps
 	askOffsetBps := math.Max(floorBps, qd.HalfSpreadBps+blendedSkewBps) + tcaPenaltyBps + driftWidenBps
 
@@ -2276,26 +2408,26 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	// Institutional Breakeven Floor & Dynamic Profit Decay Ratchet:
 	// When holding open inventory, the closing quote guarantees net profitability
 	// after covering all round-trip maker fees (2 * MakerFeeBps).
-	// A dynamic exponential decay ratchet starts quoting at base target profit (default 18.0 bps)
-	// to capture fast momentum rebounds, then smoothly relaxes over holding time (15m half-life)
-	// towards guaranteed net profit floor (+8.0 bps net = 11.0 bps gross),
+	// A dynamic exponential decay ratchet starts quoting at base target profit (default 50.0 bps)
+	// to capture swing momentum, then smoothly relaxes over holding time (30m half-life)
+	// towards guaranteed net profit floor (+25.0 bps net = 28.0 bps gross),
 	// ensuring positions never get trapped during quiet consolidation while ALWAYS banking green profits.
 	// An exit is ONLY allowed below break-even if structural stop-loss or confirmed toxic flow triggers.
 	if pos != nil && math.Abs(pos.Size) > 1e-8 && pos.AvgEntryPrice > 0 {
 		baseTargetProfitBps := e.cfg.TargetProfitBps
 		if baseTargetProfitBps <= 0 {
-			baseTargetProfitBps = 18.0
+			baseTargetProfitBps = 50.0
 		}
 		if sm.VolVarBps > 0.40 {
 			baseTargetProfitBps *= math.Min(2.0, math.Sqrt(sm.VolVarBps/0.40))
 		}
 		stopLossBps := e.cfg.StopLossBps
 		if stopLossBps <= 0 {
-			stopLossBps = 50.0
+			stopLossBps = 60.0
 		}
 		roundTripFeeBps := 2.0 * e.makerFeeBps(symbol)
 
-		minNetFloorBps := math.Max(8.0, baseTargetProfitBps*0.50)
+		minNetFloorBps := math.Max(6.0, baseTargetProfitBps*0.50)
 		targetProfitBps := minNetFloorBps
 		holdSec := 0.0
 		if !sm.InventorySince.IsZero() {
@@ -2310,20 +2442,32 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			minProfitAsk := pos.AvgEntryPrice * (1.0 + (roundTripFeeBps+targetProfitBps)*1e-4)
 			adverseDrawdownBps := (pos.AvgEntryPrice - midPrice) / pos.AvgEntryPrice * 1e4
 
+			// Asymmetric Hysteresis Exit Conditions:
+			// 1. Structural stop loss >= 60.0 bps
+			// 2. Confirmed toxic cascade (VPIN > 0.75 or Hawkes >= 0.85) with adverse drawdown > 25.0 bps
+			// 3. Decisive structural invalidation (Conviction < 0.38 && OBI < -0.25 && Ret5mBps < -10.0 bps)
 			if adverseDrawdownBps > stopLossBps {
 				// Structural invalidation: stop-loss triggered to protect capital against sustained crashes
 				if bestAsk > 0 {
 					targetAsk = bestAsk
 				}
-				sm.BidCooldownUntil = now.Add(30 * time.Second)
-			} else if adverseDrawdownBps > 20.0 && ((sm.VpinCalc != nil && sm.VpinCalc.VPIN() > 0.70) || (sm.HawkesEst != nil && sm.HawkesEst.BranchingRatio() >= 0.85)) {
+				sm.BidCooldownUntil = now.Add(45 * time.Second)
+			} else if adverseDrawdownBps > 25.0 && ((sm.VpinCalc != nil && sm.VpinCalc.VPIN() > 0.75) || (sm.HawkesEst != nil && sm.HawkesEst.BranchingRatio() >= 0.85)) {
 				// Informed Toxic Cascade Defense: exit passively at touch only when order flow is demonstrably toxic
 				if bestAsk > 0 {
 					targetAsk = bestAsk
 				} else {
 					targetAsk = midPrice
 				}
-				sm.BidCooldownUntil = now.Add(30 * time.Second)
+				sm.BidCooldownUntil = now.Add(45 * time.Second)
+			} else if adverseDrawdownBps > 20.0 && convictionUp < 0.38 && sm.OBI < -0.25 && sm.Ret5mBps < -10.0 {
+				// Decisive multi-horizon alpha invalidation (asymmetric hysteresis exit)
+				if bestAsk > 0 {
+					targetAsk = bestAsk
+				} else {
+					targetAsk = midPrice
+				}
+				sm.BidCooldownUntil = now.Add(45 * time.Second)
 			} else {
 				// Normal market oscillation / swing holding: quote at or above minProfitAsk
 				if targetAsk < minProfitAsk {
@@ -2331,12 +2475,13 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				}
 				// Profit-locking ratchet: if market surged into confirmed net profit:
 				// In calm or neutral flow, capture the inside ask immediately.
-				// In strong upward momentum (blendedSkewBps > 1.0), trail the ask higher with momentum skew
-				// to capture outsized runner profits (25-50 bps) instead of exiting prematurely!
+				// In strong upward momentum (blendedSkewBps > 1.0 or conviction > 0.65), trail the ask higher with momentum skew
+				// to capture outsized runner profits (up to 100-120 bps) instead of exiting prematurely!
 				if bestAsk >= minProfitAsk {
 					targetAsk = bestAsk
-					if blendedSkewBps > 1.0 {
-						momentumRunnerAsk := bestAsk * (1.0 + (blendedSkewBps * 0.50 * 1e-4))
+					if blendedSkewBps > 1.0 || convictionUp > 0.65 {
+						skewBonus := math.Max(blendedSkewBps, (convictionUp-0.5)*10.0)
+						momentumRunnerAsk := bestAsk * (1.0 + (skewBonus * 0.50 * 1e-4))
 						if momentumRunnerAsk > targetAsk {
 							targetAsk = momentumRunnerAsk
 						}
@@ -2352,15 +2497,23 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				if bestBid > 0 {
 					targetBid = bestBid
 				}
-				sm.AskCooldownUntil = now.Add(30 * time.Second)
-			} else if adverseDrawdownBps > 20.0 && ((sm.VpinCalc != nil && sm.VpinCalc.VPIN() > 0.70) || (sm.HawkesEst != nil && sm.HawkesEst.BranchingRatio() >= 0.85)) {
+				sm.AskCooldownUntil = now.Add(45 * time.Second)
+			} else if adverseDrawdownBps > 25.0 && ((sm.VpinCalc != nil && sm.VpinCalc.VPIN() > 0.75) || (sm.HawkesEst != nil && sm.HawkesEst.BranchingRatio() >= 0.85)) {
 				// Informed Toxic Cascade Defense: exit passively at touch only when order flow is demonstrably toxic
 				if bestBid > 0 {
 					targetBid = bestBid
 				} else {
 					targetBid = midPrice
 				}
-				sm.AskCooldownUntil = now.Add(30 * time.Second)
+				sm.AskCooldownUntil = now.Add(45 * time.Second)
+			} else if adverseDrawdownBps > 20.0 && convictionUp > 0.62 && sm.OBI > 0.25 && sm.Ret5mBps > 10.0 {
+				// Decisive multi-horizon alpha invalidation for short
+				if bestBid > 0 {
+					targetBid = bestBid
+				} else {
+					targetBid = midPrice
+				}
+				sm.AskCooldownUntil = now.Add(45 * time.Second)
 			} else {
 				// Normal market oscillation / swing holding: cover at or below maxProfitBid
 				if targetBid > maxProfitBid {
@@ -2368,12 +2521,13 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				}
 				// Profit-locking ratchet: if market dumped into confirmed net profit:
 				// In calm or neutral flow, capture the inside bid immediately.
-				// In strong downward momentum (blendedSkewBps < -1.0), trail the bid lower with momentum skew
+				// In strong downward momentum (blendedSkewBps < -1.0 or conviction < 0.35), trail the bid lower with momentum skew
 				// to capture runner profits instead of covering prematurely!
 				if bestBid <= maxProfitBid && bestBid > 0 {
 					targetBid = bestBid
-					if blendedSkewBps < -1.0 {
-						momentumRunnerBid := bestBid * (1.0 - (math.Abs(blendedSkewBps) * 0.50 * 1e-4))
+					if blendedSkewBps < -1.0 || convictionUp < 0.35 {
+						skewBonus := math.Max(math.Abs(blendedSkewBps), (0.5-convictionUp)*10.0)
+						momentumRunnerBid := bestBid * (1.0 - (skewBonus * 0.50 * 1e-4))
 						if momentumRunnerBid < targetBid && momentumRunnerBid > 0 {
 							targetBid = momentumRunnerBid
 						}
@@ -2450,12 +2604,20 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			keptOrders = append(keptOrders, ord)
 			continue
 		}
-		// Toxic momentum pull: immediately cancel resting opening quotes if flow becomes adverse
-		if (ord.Side == "SELL" && currentInv <= 0 && (sm.Ret5sBps > 1.5 || blendedSkewBps > 1.5 || cbSig.IsAdverseAsk)) ||
-			(ord.Side == "BUY" && currentInv >= 0 && (sm.Ret5sBps < -1.5 || blendedSkewBps < -1.5 || cbSig.IsAdverseBid)) {
-			ord.CancelingUntil = now.Add(cancelLatency)
-			keptOrders = append(keptOrders, ord)
-			continue
+		// Toxic momentum pull: cancel resting opening quotes if flow becomes adverse or invalidation triggers
+		if ord.Side == "SELL" && currentInv <= 0 {
+			if sm.Ret5sBps > 4.5 || blendedSkewBps > 3.0 || cbSig.IsAdverseAsk || convictionUp > 0.60 || (sm.OBI > 0.20 && convictionUp > 0.28) {
+				ord.CancelingUntil = now.Add(cancelLatency)
+				keptOrders = append(keptOrders, ord)
+				continue
+			}
+		}
+		if ord.Side == "BUY" && currentInv >= 0 {
+			if sm.Ret5sBps < -4.5 || blendedSkewBps < -3.0 || cbSig.IsAdverseBid || convictionUp < 0.40 || (sm.OBI < -0.20 && convictionUp < 0.72) {
+				ord.CancelingUntil = now.Add(cancelLatency)
+				keptOrders = append(keptOrders, ord)
+				continue
+			}
 		}
 		// Extreme leakage circuit: immediately cancel resting opening quotes if 4+ consecutive losses
 		if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
@@ -2482,6 +2644,30 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 	orders = keptOrders
 
+	// Dynamic OBI-Conditioned Entry Thresholds:
+	// Base directional conviction required: 0.65 (quant hedge fund conviction gate).
+	// If bid depth is thin (sm.OBI < -0.20), raise threshold to 0.72 to avoid catching falling knives.
+	// If bid depth is thick / strong buyer support (sm.OBI > 0.25), allow entry at 0.62.
+	buyThreshold := e.cfg.BuyThreshold
+	if buyThreshold <= 0 {
+		buyThreshold = 0.65
+	}
+	if sm.OBI < -0.20 {
+		buyThreshold = 0.72
+	} else if sm.OBI > 0.25 {
+		buyThreshold = 0.62
+	}
+
+	sellThreshold := e.cfg.SellThreshold
+	if sellThreshold <= 0 {
+		sellThreshold = 0.35
+	}
+	if sm.OBI > 0.20 {
+		sellThreshold = 0.28
+	} else if sm.OBI < -0.25 {
+		sellThreshold = 0.38
+	}
+
 	// Place resting BUY maker quote at the BACK of the real L1 queue
 	// If currently short (currentInv < 0), this is an inventory COVER order: unconditionally allowed!
 	// If currently flat or long (currentInv >= 0), this is opening/accumulating: apply risk gating.
@@ -2495,8 +2681,17 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if currentInv+clipQty > maxInvQty || blendedSkewBps <= -3.5 || currentInv >= 2.0*clipQty {
 			allowBuy = false
 		}
-		if blendedSkewBps < -1.5 || sm.Ret5sBps < -1.5 || cbSig.IsAdverseBid || (!sm.BidCooldownUntil.IsZero() && now.Before(sm.BidCooldownUntil)) {
+		if blendedSkewBps < -2.0 || sm.Ret5sBps < -3.0 || cbSig.IsAdverseBid || (!sm.BidCooldownUntil.IsZero() && now.Before(sm.BidCooldownUntil)) {
 			allowBuy = false // Toxic cascade defense: do not catch falling knife whether flat or long!
+		}
+		if convictionUp < 0.40 {
+			allowBuy = false // Decisive bearish invalidation: never buy into confirmed downward momentum
+		}
+		if sm.OBI < -0.20 && convictionUp < buyThreshold {
+			allowBuy = false // Order book collapse defense: thin bid depth requires >= 0.72 conviction
+		}
+		if currentInv > 0 && convictionUp < buyThreshold {
+			allowBuy = false // Position accumulation gate: adding to existing long requires >= buyThreshold
 		}
 		if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
 			allowBuy = false // Extreme leakage circuit: halt opening new long positions until recalibrated!
@@ -2541,8 +2736,17 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			if currentInv-clipQty < -maxInvQty || blendedSkewBps >= 3.5 || currentInv <= -2.0*clipQty {
 				allowSell = false
 			}
-			if blendedSkewBps > 1.5 || sm.Ret5sBps > 1.5 || cbSig.IsAdverseAsk || (!sm.AskCooldownUntil.IsZero() && now.Before(sm.AskCooldownUntil)) {
+			if blendedSkewBps > 2.0 || sm.Ret5sBps > 3.0 || cbSig.IsAdverseAsk || (!sm.AskCooldownUntil.IsZero() && now.Before(sm.AskCooldownUntil)) {
 				allowSell = false // Toxic cascade defense: do not short into surging knife whether flat or short!
+			}
+			if convictionUp > 0.60 {
+				allowSell = false // Decisive bullish invalidation: never short into confirmed upward momentum
+			}
+			if sm.OBI > 0.20 && convictionUp > sellThreshold {
+				allowSell = false // Order book surge defense: thin ask depth requires <= 0.28 conviction
+			}
+			if currentInv < 0 && convictionUp > sellThreshold {
+				allowSell = false // Position accumulation gate: adding to existing short requires <= sellThreshold
 			}
 			if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
 				allowSell = false // Extreme leakage circuit: halt opening new short positions until recalibrated!

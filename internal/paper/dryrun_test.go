@@ -1369,6 +1369,129 @@ func TestPageHinkleyConceptDriftQuoteWidening(t *testing.T) {
 	}
 }
 
+func TestQuantHedgeFundAlphaAndVolatilityKellySizing(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.TargetProfitBps = 50.0 // Quant hedge fund swing target
+	cfg.StopLossBps = 60.0
+	cfg.EntryOffsetBps = 2.5
+
+	ring := engine.NewSPSCRing(128)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+	eng, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	// 1. Verify Volatility-Targeted Kelly Position Sizing
+	clipCalm, maxCalm := eng.leverageCtrl.ComputeVolatilityKellySize("BTCUSDT", 200.0, 75000.0, 35.0, 60.0, 1)
+	clipVolatile, maxVolatile := eng.leverageCtrl.ComputeVolatilityKellySize("BTCUSDT", 200.0, 75000.0, 90.0, 60.0, 1)
+
+	if clipCalm <= 0 || maxCalm <= 0 {
+		t.Fatalf("expected positive calm clip and max allocation, got clip=%f max=%f", clipCalm, maxCalm)
+	}
+	if clipVolatile <= 0 || maxVolatile <= 0 {
+		t.Fatalf("expected positive volatile clip and max allocation, got clip=%f max=%f", clipVolatile, maxVolatile)
+	}
+	// Under elevated volatility (90 bps ATR vs 35 bps baseline), inverse volatility scaling MUST downsize clip
+	if clipVolatile > clipCalm {
+		t.Errorf("expected volatile clip (%f) <= calm clip (%f) under inverse ATR scaling", clipVolatile, clipCalm)
+	}
+
+	now := time.Now()
+
+	// 2. Verify Dynamic OBI-Conditioned Entry Thresholds
+	// Simulate order book with thin bids (OBI = -0.35)
+	eng.mu.Lock()
+	sm := eng.symMicro["BTCUSDT"]
+	if sm == nil {
+		sm = newSymbolMicrostructure("BTCUSDT", 0.25)
+		eng.symMicro["BTCUSDT"] = sm
+	}
+	sm.OBI = -0.35
+	sm.Ret5mBps = -12.0
+	sm.Conviction = 0.67 // Conviction (0.67) exceeds base 0.65, but is BELOW thin-bid threshold 0.72!
+	eng.mu.Unlock()
+
+	eng.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
+
+	st := eng.State()
+	orders := st.ActiveOrders["BTCUSDT"]
+	for _, o := range orders {
+		if o.Side == "BUY" && o.CancelingUntil.IsZero() {
+			t.Fatalf("thin bid depth (OBI=-0.35) with sub-0.72 conviction should NOT place BUY quote, got: %+v", o)
+		}
+	}
+
+	// Now provide high conviction (0.75 >= 0.72) with thin bids: BUY quote should be allowed!
+	eng.mu.Lock()
+	sm.Conviction = 0.75
+	sm.Ret5mBps = 5.0
+	sm.Ret1mBps = 4.0
+	eng.mu.Unlock()
+
+	eng.evaluateQuotesAndGating("BTCUSDT", 75000.00, now.Add(500*time.Millisecond))
+	stHigh := eng.State()
+	hasHighConvictionBuy := false
+	for _, o := range stHigh.ActiveOrders["BTCUSDT"] {
+		if o.Side == "BUY" && o.CancelingUntil.IsZero() {
+			hasHighConvictionBuy = true
+			break
+		}
+	}
+	if !hasHighConvictionBuy {
+		t.Fatalf("expected BUY quote placed with high conviction (0.75 >= 0.72)")
+	}
+
+	// 3. Verify Asymmetric Hysteresis Exit & Patient Swing Profit Ratchet
+	// Establish LONG position at $75,000
+	eng.mu.Lock()
+	eng.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          clipCalm,
+		AvgEntryPrice: 75000.00,
+		MarkPrice:     75000.00,
+	}
+	sm.InventorySince = now
+	sm.Conviction = 0.52 // Moderate neutral conviction: must NOT exit on noise!
+	sm.OBI = 0.0
+	sm.Ret5mBps = 0.0
+	eng.mu.Unlock()
+
+	// Price drops slightly by 10 bps (normal consolidation noise):
+	eng.evaluateQuotesAndGating("BTCUSDT", 74925.00, now.Add(10*time.Second))
+	stNoise := eng.State()
+	for _, o := range stNoise.ActiveOrders["BTCUSDT"] {
+		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
+			// Must quote at full target profit (+50 bps), NOT panic selling at inside touch
+			if o.Price < 75000.00*(1.0+0.0025) {
+				t.Errorf("noise dip should hold for profit target (>= +25 bps gross), got sell price %f vs entry %f", o.Price, 75000.00)
+			}
+		}
+	}
+
+	// Now simulate decisive alpha invalidation:
+	// Adverse drawdown 25 bps, Conviction collapsed to 0.32 (< 0.38), OBI < -0.25, Ret5mBps < -10.0
+	eng.mu.Lock()
+	sm.Conviction = 0.32
+	sm.OBI = -0.30
+	sm.Ret5mBps = -15.0
+	eng.mu.Unlock()
+
+	eng.evaluateQuotesAndGating("BTCUSDT", 74812.50, now.Add(20*time.Second))
+	stInvalid := eng.State()
+	hasInvalidationExit := false
+	for _, o := range stInvalid.ActiveOrders["BTCUSDT"] {
+		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
+			hasInvalidationExit = true
+			break
+		}
+	}
+	if !hasInvalidationExit {
+		t.Fatalf("expected invalidation exit SELL quote placed upon decisive alpha breakdown")
+	}
+}
+
 
 
 
