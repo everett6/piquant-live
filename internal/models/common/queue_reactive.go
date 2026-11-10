@@ -58,7 +58,7 @@ func NewQueueReactiveModel() QueueReactiveModel {
 // QueueBin returns the discrete queue state index [0, NumQueueBins-1] for a given queue size.
 // 0 allocs/op.
 func (m *QueueReactiveModel) QueueBin(queueSize float64) int {
-	if queueSize < m.BinThresholds[0] {
+	if math.IsNaN(queueSize) || math.IsInf(queueSize, 0) || queueSize < m.BinThresholds[0] {
 		return 0
 	}
 	if queueSize < m.BinThresholds[1] {
@@ -76,7 +76,9 @@ func (m *QueueReactiveModel) QueueBin(queueSize float64) int {
 // eventKind: 0 = Trade (market order), 1 = Arrival (limit order), 2 = Cancellation
 // 0 B/op and 0 allocs/op.
 func (m *QueueReactiveModel) UpdateOnline(eventKind uint8, size float64, touchQueueSize float64, dtSec float64) {
-	if dtSec <= 0 || size <= 0 {
+	if math.IsNaN(dtSec) || math.IsInf(dtSec, 0) || dtSec <= 0 ||
+		math.IsNaN(size) || math.IsInf(size, 0) || size <= 0 ||
+		math.IsNaN(touchQueueSize) || math.IsInf(touchQueueSize, 0) {
 		return
 	}
 	bin := m.QueueBin(touchQueueSize)

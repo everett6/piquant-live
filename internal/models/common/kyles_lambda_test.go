@@ -32,6 +32,33 @@ func TestKylesLambda_BasicEstimation(t *testing.T) {
 	}
 }
 
+func TestKylesLambda_NaNSafety(t *testing.T) {
+	est := NewKylesLambdaEstimator(0.05, 0.50)
+	est.UpdateTrade(50000.0, 1.0, false)
+	est.UpdateTrade(50010.0, 1.0, false)
+
+	// Inject NaNs and Infs
+	est.UpdateTrade(math.NaN(), 1.0, false)
+	est.UpdateTrade(50020.0, math.NaN(), false)
+	est.UpdateTrade(math.Inf(1), 1.0, false)
+	est.UpdateTrade(50030.0, math.Inf(-1), false)
+
+	lam := est.Lambda()
+	if math.IsNaN(lam) || math.IsInf(lam, 0) || lam <= 0 {
+		t.Fatalf("Lambda() returned invalid value after NaN trade injection: %f", lam)
+	}
+
+	temp, perm, tot := est.Impact(math.NaN())
+	if temp != 0 || perm != 0 || tot != 0 {
+		t.Fatalf("Impact(NaN) expected 0, got %f, %f, %f", temp, perm, tot)
+	}
+
+	opt := est.OptimalSize(math.NaN(), 50000.0)
+	if opt != 0 {
+		t.Fatalf("OptimalSize(NaN) expected 0, got %f", opt)
+	}
+}
+
 func TestKylesLambda_ImpactAndOptimalSize(t *testing.T) {
 	est := NewKylesLambdaEstimator(0.05, 0.50)
 

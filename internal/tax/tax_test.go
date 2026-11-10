@@ -184,3 +184,59 @@ func TestLongTermHoldingPeriodClassification(t *testing.T) {
 		t.Fatalf("expected long-term gain 100, got %f", summary.NetLongTermGainUSD)
 	}
 }
+
+func TestFormatMoney_NaNSafety(t *testing.T) {
+	// Must not panic on NaN or Inf
+	s1 := formatMoney(math.NaN())
+	if s1 != "0.00" {
+		t.Fatalf("expected '0.00' for NaN, got %s", s1)
+	}
+	s2 := formatMoney(math.Inf(1))
+	if s2 != "0.00" {
+		t.Fatalf("expected '0.00' for +Inf, got %s", s2)
+	}
+	s3 := formatMoney(1234567.89)
+	if s3 != "1,234,567.89" {
+		t.Fatalf("expected formatted money '1,234,567.89', got %s", s3)
+	}
+}
+
+func TestCalculateFromTrades_NaNSanitization(t *testing.T) {
+	calc := NewCalculator(24.0, 9.3)
+	tNow := time.Now()
+
+	trades := []RawTrade{
+		{Timestamp: tNow, Symbol: "BTCUSDT", Side: "BUY", Price: math.NaN(), Size: 1.0},
+		{Timestamp: tNow, Symbol: "BTCUSDT", Side: "BUY", Price: 50000.0, Size: math.NaN()},
+		{Timestamp: tNow, Symbol: "BTCUSDT", Side: "BUY", Price: -100.0, Size: 1.0},
+		{Timestamp: tNow, Symbol: "BTCUSDT", Side: "BUY", Price: 50000.0, Size: 0.01, FeeUSDT: math.NaN()},
+		{Timestamp: tNow.Add(time.Minute), Symbol: "BTCUSDT", Side: "SELL", Price: 51000.0, Size: 0.01, FeeUSDT: 0.05},
+	}
+
+	summary := calc.CalculateFromTrades(trades, tNow.Year())
+	if summary.TotalDispositions != 1 {
+		t.Fatalf("expected exactly 1 valid disposition, got %d", summary.TotalDispositions)
+	}
+	if math.IsNaN(summary.NetTaxableGainUSD) || math.IsInf(summary.NetTaxableGainUSD, 0) {
+		t.Fatalf("NetTaxableGainUSD is NaN/Inf: %f", summary.NetTaxableGainUSD)
+	}
+}
+
+func TestCalculateFromTrades_EmergencyLiquidation(t *testing.T) {
+	calc := NewCalculator(24.0, 9.3)
+	tNow := time.Now()
+
+	trades := []RawTrade{
+		{Timestamp: tNow, Symbol: "BTCUSDT", Side: "BUY", Price: 50000.0, Size: 0.010, FeeUSDT: 0.075},
+		{Timestamp: tNow.Add(time.Hour), Symbol: "BTCUSDT", Side: "EMERGENCY_PROTECTIVE_LIQUIDATE", Price: 52000.0, Size: 0.010, FeeUSDT: 0.078},
+	}
+
+	summary := calc.CalculateFromTrades(trades, tNow.Year())
+	if summary.TotalDispositions != 1 {
+		t.Fatalf("expected 1 disposition for emergency liquidation, got %d", summary.TotalDispositions)
+	}
+	expectedGain := (520.0 - 500.0) - (0.075 + 0.078)
+	if math.Abs(summary.NetTaxableGainUSD-expectedGain) > 1e-4 {
+		t.Fatalf("expected gain $%.4f, got $%.4f", expectedGain, summary.NetTaxableGainUSD)
+	}
+}

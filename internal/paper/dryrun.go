@@ -856,11 +856,15 @@ func (e *DryRunEngine) emergencyFlattenLocked(reason string) {
 				e.state.LosingTrades++
 			}
 
-			// Record liquidation fill in journal/blotter
+			// Record liquidation fill in journal/blotter with proper standard BUY/SELL side
+			liqSide := "SELL"
+			if pos.Size < 0 {
+				liqSide = "BUY"
+			}
 			fillRec := TradeRecord{
 				Timestamp:   time.Now().UTC(),
 				Symbol:      sym,
-				Side:        "EMERGENCY_PROTECTIVE_LIQUIDATE",
+				Side:        liqSide,
 				Role:        "TAKER_SAFETY",
 				Price:       closePrice,
 				Size:        qty,
@@ -869,7 +873,7 @@ func (e *DryRunEngine) emergencyFlattenLocked(reason string) {
 				EdgeBps:     0.0,
 				SlippageBps: 0.0,
 				PnLRealized: netRealizedPnL,
-				Strategy:    reason,
+				Strategy:    "EMERGENCY_PROTECTIVE_LIQUIDATE: " + reason,
 				DataSource:  e.state.DataSource,
 			}
 			e.recentFills = append([]TradeRecord{fillRec}, e.recentFills...)
@@ -1615,6 +1619,9 @@ func (e *DryRunEngine) recoverStateFromJournal() (*DryRunState, error) {
 				}
 			}
 			pos.Size = newSize
+		} else if strings.Contains(r.Side, "LIQUIDATE") {
+			pos.Size = 0.0
+			pos.AvgEntryPrice = 0.0
 		}
 
 		if isClosing {

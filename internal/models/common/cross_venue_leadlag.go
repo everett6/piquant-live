@@ -87,7 +87,8 @@ func NewCrossVenueLeadLagTracker(venueA, venueB string) *CrossVenueLeadLagTracke
 // UpdatePrices updates synchronous prices and timestamps across both venues.
 // Operates in 0 B/op and 0 allocs/op.
 func (t *CrossVenueLeadLagTracker) UpdatePrices(priceA, priceB float64, tsANs, tsBNs int64) LeadLagSignal {
-	if priceA <= 0 || priceB <= 0 {
+	if math.IsNaN(priceA) || math.IsInf(priceA, 0) || priceA <= 0 ||
+		math.IsNaN(priceB) || math.IsInf(priceB, 0) || priceB <= 0 {
 		return t.latestSignal
 	}
 

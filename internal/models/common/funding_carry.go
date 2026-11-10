@@ -54,7 +54,8 @@ func NewFundingCarryTracker(alpha, interestRate float64) *FundingCarryTracker {
 //
 // Hot path: 0 B/op, 0 allocs/op.
 func (f *FundingCarryTracker) UpdatePrices(perpPrice, spotPrice float64, timestampNs int64) float64 {
-	if perpPrice <= 0 || spotPrice <= 0 {
+	if math.IsNaN(perpPrice) || math.IsInf(perpPrice, 0) || perpPrice <= 0 ||
+		math.IsNaN(spotPrice) || math.IsInf(spotPrice, 0) || spotPrice <= 0 {
 		return f.InstantFunding
 	}
 

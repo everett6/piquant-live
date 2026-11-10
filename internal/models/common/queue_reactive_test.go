@@ -1,6 +1,7 @@
 package common
 
 import (
+	"math"
 	"testing"
 )
 
@@ -55,5 +56,21 @@ func BenchmarkQueueReactiveModel_FillProbability(b *testing.B) {
 		if p <= 0 {
 			b.Fatal("unexpected p")
 		}
+	}
+}
+
+func TestQueueReactiveModel_NaNSafety(t *testing.T) {
+	qm := NewQueueReactiveModel()
+	b := qm.QueueBin(math.NaN())
+	if b != 0 {
+		t.Fatalf("expected bin 0 for NaN queue size, got %d", b)
+	}
+
+	rate0 := qm.TradeRates[0]
+	qm.UpdateOnline(0, math.NaN(), 1.0, 0.5)
+	qm.UpdateOnline(0, 1.0, math.NaN(), 0.5)
+	qm.UpdateOnline(0, 1.0, 1.0, math.NaN())
+	if qm.TradeRates[0] != rate0 {
+		t.Fatalf("TradeRates mutated by NaN inputs: %f != %f", qm.TradeRates[0], rate0)
 	}
 }

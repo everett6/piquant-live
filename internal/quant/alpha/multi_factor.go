@@ -92,6 +92,15 @@ func (m *MultiFactorModel) Update(price, volume, vpin, spreadBps float64, now ti
 			WeightVol:      m.WeightVol,
 		}
 	}
+	if volume < 0 || math.IsNaN(volume) || math.IsInf(volume, 0) {
+		volume = 0
+	}
+	if math.IsNaN(vpin) || math.IsInf(vpin, 0) || vpin < 0 {
+		vpin = 0.50
+	}
+	if math.IsNaN(spreadBps) || math.IsInf(spreadBps, 0) || spreadBps < 0 {
+		spreadBps = 1.0
+	}
 
 	// Update circular history
 	m.prices[m.head] = price

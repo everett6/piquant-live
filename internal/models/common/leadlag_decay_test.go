@@ -223,3 +223,33 @@ func BenchmarkInventoryAgingUrgencyPenalty(b *testing.B) {
 		_ = policy.UrgencyPenalty(inv, dur)
 	}
 }
+
+func TestCrossVenueLeadLagTracker_NaNSafety(t *testing.T) {
+	tracker := NewCrossVenueLeadLagTracker("Binance", "Bybit")
+	nowNs := int64(1700000000000000000)
+	tracker.UpdatePrices(50000.0, 50000.0, nowNs, nowNs)
+
+	// Inject NaNs and Infs
+	sigNaN1 := tracker.UpdatePrices(math.NaN(), 50000.0, nowNs+1000, nowNs+1000)
+	if math.IsNaN(sigNaN1.LeadLagSpreadBps) || math.IsNaN(sigNaN1.InfoShareA) {
+		t.Fatalf("UpdatePrices allowed NaN PriceA to poison state")
+	}
+
+	sigNaN2 := tracker.UpdatePrices(50000.0, math.NaN(), nowNs+2000, nowNs+2000)
+	if math.IsNaN(sigNaN2.LeadLagSpreadBps) || math.IsNaN(sigNaN2.InfoShareB) {
+		t.Fatalf("UpdatePrices allowed NaN PriceB to poison state")
+	}
+}
+
+func TestInventoryAgingPolicy_NaNSafety(t *testing.T) {
+	policy := NewInventoryAgingPolicy(1.5, 30.0, 1.5)
+	b, a, r, u := policy.AdjustQuotes(50000.0, 50002.0, 50001.0, math.NaN(), 10.0)
+	if b != 50000.0 || a != 50002.0 || r != 50001.0 || u != 0.0 {
+		t.Fatalf("expected untouched quotes for NaN inventory, got %f, %f, %f, %f", b, a, r, u)
+	}
+
+	b2, a2, r2, u2 := policy.AdjustQuotes(50000.0, 50002.0, 50001.0, 1.0, math.NaN())
+	if b2 != 50000.0 || a2 != 50002.0 || r2 != 50001.0 || u2 != 0.0 {
+		t.Fatalf("expected untouched quotes for NaN duration, got %f, %f, %f, %f", b2, a2, r2, u2)
+	}
+}

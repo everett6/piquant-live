@@ -131,6 +131,55 @@ func TestOnlineHawkesEstimator_CascadeDetection(t *testing.T) {
 	}
 }
 
+func TestOnlineHawkesEstimator_ClockMonotonicityAndNaN(t *testing.T) {
+	h := NewOnlineHawkesEstimator(5.0, 12.0, 20.0)
+	t0 := int64(1_700_000_000_000_000_000)
+	h.Update(t0, true, 1.0)
+
+	// Inject out-of-order trade arriving in the past (t0 - 100ms)
+	tPast := t0 - 100_000_000
+	h.Update(tPast, false, 1.0)
+
+	// Ingest NaN size
+	h.Update(t0+50_000_000, true, math.NaN())
+	h.Update(t0+100_000_000, false, math.Inf(1))
+
+	intensity := h.Intensity()
+	if math.IsNaN(intensity) || math.IsInf(intensity, 0) || intensity <= 0 {
+		t.Fatalf("Hawkes intensity poisoned by out-of-order/NaN inputs: %f", intensity)
+	}
+
+	imb := h.FlowImbalance()
+	if math.IsNaN(imb) || math.IsInf(imb, 0) || imb < -1.0 || imb > 1.0 {
+		t.Fatalf("Hawkes FlowImbalance invalid: %f", imb)
+	}
+}
+
+func TestSpotPerpBasisModel_NaNSafety(t *testing.T) {
+	model := NewSpotPerpBasisModel(1e-3, 0.65, 1.5)
+	model.Evaluate(50000.0, 50000.0, 1.0)
+
+	// Inject NaN and Inf prices
+	dNaN1 := model.Evaluate(math.NaN(), 50000.0, 1.0)
+	if dNaN1.Action != ActionHold {
+		t.Fatalf("expected ActionHold for NaN spot, got %s", dNaN1.Action)
+	}
+	dNaN2 := model.Evaluate(50000.0, math.NaN(), 1.0)
+	if dNaN2.Action != ActionHold {
+		t.Fatalf("expected ActionHold for NaN perp, got %s", dNaN2.Action)
+	}
+	dInf := model.Evaluate(50000.0, math.Inf(1), 1.0)
+	if dInf.Action != ActionHold {
+		t.Fatalf("expected ActionHold for Inf perp, got %s", dInf.Action)
+	}
+
+	// Normal evaluate should still produce finite numbers
+	dNormal := model.Evaluate(50000.0, 50005.0, 1.0)
+	if math.IsNaN(dNormal.ZScore) || math.IsInf(dNormal.ZScore, 0) {
+		t.Fatalf("ZScore became NaN/Inf: %f", dNormal.ZScore)
+	}
+}
+
 func BenchmarkOnlineHawkesEstimator_Update(b *testing.B) {
 	h := NewOnlineHawkesEstimator(5.0, 12.0, 20.0)
 	nowNs := int64(1_700_000_000_000_000_000)

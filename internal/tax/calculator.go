@@ -92,10 +92,17 @@ func (c *Calculator) CalculateFromTrades(trades []RawTrade, taxYear int) *TaxSum
 	var allDispositions []TaxDisposition
 
 	for _, tr := range trades {
+		if math.IsNaN(tr.Price) || math.IsInf(tr.Price, 0) || tr.Price <= 0 ||
+			math.IsNaN(tr.Size) || math.IsInf(tr.Size, 0) || tr.Size <= 0 {
+			continue
+		}
+		if math.IsNaN(tr.FeeUSDT) || math.IsInf(tr.FeeUSDT, 0) || tr.FeeUSDT < 0 {
+			tr.FeeUSDT = 0
+		}
 		sym := strings.ToUpper(tr.Symbol)
 		side := strings.ToUpper(tr.Side)
 
-		if side == "BUY" {
+		if side == "BUY" || strings.Contains(side, "BUY") {
 			// Inbound lot: enqueue
 			costBasis := tr.Price * tr.Size
 			lotsBySymbol[sym] = append(lotsBySymbol[sym], &TaxLot{
@@ -107,7 +114,7 @@ func (c *Calculator) CalculateFromTrades(trades []RawTrade, taxYear int) *TaxSum
 				FeeUSD:       tr.FeeUSDT,
 				RemainingQty: tr.Size,
 			})
-		} else if side == "SELL" {
+		} else if side == "SELL" || strings.Contains(side, "SELL") || strings.Contains(side, "LIQUIDATE") {
 			// Outbound disposition: match against open lots in FIFO order
 			sellQtyRemaining := tr.Size
 			sellProceedsPerUnit := tr.Price
@@ -168,8 +175,12 @@ func (c *Calculator) CalculateFromTrades(trades []RawTrade, taxYear int) *TaxSum
 				proceedsUSD := sellQtyRemaining * sellProceedsPerUnit
 				feeUSD := sellQtyRemaining * sellFeePerUnit
 				// Fallback basis: assume entry at sell price minus realized PnL proportion if recorded
-				basisUSD := proceedsUSD - tr.PnLRealized - feeUSD
-				if basisUSD < 0 {
+				pnlProp := 0.0
+				if tr.Size > 0 && !math.IsNaN(tr.PnLRealized) && !math.IsInf(tr.PnLRealized, 0) {
+					pnlProp = tr.PnLRealized * (sellQtyRemaining / tr.Size)
+				}
+				basisUSD := proceedsUSD - pnlProp - feeUSD
+				if basisUSD < 0 || math.IsNaN(basisUSD) || math.IsInf(basisUSD, 0) {
 					basisUSD = proceedsUSD
 				}
 				allDispositions = append(allDispositions, TaxDisposition{
@@ -463,7 +474,13 @@ func sign(v float64) string {
 }
 
 func formatMoney(v float64) string {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return "0.00"
+	}
 	parts := strings.Split(fmt.Sprintf("%.2f", v), ".")
+	if len(parts) < 2 {
+		return parts[0] + ".00"
+	}
 	intPart := parts[0]
 	decPart := parts[1]
 

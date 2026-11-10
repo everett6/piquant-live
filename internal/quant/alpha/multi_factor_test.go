@@ -1,6 +1,7 @@
 package alpha
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -58,6 +59,22 @@ func TestMultiFactorModelMeanReversion(t *testing.T) {
 
 	if scoreDip.ValueFactor <= 0.20 {
 		t.Fatalf("expected positive value factor (mean-reversion long) when oversold, got %f", scoreDip.ValueFactor)
+	}
+}
+
+func TestMultiFactorModelNaNSafety(t *testing.T) {
+	mf := NewMultiFactorModel(100)
+	now := time.Now()
+
+	// Inject NaNs across all parameters
+	s1 := mf.Update(math.NaN(), 1.0, 0.20, 1.5, now)
+	if s1.Conviction != 0.50 || math.IsNaN(s1.CompositeScore) {
+		t.Fatalf("expected safe conviction on NaN price, got %f", s1.Conviction)
+	}
+
+	s2 := mf.Update(60000.0, math.NaN(), math.NaN(), math.NaN(), now)
+	if math.IsNaN(s2.CompositeScore) || math.IsNaN(s2.Conviction) {
+		t.Fatalf("expected finite scores on NaN volume/vpin/spread, got %f, %f", s2.CompositeScore, s2.Conviction)
 	}
 }
 

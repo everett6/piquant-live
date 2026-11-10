@@ -79,7 +79,9 @@ func (p *InventoryAgingPolicy) UrgencyPenalty(inventory float64, holdingDuration
 // Returns: adjustedBid, adjustedAsk, adjustedReservation, urgencyBps (absolute penalty in bps).
 // Operates in 0 B/op and 0 allocs/op.
 func (p *InventoryAgingPolicy) AdjustQuotes(bidPrice, askPrice, reservationPrice, inventory float64, holdingDurationSec float64) (adjustedBid, adjustedAsk, adjustedReservation float64, urgencyBps float64) {
-	if inventory == 0 || holdingDurationSec <= 0 || reservationPrice <= 0 {
+	if math.IsNaN(inventory) || math.IsInf(inventory, 0) || inventory == 0 ||
+		math.IsNaN(holdingDurationSec) || math.IsInf(holdingDurationSec, 0) || holdingDurationSec <= 0 ||
+		math.IsNaN(reservationPrice) || math.IsInf(reservationPrice, 0) || reservationPrice <= 0 {
 		return bidPrice, askPrice, reservationPrice, 0.0
 	}
 
