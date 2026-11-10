@@ -20,6 +20,8 @@ import (
 	"piquant-live/internal/macro"
 	"piquant-live/internal/marketdata"
 	"piquant-live/internal/models/common"
+	"piquant-live/internal/quant/guardrails"
+	"piquant-live/internal/quant/orchestrator"
 )
 
 // DryRunConfig configures the 14-day autonomous paper money dry run.
@@ -185,6 +187,7 @@ type DryRunState struct {
 	EstimatedTaxUSDT       float64                       `json:"estimated_tax_usdt"`        // Cumulative estimated tax reserve
 	AfterTaxEquity         float64                       `json:"after_tax_equity"`          // Equity net of estimated tax reserve
 	AfterTaxReturnPct      float64                       `json:"after_tax_return_pct"`      // Post-tax return percentage
+	QuantOrchestrator      *orchestrator.OrchestratorReport `json:"quant_orchestrator,omitempty"` // Latency-adaptive multi-strategy orchestration
 }
 
 // ScalpingRegimeState reports per-symbol scalping viability and mode (Scalp vs Patient Swing).
@@ -371,6 +374,10 @@ type DryRunEngine struct {
 
 	// Real-time Coinbase institutional lead-lag signal oracle
 	cbOracle *CoinbaseSignalOracle
+
+	// Quant hedge fund latency orchestrator and pre-trade guardrails
+	quantOrch     *orchestrator.LatencyAdaptiveOrchestrator
+	preTradeGuard *guardrails.PreTradeGuard
 }
 
 // atomicWriteFile safely writes data to a temporary file, fsyncs data to media, renames,
@@ -576,6 +583,25 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		minHalfSpreadFloorBps: 0.25,
 		recentFills:           make([]TradeRecord, 0, 32),
 	}
+
+	guardCfg := guardrails.DefaultGuardrailConfig()
+	guardCfg.MaxDailyDrawdownPct = cfg.MaxDrawdownPct
+	maxLev := cfg.MaxLeverage
+	if maxLev <= 0 {
+		maxLev = 3.5
+	}
+	if cfg.InitialCapital > 0 {
+		buyingPower := cfg.InitialCapital * maxLev
+		guardCfg.Exposure.MaxGrossUSD = math.Max(25000.0, buyingPower*1.50)
+		guardCfg.Exposure.MaxNetUSD = math.Max(15000.0, buyingPower*1.20)
+		guardCfg.Exposure.MaxOrderQtyUSD = math.Max(5000.0, buyingPower*0.85)
+		guardCfg.Exposure.MaxConcentrationPct = math.Max(80.0, 100.0*maxLev)
+	}
+	guardCfg.RateLimitRate = 200.0
+	guardCfg.RateLimitCapacity = 500.0
+	e.quantOrch = orchestrator.NewLatencyAdaptiveOrchestrator(orchestrator.DefaultOrchestratorConfig())
+	e.preTradeGuard = guardrails.NewPreTradeGuard(guardCfg)
+
 	if cfg.EnableMacroShield {
 		dDir := cfg.DataDir
 		if dDir == "" {
@@ -674,6 +700,10 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 
 	if e.macroGuardian != nil {
 		e.state.Macro = e.macroGuardian.Evaluate(time.Now())
+	}
+	if e.quantOrch != nil {
+		rep := e.quantOrch.Report(time.Now())
+		e.state.QuantOrchestrator = &rep
 	}
 	e.updateTaxReservesLocked()
 
@@ -2144,7 +2174,38 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	peakEq := e.state.PeakEquity
 	currEq := e.state.Equity
 	isHalted := e.state.CircuitHalted
+	posSnapshot := make(map[string]float64)
+	marksSnapshot := make(map[string]float64)
+	for s, p := range e.state.Positions {
+		if p != nil {
+			posSnapshot[s] = p.Size
+			marksSnapshot[s] = p.MarkPrice
+		}
+	}
 	e.mu.RUnlock()
+	marksSnapshot[symbol] = midPrice
+
+	engineLatency := e.cfg.OrderLatency
+	if engineLatency <= 0 {
+		engineLatency = 120 * time.Millisecond
+	}
+	if e.quantOrch != nil {
+		e.quantOrch.RecordLatencyUpdate(engineLatency, 0.0, now)
+	}
+	if e.preTradeGuard != nil {
+		e.preTradeGuard.UpdatePortfolioState(currEq, peakEq, posSnapshot, marksSnapshot, now)
+		if isTripped, tripReason, _, _, _, _ := e.preTradeGuard.Status(); isTripped && !isHalted {
+			e.mu.Lock()
+			e.state.CircuitHalted = true
+			e.state.CircuitHaltReason = "PreTradeGuard: " + tripReason
+			for s := range e.activeOrders {
+				e.activeOrders[s] = nil
+			}
+			e.emergencyFlattenLocked("PreTradeGuard_KillSwitch_Tripped")
+			e.mu.Unlock()
+			return
+		}
+	}
 
 	ddPct := 0.0
 	if peakEq > 0 {
@@ -2706,17 +2767,37 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if bestBid > 0 && targetBid < bestBid*0.9999 {
 			queueEst = math.Max(buySize, bidSize*0.50)
 		}
-		orders = append(orders, &ActiveMakerOrder{
-			Symbol:     symbol,
-			Side:       "BUY",
-			Price:      targetBid,
-			Size:       buySize,
-			PlacedAt:   now,
-			ActiveAt:   now.Add(latency),
-			QueueAhead: queueEst,
-			Strategy:   "GLFT_QueueReactive_Maker",
-			EdgeBps:    bidOffsetBps,
-		})
+		if e.preTradeGuard != nil {
+			isReduce := currentInv < 0
+			ordReq := guardrails.OrderRequest{
+				Symbol:       symbol,
+				Side:         "BUY",
+				Price:        targetBid,
+				Quantity:     buySize,
+				IsReduceOnly: isReduce,
+			}
+			if err := e.preTradeGuard.ValidateOrder(ordReq, bestBid, bestAsk, now); err != nil {
+				allowBuy = false
+			}
+		}
+		if allowBuy {
+			stratName := "GLFT_QueueReactive_Maker"
+			if e.quantOrch != nil {
+				rep := e.quantOrch.Report(now)
+				stratName = string(rep.CurrentMode)
+			}
+			orders = append(orders, &ActiveMakerOrder{
+				Symbol:     symbol,
+				Side:       "BUY",
+				Price:      targetBid,
+				Size:       buySize,
+				PlacedAt:   now,
+				ActiveAt:   now.Add(latency),
+				QueueAhead: queueEst,
+				Strategy:   stratName,
+				EdgeBps:    bidOffsetBps,
+			})
+		}
 	}
 
 	// Place resting SELL maker quote at the BACK of the real L1 queue
@@ -2758,19 +2839,43 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if bestAsk > 0 && targetAsk > bestAsk*1.0001 {
 			queueEst = math.Max(sellSize, askSize*0.50)
 		}
-		orders = append(orders, &ActiveMakerOrder{
-			Symbol:     symbol,
-			Side:       "SELL",
-			Price:      targetAsk,
-			Size:       sellSize,
-			PlacedAt:   now,
-			ActiveAt:   now.Add(latency),
-			QueueAhead: queueEst,
-			Strategy:   "GLFT_QueueReactive_Maker",
-			EdgeBps:    askOffsetBps,
-		})
+		if e.preTradeGuard != nil {
+			isReduce := currentInv > 0
+			ordReq := guardrails.OrderRequest{
+				Symbol:       symbol,
+				Side:         "SELL",
+				Price:        targetAsk,
+				Quantity:     sellSize,
+				IsReduceOnly: isReduce,
+			}
+			if err := e.preTradeGuard.ValidateOrder(ordReq, bestBid, bestAsk, now); err != nil {
+				allowSell = false
+			}
+		}
+		if allowSell {
+			stratName := "GLFT_QueueReactive_Maker"
+			if e.quantOrch != nil {
+				rep := e.quantOrch.Report(now)
+				stratName = string(rep.CurrentMode)
+			}
+			orders = append(orders, &ActiveMakerOrder{
+				Symbol:     symbol,
+				Side:       "SELL",
+				Price:      targetAsk,
+				Size:       sellSize,
+				PlacedAt:   now,
+				ActiveAt:   now.Add(latency),
+				QueueAhead: queueEst,
+				Strategy:   stratName,
+				EdgeBps:    askOffsetBps,
+			})
+		}
 	}
 	e.activeOrders[symbol] = orders
+	if e.quantOrch != nil {
+		rep := e.quantOrch.Report(now)
+		e.state.QuantOrchestrator = &rep
+	}
 
 	// Tactical Taker Execution:
 	// Only permitted if explicitly opted in via EnableTaker configuration (default: false in pure MM).
