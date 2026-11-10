@@ -954,3 +954,58 @@ func TestTickSimEndpoint(t *testing.T) {
 		t.Errorf("expected monthly_breakdown in payload")
 	}
 }
+
+func TestTaxEndpointsAndForm8949Export(t *testing.T) {
+	s := newTestServer(t, nil)
+
+	// 1. Unauthenticated request to /api/tax should return 401
+	rec401 := get(t, s.Handler(), http.MethodGet, "/api/tax", nil, nil)
+	if rec401.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated GET /api/tax, got %d", rec401.Code)
+	}
+
+	// 2. Authenticated request to /api/tax should return 200 with valid TaxSummary JSON
+	authHdr := map[string]string{"Authorization": "Bearer " + peerToken}
+	rec200 := get(t, s.Handler(), http.MethodGet, "/api/tax?year=2026", authHdr, nil)
+	if rec200.Code != http.StatusOK {
+		t.Fatalf("GET /api/tax status = %d: %s", rec200.Code, rec200.Body.String())
+	}
+
+	var summary map[string]any
+	if err := json.Unmarshal(rec200.Body.Bytes(), &summary); err != nil {
+		t.Fatalf("failed to decode tax JSON: %v", err)
+	}
+	if yr, ok := summary["tax_year"].(float64); !ok || int(yr) != 2026 {
+		t.Errorf("expected tax_year 2026, got %v", summary["tax_year"])
+	}
+	if _, ok := summary["quarterly_schedule"].([]any); !ok {
+		t.Errorf("expected quarterly_schedule in payload")
+	}
+
+	// 3. Authenticated request to /api/tax/export.csv should return CSV file
+	recCSV := get(t, s.Handler(), http.MethodGet, "/api/tax/export.csv?year=2026", authHdr, nil)
+	if recCSV.Code != http.StatusOK {
+		t.Fatalf("GET /api/tax/export.csv status = %d: %s", recCSV.Code, recCSV.Body.String())
+	}
+	ct := recCSV.Header().Get("Content-Type")
+	if !strings.Contains(ct, "text/csv") {
+		t.Errorf("expected text/csv Content-Type, got %s", ct)
+	}
+	cd := recCSV.Header().Get("Content-Disposition")
+	if !strings.Contains(cd, "IRS_Form_8949_2026.csv") {
+		t.Errorf("expected attachment header with IRS_Form_8949_2026.csv, got %s", cd)
+	}
+	if !strings.Contains(recCSV.Body.String(), "Description of Property") {
+		t.Errorf("expected CSV header row in body")
+	}
+
+	// 4. GET /tax authenticated serves the full web dashboard tax view
+	recHTML := get(t, s.Handler(), http.MethodGet, "/tax", authHdr, nil)
+	if recHTML.Code != http.StatusOK {
+		t.Fatalf("GET /tax status = %d: %s", recHTML.Code, recHTML.Body.String())
+	}
+	if !strings.Contains(recHTML.Body.String(), "PiQuant Crypto Tax Accounting") {
+		t.Errorf("expected 'PiQuant Crypto Tax Accounting' in HTML body")
+	}
+}
+

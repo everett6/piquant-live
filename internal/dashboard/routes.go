@@ -23,6 +23,7 @@ import (
 	"piquant-live/internal/models/common"
 	"piquant-live/internal/paper"
 	"piquant-live/internal/secrets"
+	"piquant-live/internal/tax"
 )
 
 // routes registers every handler.
@@ -60,6 +61,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/paper/historical-sim", s.handlePaperHistoricalSim)
 	s.mux.HandleFunc("/api/paper/tick-sim", s.handlePaperTickSim)
 	s.mux.HandleFunc("/api/paper/cloud-optimizer", s.handlePaperCloudOptimizer)
+	s.mux.HandleFunc("/api/tax", s.handleTax)
+	s.mux.HandleFunc("/api/tax/export.csv", s.handleTaxExportCSV)
+	s.mux.HandleFunc("/tax", s.handleTaxPage)
 }
 
 // handleManifest serves the installable Progressive Web App (PWA) manifest.
@@ -2244,3 +2248,117 @@ func (s *Server) handlePaperCloudOptimizer(w http.ResponseWriter, r *http.Reques
 		},
 	})
 }
+
+// resolveJournalPath locates the trade journal file dryrun_journal.jsonl.
+func (s *Server) resolveJournalPath() string {
+	candidates := []string{
+		"data/paper/dryrun_journal.jsonl",
+		"/var/lib/piquant/data/paper/dryrun_journal.jsonl",
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, "piquant-data", "paper", "dryrun_journal.jsonl"))
+	}
+	for _, dp := range s.opts.DataDirs {
+		candidates = append(candidates, filepath.Join(dp, "paper", "dryrun_journal.jsonl"))
+	}
+	for _, c := range candidates {
+		if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+			return c
+		}
+	}
+	if len(s.opts.DataDirs) > 0 {
+		return filepath.Join(s.opts.DataDirs[0], "paper", "dryrun_journal.jsonl")
+	}
+	return "data/paper/dryrun_journal.jsonl"
+}
+
+// handleTax returns the comprehensive IRS Form 8949 / Schedule D tax summary.
+func (s *Server) handleTax(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	yearStr := r.URL.Query().Get("year")
+	year := time.Now().Year()
+	if yearStr != "" {
+		if y, err := strconv.Atoi(yearStr); err == nil {
+			year = y
+		}
+	}
+
+	fedRate := 24.0
+	if fStr := r.URL.Query().Get("fed"); fStr != "" {
+		if f, err := strconv.ParseFloat(fStr, 64); err == nil && f > 0 {
+			fedRate = f
+		}
+	}
+
+	stateRate := 9.3
+	if sStr := r.URL.Query().Get("state"); sStr != "" {
+		if st, err := strconv.ParseFloat(sStr, 64); err == nil && st > 0 {
+			stateRate = st
+		}
+	}
+
+	calc := tax.NewCalculator(fedRate, stateRate)
+	jPath := s.resolveJournalPath()
+	summary, err := calc.CalculateFromJournalFile(jPath, year)
+	if err != nil {
+		// Provide empty summary baseline if no journal exists yet
+		summary = &tax.TaxSummary{
+			TaxYear:          year,
+			GeneratedAt:      time.Now().UTC(),
+			FederalRatePct:   fedRate,
+			StateRatePct:     stateRate,
+			EffectiveRatePct: fedRate + stateRate,
+		}
+	}
+
+	writeJSON(w, http.StatusOK, summary)
+}
+
+// handleTaxExportCSV streams a ready-to-import IRS Form 8949 CSV file.
+func (s *Server) handleTaxExportCSV(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	yearStr := r.URL.Query().Get("year")
+	year := time.Now().Year()
+	if yearStr != "" {
+		if y, err := strconv.Atoi(yearStr); err == nil {
+			year = y
+		}
+	}
+
+	calc := tax.NewCalculator(24.0, 9.3)
+	jPath := s.resolveJournalPath()
+	summary, err := calc.CalculateFromJournalFile(jPath, year)
+	if err != nil {
+		summary = &tax.TaxSummary{TaxYear: year}
+	}
+
+	csvBytes, err := tax.ExportForm8949CSV(summary)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"IRS_Form_8949_%d.csv\"", summary.TaxYear))
+	w.Write(csvBytes)
+}
+
+// handleTaxPage serves the standalone tax accounting web page.
+func (s *Server) handleTaxPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if s.authenticate(r) == authNone {
+		s.renderLogin(w, r)
+		return
+	}
+	_, _ = io.WriteString(w, taxPageHTML)
+}
+

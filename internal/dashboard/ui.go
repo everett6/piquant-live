@@ -257,6 +257,7 @@ const indexHTML = `<!doctype html>
   <nav id="mainNav">
     <button class="active" data-tab="tab-overview">Overview</button>
     <button data-tab="tab-dryrun">Paper Trading</button>
+    <button data-tab="tab-tax">Tax &amp; 8949</button>
     <button data-tab="tab-research">Research</button>
     <button data-tab="tab-models">Models</button>
     <button data-tab="tab-experiments">Experiments</button>
@@ -1093,6 +1094,87 @@ const indexHTML = `<!doctype html>
     </div>
   </div>
 
+  <!-- TAB: TAX & IRS FORM 8949 -->
+  <div id="tab-tax" class="tab-pane">
+    <div class="hero-status">
+      <div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600">Crypto Tax &amp; Capital Gains Accounting</div>
+        <div style="font-size:18px;font-weight:700;color:var(--accent);margin-top:2px">IRS Form 8949, Schedule D &amp; California FTB Tax Reserve</div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <select id="ptTaxYearSelect" class="btn" style="background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:6px 12px;font-size:13px" onchange="loadTaxTab()">
+          <option value="2026">Tax Year 2026</option>
+          <option value="2025">Tax Year 2025</option>
+          <option value="0">All Historical Years</option>
+        </select>
+        <a href="/api/tax/export.csv" id="btnPtExportCSV" class="btn btn-primary" style="font-size:13px;padding:7px 14px;text-decoration:none" download>📥 Download Form 8949 CSV</a>
+        <a href="/tax" target="_blank" class="btn" style="background:var(--panel2);border:1px solid var(--line);color:var(--text);font-size:13px;padding:7px 12px;text-decoration:none" title="Open full-page dedicated tax view">Full Page &nearr;</a>
+      </div>
+    </div>
+
+    <div class="grid">
+      <!-- 5 Key KPI Cards -->
+      <section class="card span12" style="border-color:rgba(245,158,11,0.3);background:linear-gradient(180deg,rgba(245,158,11,0.06) 0%,var(--panel) 100%)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div>
+            <h2 style="margin:0;color:var(--gold)">★ Cumulative Tax Reserve &amp; Capital Gains Summary</h2>
+            <div class="meta" style="margin-top:2px">Continuous FIFO lot matching, deductible exchange fees &amp; Safe Harbor quarterly reserve calculation</div>
+          </div>
+          <span class="pill gold" id="taxStatusPill">Escrow Active</span>
+        </div>
+        <div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-top:10px">
+          <div class="stat" style="border:1px solid rgba(245,158,11,0.3);background:rgba(245,158,11,0.08)"><div class="k" style="color:var(--gold)">Tax Reserve To Set Aside</div><div class="v" id="taxTotalReserve" style="font-size:24px;color:var(--gold)">$0.00</div><div class="s">Federal 24% + CA FTB 9.3%</div></div>
+          <div class="stat"><div class="k">Net Taxable Gain</div><div class="v" id="taxNetGain" style="font-size:24px;color:var(--accent)">$0.00</div><div class="s" id="taxDispositionsCount">0 Dispositions</div></div>
+          <div class="stat"><div class="k">Federal Tax (IRS)</div><div class="v" id="taxFedTax" style="font-size:24px">$0.00</div><div class="s">Short-Term Ordinary Income</div></div>
+          <div class="stat"><div class="k">State Tax (CA FTB)</div><div class="v" id="taxStateTax" style="font-size:24px">$0.00</div><div class="s">California Ordinary Rate</div></div>
+          <div class="stat"><div class="k">Deductible Fees</div><div class="v" id="taxFeesDeducted" style="font-size:24px;color:var(--muted)">$0.00</div><div class="s">Subtracted from Taxable Gross</div></div>
+        </div>
+      </section>
+
+      <!-- Safe Harbor Quarterly Escrow Schedule -->
+      <section class="card span12">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div>
+            <h2 style="margin:0">Safe Harbor Quarterly Estimated Tax Schedule (IRS 1040-ES &amp; CA 540-ES)</h2>
+            <div class="meta" style="margin-top:2px">Official IRS and State of California quarterly estimated tax payment schedule &amp; reserve amounts</div>
+          </div>
+          <span class="pill gold">Quarterly Milestone Escrow</span>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="table">
+            <thead>
+              <tr><th>Quarter</th><th>Period Covered</th><th>IRS &amp; CA FTB Due Date</th><th style="text-align:right">Realized Gain</th><th style="text-align:right">Federal Tax Due</th><th style="text-align:right">CA State Tax Due</th><th style="text-align:right">Total Reserve Due</th><th style="text-align:center">Status</th></tr>
+            </thead>
+            <tbody id="ptTaxQuarterlyBody" class="mono">
+              <tr><td colspan="8" class="empty" style="text-align:center;padding:16px">Loading quarterly tax schedule...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- IRS Form 8949 Lot Dispositions -->
+      <section class="card span12">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div>
+            <h2 style="margin:0">IRS Form 8949 — Sales and Other Dispositions of Capital Assets</h2>
+            <div class="meta" style="margin-top:2px">Full transaction report for TurboTax, TaxAct, CoinTracker, or CPA hand-off</div>
+          </div>
+          <span class="pill ok" id="ptTaxLotsCountPill">0 lots matched</span>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="table">
+            <thead>
+              <tr><th>Property Description</th><th>Date Acquired</th><th>Date Sold</th><th style="text-align:right">Gross Proceeds</th><th style="text-align:right">Cost Basis</th><th style="text-align:right">Fee Adjustment</th><th style="text-align:right">Gain or (Loss)</th><th>Holding Term</th><th style="text-align:center">Quarter</th></tr>
+            </thead>
+            <tbody id="ptTaxLotsBody" class="mono">
+              <tr><td colspan="9" class="empty" style="text-align:center;padding:18px">No dispositions recorded yet for this tax year.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+
   <!-- TAB 2: GUIDED RESEARCH -->
   <div id="tab-research" class="tab-pane">
     <div class="grid">
@@ -1612,6 +1694,7 @@ const indexHTML = `<!doctype html>
       var target = $(btn.getAttribute("data-tab"));
       if (target) target.classList.add("active");
       if (btn.getAttribute("data-tab") === "tab-system" && !logsLoaded) loadLogs();
+      if (btn.getAttribute("data-tab") === "tab-tax") loadTaxTab();
     });
   });
 
@@ -3037,6 +3120,66 @@ const indexHTML = `<!doctype html>
   $("logFile").addEventListener("change", loadLogs);
   $("logLevel").addEventListener("change", loadLogs);
   $("logQuery").addEventListener("keydown", function(e){ if (e.key === "Enter") loadLogs(); });
+
+  // Crypto Tax & Form 8949 Accounting
+  function loadTaxTab() {
+    var year = $("ptTaxYearSelect") ? $("ptTaxYearSelect").value : "2026";
+    if ($("btnPtExportCSV")) $("btnPtExportCSV").href = "/api/tax/export.csv?year=" + year;
+    fetch("/api/tax?year=" + year)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if ($("taxTotalReserve")) $("taxTotalReserve").textContent = "$" + num(data.total_tax_reserve_usd || 0, 2);
+        if ($("taxNetGain")) {
+          var net = data.net_taxable_gain_usd || 0;
+          $("taxNetGain").textContent = (net >= 0 ? "+$" : "-$") + num(Math.abs(net), 2);
+          $("taxNetGain").style.color = net >= 0 ? "var(--accent)" : "var(--bad)";
+        }
+        if ($("taxDispositionsCount")) $("taxDispositionsCount").textContent = (data.total_dispositions || 0) + " Dispositions";
+        if ($("taxFedTax")) $("taxFedTax").textContent = "$" + num(data.estimated_federal_tax || 0, 2);
+        if ($("taxStateTax")) $("taxStateTax").textContent = "$" + num(data.estimated_state_tax || 0, 2);
+        if ($("taxFeesDeducted")) $("taxFeesDeducted").textContent = "$" + num(data.total_fees_usd || 0, 2);
+
+        if ($("ptTaxQuarterlyBody") && data.quarterly_schedule) {
+          $("ptTaxQuarterlyBody").innerHTML = data.quarterly_schedule.map(function(q) {
+            var pill = "<span class='pill muted'>UPCOMING</span>";
+            if (q.is_past_due) pill = "<span class='pill bad'>PAST DUE</span>";
+            else if (q.is_current) pill = "<span class='pill ok'>CURRENT QUARTER</span>";
+            return "<tr>" +
+              "<td><strong>" + esc(q.quarter) + "</strong></td>" +
+              "<td>" + esc(q.period) + "</td>" +
+              "<td>" + esc(q.due_date) + "</td>" +
+              "<td style='text-align:right'>" + (q.realized_gain >= 0 ? "+$" : "-$") + num(Math.abs(q.realized_gain), 2) + "</td>" +
+              "<td style='text-align:right'>$" + num(q.federal_tax, 2) + "</td>" +
+              "<td style='text-align:right'>$" + num(q.state_tax, 2) + "</td>" +
+              "<td style='text-align:right;color:var(--gold);font-weight:700'>$" + num(q.total_reserve, 2) + "</td>" +
+              "<td style='text-align:center'>" + pill + "</td>" +
+            "</tr>";
+          }).join("");
+        }
+
+        if ($("ptTaxLotsBody")) {
+          if ($("ptTaxLotsCountPill")) $("ptTaxLotsCountPill").textContent = (data.dispositions ? data.dispositions.length : 0) + " lots matched";
+          if (data.dispositions && data.dispositions.length) {
+            $("ptTaxLotsBody").innerHTML = data.dispositions.map(function(d) {
+              var gCol = d.net_gain_usd >= 0 ? "var(--accent)" : "var(--bad)";
+              return "<tr>" +
+                "<td>" + esc(d.description) + "</td>" +
+                "<td>" + esc(d.acquired_at ? d.acquired_at.split("T")[0] : "-") + "</td>" +
+                "<td>" + esc(d.sold_at ? d.sold_at.split("T")[0] : "-") + "</td>" +
+                "<td style='text-align:right'>$" + num(d.proceeds_usd, 2) + "</td>" +
+                "<td style='text-align:right'>$" + num(d.cost_basis_usd, 2) + "</td>" +
+                "<td style='text-align:right;color:var(--muted)'>$" + num(d.fee_usd, 4) + "</td>" +
+                "<td style='text-align:right;color:" + gCol + ";font-weight:700'>" + (d.net_gain_usd >= 0 ? "+$" : "-$") + num(Math.abs(d.net_gain_usd), 2) + "</td>" +
+                "<td><span class='pill " + (d.holding_type === "SHORT_TERM" ? "ok" : "gold") + "'>" + esc(d.holding_type) + "</span></td>" +
+                "<td style='text-align:center'>" + esc(d.quarter) + "</td>" +
+              "</tr>";
+            }).join("");
+          } else {
+            $("ptTaxLotsBody").innerHTML = "<tr><td colspan='9' class='empty' style='text-align:center;padding:18px'>No dispositions recorded yet for this tax year.</td></tr>";
+          }
+        }
+      }).catch(function(){});
+  }
 
   // Stream & SSE Connection
   function setStreamStatus(ok){

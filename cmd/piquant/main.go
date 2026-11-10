@@ -64,6 +64,8 @@ func main() {
 		err = runBench(ctx, args)
 	case "secrets":
 		err = runSecrets(args)
+	case "tax":
+		err = runTax(ctx, args)
 	case "version", "-v", "--version":
 		printVersion()
 	case "help", "-h", "--help":
@@ -95,6 +97,7 @@ func usage() {
   piquant backtest-ticks   run 2-year microsecond monthly tick-by-tick market-making simulation
   piquant bench            run Pi 5 architecture stress test and micro-latency benchmark
   piquant secrets     manage the local credential store
+  piquant tax         crypto capital gains, IRS Form 8949 CSV export & CA tax reserve
   piquant version     print build information
 
 Run "piquant <command> -h" for the options of one command.
