@@ -33,6 +33,7 @@ type dryRunFlags struct {
 	targetProfitBps   float64
 	entryOffsetBps    float64
 	stopLossBps       float64
+	monthlyGainCap    float64
 	cleanReset        bool
 	enableTaker       bool
 	statusOnly        bool
@@ -64,9 +65,10 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.Float64Var(&f.baseLev, "base-leverage", 2.5, "nominal base leverage multiplier (e.g. 2.5 for 2.5x, 3.5 for 3.5x to reach $20/mo on $200)")
 	fs.Float64Var(&f.maxLev, "max-leverage", 3.5, "maximum allowable leverage ceiling")
 	fs.StringVar(&f.symbols, "symbols", "BTCUSDC,ETHUSDT", "comma-separated trading symbols")
-	fs.Float64Var(&f.targetProfitBps, "target-profit", 12.5, "net target profit margin per swing in bps (default: 12.5 bps = 0.125%)")
-	fs.Float64Var(&f.entryOffsetBps, "entry-offset", 1.25, "minimum maker entry distance from mid in bps (default: 1.25 bps = 0.0125%)")
-	fs.Float64Var(&f.stopLossBps, "stop-loss", 60.0, "structural invalidation stop loss in bps (default: 60.0 bps = 0.60%)")
+	fs.Float64Var(&f.targetProfitBps, "target-profit", 18.0, "net target profit margin per swing in bps (default: 18.0 bps = 0.18%)")
+	fs.Float64Var(&f.entryOffsetBps, "entry-offset", 5.5, "minimum maker entry distance from mid in bps (default: 5.5 bps = 0.055%)")
+	fs.Float64Var(&f.stopLossBps, "stop-loss", 50.0, "structural invalidation stop loss in bps (default: 50.0 bps = 0.50%)")
+	fs.Float64Var(&f.monthlyGainCap, "monthly-cap", 15.0, "maximum target gain percentage per month before entering capital preservation (default: 15.0%)")
 	fs.BoolVar(&f.enableTaker, "enable-taker", false, "opt-in to tactical taker executions on high-conviction momentum (default false)")
 	fs.BoolVar(&f.cleanReset, "reset", false, "reset cumulative historical win/loss stats and trade count on start")
 	fs.BoolVar(&f.statusOnly, "status", false, "print terminal summary of active dry run and exit")
@@ -191,6 +193,9 @@ func runDryRun(ctx context.Context, args []string) error {
 	}
 	if f.stopLossBps > 0 {
 		paperCfg.StopLossBps = f.stopLossBps
+	}
+	if f.monthlyGainCap > 0 {
+		paperCfg.MonthlyGainCapPct = f.monthlyGainCap
 	}
 	paperCfg.CleanReset = f.cleanReset
 	paperCfg.EnableTaker = f.enableTaker

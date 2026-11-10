@@ -218,3 +218,100 @@ func TestTCAMarkoutConcurrentRace(t *testing.T) {
 
 	wg.Wait()
 }
+
+// TestMonthlyGainCapPreservationAndNoiseScratchElimination verifies:
+// 1. When cumulative profit reaches the 15% monthly cap, quotes are widened to >= 25 bps to preserve banked gains.
+// 2. Normal natural market oscillations (e.g. 5 bps adverse after 3 minutes) do NOT panic-scratch at a loss.
+func TestMonthlyGainCapPreservationAndNoiseScratchElimination(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "piquant_monthly_cap_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.CleanReset = true
+	cfg.InitialCapital = 200.00
+	cfg.MonthlyGainCapPct = 15.0 // 15% monthly target ceiling
+	cfg.TargetProfitBps = 18.0   // 18 bps target profit (~10% monthly average)
+	cfg.EntryOffsetBps = 5.5
+
+	eng, err := NewDryRunEngine(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	// 1. Test normal quoting when below monthly cap
+	now := time.Now()
+	eng.evaluateQuotesAndGating("BTCUSDT", 75000.0, now)
+
+	eng.mu.Lock()
+	orders := eng.activeOrders["BTCUSDT"]
+	eng.mu.Unlock()
+
+	if len(orders) == 0 {
+		t.Fatalf("expected active orders placed under normal operation")
+	}
+
+	// 2. Test Monthly Gain Cap preservation mode
+	// Simulate hitting +15.5% return in current evaluation window
+	eng.mu.Lock()
+	eng.state.TotalReturnPct = 15.5
+	eng.state.Equity = 231.0
+	eng.mu.Unlock()
+
+	// Advance time past cancel latency so superseded orders are completely pruned
+	eng.evaluateQuotesAndGating("BTCUSDT", 75000.0, now.Add(500*time.Millisecond))
+	eng.evaluateQuotesAndGating("BTCUSDT", 75000.0, now.Add(1*time.Second))
+
+	eng.mu.Lock()
+	ordersCap := eng.activeOrders["BTCUSDT"]
+	eng.mu.Unlock()
+
+	activeFound := false
+	for _, o := range ordersCap {
+		if !o.CancelingUntil.IsZero() {
+			continue // Skip in-flight canceling order
+		}
+		activeFound = true
+		offsetBps := math.Abs(o.Price-75000.0) / 75000.0 * 1e4
+		if offsetBps < 24.5 {
+			t.Errorf("expected widened quote >= 25 bps under Monthly Gain Cap mode, got %.2f bps", offsetBps)
+		}
+	}
+	if !activeFound {
+		t.Fatalf("expected active quotes placed under Monthly Gain Cap mode")
+	}
+
+	// 3. Test that 5 bps adverse drift after 5 minutes does NOT panic-scratch
+	eng.mu.Lock()
+	eng.state.TotalReturnPct = 5.0 // reset back below 15%
+	pos := eng.state.Positions["BTCUSDT"]
+	if pos == nil {
+		pos = &Position{Symbol: "BTCUSDT"}
+		eng.state.Positions["BTCUSDT"] = pos
+	}
+	pos.Size = 0.001
+	pos.AvgEntryPrice = 75000.0
+	sm := eng.getOrCreateSymbolMicro("BTCUSDT")
+	sm.InventorySince = now.Add(-5 * time.Minute) // Held for 5 minutes
+	eng.mu.Unlock()
+
+	// Mid price drifted 5 bps adverse ($74,962.50)
+	adverseMid := 75000.0 * (1.0 - 5.0*1e-4)
+	eng.evaluateQuotesAndGating("BTCUSDT", adverseMid, now.Add(2*time.Second))
+
+	eng.mu.Lock()
+	ordersHold := eng.activeOrders["BTCUSDT"]
+	eng.mu.Unlock()
+
+	for _, o := range ordersHold {
+		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
+			// Ask price must still be ABOVE entry price (banking profit), not scratched below entry!
+			if o.Price < 75000.0 {
+				t.Fatalf("expected closing ask to remain profitable (>= entry $75,000), got scratch at $%.2f", o.Price)
+			}
+		}
+	}
+}
+

@@ -49,6 +49,7 @@ type DryRunConfig struct {
 	StopLossBps       float64       // Structural invalidation stop loss in bps (default: 75.0 bps = 0.75%)
 	CleanReset        bool          // Reset cumulative historical win/loss stats on start
 	EnableTaker       bool          // Opt-in to tactical taker executions on high-conviction momentum (default: false)
+	MonthlyGainCapPct float64       // Soft ceiling for monthly profit target; triggers capital preservation when reached (default: 15.0%)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -75,9 +76,10 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		MaxLeverage:       3.5,
 		EnableMacroShield: true,
 		DataDir:           dataDir,
-		TargetProfitBps:   12.5,
-		EntryOffsetBps:    1.25,
-		StopLossBps:       60.0,
+		TargetProfitBps:   18.0, // Calibrated for ~10% monthly average return target
+		EntryOffsetBps:    5.5,  // Patient maker entry: avoid micro-churning adverse sweeps
+		StopLossBps:       50.0, // Structural stop-loss protecting against crashes
+		MonthlyGainCapPct: 15.0, // Hard ceiling for monthly profit target (preserves banked gains)
 		CleanReset:        false,
 		EnableTaker:       false,
 	}
@@ -473,13 +475,16 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		cfg.OrderLatency = 50 * time.Millisecond
 	}
 	if cfg.TargetProfitBps <= 0 {
-		cfg.TargetProfitBps = 12.5
+		cfg.TargetProfitBps = 18.0
 	}
 	if cfg.EntryOffsetBps <= 0 {
-		cfg.EntryOffsetBps = 1.25
+		cfg.EntryOffsetBps = 5.5
 	}
 	if cfg.StopLossBps <= 0 {
-		cfg.StopLossBps = 60.0
+		cfg.StopLossBps = 50.0
+	}
+	if cfg.MonthlyGainCapPct <= 0 {
+		cfg.MonthlyGainCapPct = 15.0
 	}
 
 	levCfg := DefaultDynamicLeverageConfig()
@@ -2152,29 +2157,47 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		}
 	}
 
+	// Monthly Gain Cap Enforcement:
+	// If cumulative return in current evaluation window has reached target ceiling (default 15.0%),
+	// enter Capital Preservation Mode: widen quotes and scale clip size down to strictly preserve banked gains!
+	gainCapPct := e.cfg.MonthlyGainCapPct
+	if gainCapPct <= 0 {
+		gainCapPct = 15.0
+	}
+	if e.state.TotalReturnPct >= gainCapPct {
+		capOffsetBps := math.Max(25.0, feeFloorBps*3.5)
+		if bidOffsetBps < capOffsetBps {
+			bidOffsetBps = capOffsetBps
+		}
+		if askOffsetBps < capOffsetBps {
+			askOffsetBps = capOffsetBps
+		}
+		clipQty *= 0.25 // Reduce clip size by 75%
+	}
+
 	targetBid := midPrice - (bidOffsetBps * midPrice * 1e-4)
 	targetAsk := midPrice + (askOffsetBps * midPrice * 1e-4)
 
 	// Institutional Breakeven Floor & Dynamic Profit Decay Ratchet:
 	// When holding open inventory, the closing quote guarantees net profitability
 	// after covering all round-trip maker fees (2 * MakerFeeBps).
-	// A dynamic exponential decay ratchet starts quoting at base target profit (default 12.5 bps)
+	// A dynamic exponential decay ratchet starts quoting at base target profit (default 18.0 bps)
 	// to capture fast momentum rebounds, then smoothly relaxes over holding time (15m half-life)
-	// towards guaranteed net profit floor (+6.0 bps net = 9.0 bps gross),
+	// towards guaranteed net profit floor (+8.0 bps net = 11.0 bps gross),
 	// ensuring positions never get trapped during quiet consolidation while ALWAYS banking green profits.
-	// An exit is ONLY allowed below break-even if structural stop-loss triggers.
+	// An exit is ONLY allowed below break-even if structural stop-loss or confirmed toxic flow triggers.
 	if pos != nil && math.Abs(pos.Size) > 1e-8 && pos.AvgEntryPrice > 0 {
 		baseTargetProfitBps := e.cfg.TargetProfitBps
 		if baseTargetProfitBps <= 0 {
-			baseTargetProfitBps = 12.5
+			baseTargetProfitBps = 18.0
 		}
 		stopLossBps := e.cfg.StopLossBps
 		if stopLossBps <= 0 {
-			stopLossBps = 60.0
+			stopLossBps = 50.0
 		}
 		roundTripFeeBps := 2.0 * e.cfg.MakerFeeBps
 
-		minNetFloorBps := math.Max(6.0, baseTargetProfitBps*0.50)
+		minNetFloorBps := math.Max(8.0, baseTargetProfitBps*0.50)
 		targetProfitBps := minNetFloorBps
 		holdSec := 0.0
 		if !sm.InventorySince.IsZero() {
@@ -2195,15 +2218,14 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 					targetAsk = bestAsk
 				}
 				sm.BidCooldownUntil = now.Add(30 * time.Second)
-			} else if (adverseDrawdownBps > 8.0 && (holdSec > 45.0 || sm.Ret5sBps < -1.0)) || (adverseDrawdownBps > 3.0 && holdSec > 180.0) {
-				// Dynamic Adverse Scratch: market is drifting against long position.
-				// Join inside ask to exit passively at the touch, taking a tiny scratch instead of waiting for 60 bps stop-loss!
+			} else if adverseDrawdownBps > 20.0 && ((sm.VpinCalc != nil && sm.VpinCalc.VPIN() > 0.70) || (sm.HawkesEst != nil && sm.HawkesEst.BranchingRatio() >= 0.85)) {
+				// Informed Toxic Cascade Defense: exit passively at touch only when order flow is demonstrably toxic
 				if bestAsk > 0 {
 					targetAsk = bestAsk
 				} else {
 					targetAsk = midPrice
 				}
-				sm.BidCooldownUntil = now.Add(15 * time.Second)
+				sm.BidCooldownUntil = now.Add(30 * time.Second)
 			} else {
 				// Normal market oscillation / swing holding: quote at or above minProfitAsk
 				if targetAsk < minProfitAsk {
@@ -2224,15 +2246,14 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 					targetBid = bestBid
 				}
 				sm.AskCooldownUntil = now.Add(30 * time.Second)
-			} else if (adverseDrawdownBps > 8.0 && (holdSec > 45.0 || sm.Ret5sBps > 1.0)) || (adverseDrawdownBps > 3.0 && holdSec > 180.0) {
-				// Dynamic Adverse Scratch: market is drifting against short position.
-				// Join inside bid to cover passively at the touch, taking a tiny scratch instead of waiting for 60 bps stop-loss!
+			} else if adverseDrawdownBps > 20.0 && ((sm.VpinCalc != nil && sm.VpinCalc.VPIN() > 0.70) || (sm.HawkesEst != nil && sm.HawkesEst.BranchingRatio() >= 0.85)) {
+				// Informed Toxic Cascade Defense: exit passively at touch only when order flow is demonstrably toxic
 				if bestBid > 0 {
 					targetBid = bestBid
 				} else {
 					targetBid = midPrice
 				}
-				sm.AskCooldownUntil = now.Add(15 * time.Second)
+				sm.AskCooldownUntil = now.Add(30 * time.Second)
 			} else {
 				// Normal market oscillation / swing holding: cover at or below maxProfitBid
 				if targetBid > maxProfitBid {
