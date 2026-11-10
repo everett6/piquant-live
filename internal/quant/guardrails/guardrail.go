@@ -18,6 +18,7 @@ var (
 	ErrRateLimitExceeded   = errors.New("guardrails: token bucket rate limit exceeded (>10 msgs/sec)")
 	ErrTradingLocked       = errors.New("guardrails: trading is locked by risk administrator")
 	ErrInvalidOrderParams  = errors.New("guardrails: invalid order parameters (NaN, Inf, or <= 0)")
+	ErrInvalidReduceOnly   = errors.New("guardrails: reduce-only order direction or size conflicts with open position")
 )
 
 // OrderRequest represents a pre-trade order candidate requiring compliance checks.
@@ -226,12 +227,31 @@ func (g *PreTradeGuard) ValidateOrder(ord OrderRequest, bestBid, bestAsk float64
 		}
 	}
 
-	// If reduce-only order, bypass gross/net exposure checks because it is de-risking
+	// 5. Strict Reduce-Only Authentication & Exposure Bypass:
+	// A reduce-only order MUST strictly reduce or close an existing open inventory position.
+	// It is prohibited from opening a new position or flipping into a reverse position.
 	if ord.IsReduceOnly {
+		currPos := g.positions[ord.Symbol]
+		if ord.Side == "BUY" {
+			if currPos >= -1e-8 {
+				return fmt.Errorf("%w: BUY marked reduce-only but position is non-negative (%.6f)", ErrInvalidReduceOnly, currPos)
+			}
+			if ord.Quantity > math.Abs(currPos)+1e-7 {
+				return fmt.Errorf("%w: BUY qty %.6f exceeds open short position %.6f", ErrInvalidReduceOnly, ord.Quantity, math.Abs(currPos))
+			}
+		} else if ord.Side == "SELL" {
+			if currPos <= 1e-8 {
+				return fmt.Errorf("%w: SELL marked reduce-only but position is non-positive (%.6f)", ErrInvalidReduceOnly, currPos)
+			}
+			if ord.Quantity > currPos+1e-7 {
+				return fmt.Errorf("%w: SELL qty %.6f exceeds open long position %.6f", ErrInvalidReduceOnly, ord.Quantity, currPos)
+			}
+		}
+		// Valid authenticated reduce-only order: bypass gross/net exposure checks
 		return nil
 	}
 
-	// 5. Dynamic Exposure & Concentration Limits
+	// 6. Dynamic Exposure & Concentration Limits
 	return g.validateExposureLimits(ord)
 }
 
@@ -302,7 +322,7 @@ func (g *PreTradeGuard) validateExposureLimits(ord OrderRequest) error {
 	// C) Concentration Limit
 	if g.cfg.Exposure.MaxConcentrationPct > 0 && g.currentEquity > 0 {
 		concPct := (candidateAssetGrossUSD / g.currentEquity) * 100.0
-		if concPct > g.cfg.Exposure.MaxConcentrationPct {
+		if !math.IsNaN(concPct) && !math.IsInf(concPct, 0) && concPct > g.cfg.Exposure.MaxConcentrationPct {
 			return fmt.Errorf("%w: %s concentration %.1f%% > limit %.1f%%",
 				ErrConcentrationLimit, ord.Symbol, concPct, g.cfg.Exposure.MaxConcentrationPct)
 		}

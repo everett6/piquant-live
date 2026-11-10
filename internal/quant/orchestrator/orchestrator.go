@@ -113,8 +113,11 @@ func (o *LatencyAdaptiveOrchestrator) RecordLatencyUpdate(latency time.Duration,
 	defer o.mu.Unlock()
 
 	latMs := float64(latency.Nanoseconds()) / 1e6
-	if latMs <= 0 {
-		latMs = 1.0
+	if math.IsNaN(latMs) || math.IsInf(latMs, 0) || latMs <= 0 {
+		latMs = 50.0
+	}
+	if math.IsNaN(fundingAPR) || math.IsInf(fundingAPR, 0) {
+		fundingAPR = 0.0
 	}
 	o.lastMeasuredMs = latMs
 	o.latestFundingAPR = fundingAPR
@@ -237,6 +240,19 @@ func (o *LatencyAdaptiveOrchestrator) BlendAlpha(
 	fundingCarryScore float64,
 	trendScore float64,
 ) (blendedScore float64, dominantHorizon string) {
+	if math.IsNaN(passiveScore) || math.IsInf(passiveScore, 0) {
+		passiveScore = 0.0
+	}
+	if math.IsNaN(obiMomentumScore) || math.IsInf(obiMomentumScore, 0) {
+		obiMomentumScore = 0.0
+	}
+	if math.IsNaN(fundingCarryScore) || math.IsInf(fundingCarryScore, 0) {
+		fundingCarryScore = 0.0
+	}
+	if math.IsNaN(trendScore) || math.IsInf(trendScore, 0) {
+		trendScore = 0.0
+	}
+
 	o.mu.RLock()
 	w := o.weights
 	mode := o.currentMode
@@ -247,8 +263,10 @@ func (o *LatencyAdaptiveOrchestrator) BlendAlpha(
 		w.FundingCarry*fundingCarryScore +
 		w.TrendFollowing*trendScore
 
-	// Clamp to [-1.0, +1.0]
-	if blended > 1.0 {
+	// Clamp to [-1.0, +1.0] and guard against NaN
+	if math.IsNaN(blended) || math.IsInf(blended, 0) {
+		blended = 0.0
+	} else if blended > 1.0 {
 		blended = 1.0
 	} else if blended < -1.0 {
 		blended = -1.0

@@ -251,6 +251,9 @@ type SymbolMicrostructure struct {
 	OBI        float64 // Order book depth imbalance: (bid5 - ask5) / (bid5 + ask5)
 	Conviction float64 // Quant directional conviction score in [0.0, 1.0]
 
+	// Delta-Neutral Funding Carry Tracker
+	FundingTracker *common.FundingCarryTracker
+
 	// Self-Improving Scalping Defense
 	ScalpingDisabled       bool
 	ScalpingDisabledReason string
@@ -277,7 +280,8 @@ func newSymbolMicrostructure(symbol string, kylesLambda float64) *SymbolMicrostr
 		AdaHedge:    common.NewAdaHedgeEnsemble(7, 0.985),
 		VolVarBps:   0.15,
 		AtrBps:      35.0, // Baseline 15-minute ATR volatility in bps
-		TradeRate1s: 4.0,
+		TradeRate1s:    4.0,
+		FundingTracker: common.NewFundingCarryTracker(0.05, 0.0001),
 	}
 }
 
@@ -2185,12 +2189,25 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	e.mu.RUnlock()
 	marksSnapshot[symbol] = midPrice
 
+	liveFundingAPR := 0.0
+	if sm.FundingTracker != nil {
+		perpRef := midPrice
+		if e.cbOracle != nil {
+			cbSig := e.cbOracle.EvaluateAgainstBinance(symbol, midPrice, now)
+			if cbSig.CoinbasePrice > 0 {
+				perpRef = cbSig.CoinbasePrice
+			}
+		}
+		sm.FundingTracker.UpdatePrices(perpRef, midPrice, now.UnixNano())
+		liveFundingAPR = sm.FundingTracker.AnnualizedAPR()
+	}
+
 	engineLatency := e.cfg.OrderLatency
 	if engineLatency <= 0 {
 		engineLatency = 120 * time.Millisecond
 	}
 	if e.quantOrch != nil {
-		e.quantOrch.RecordLatencyUpdate(engineLatency, 0.0, now)
+		e.quantOrch.RecordLatencyUpdate(engineLatency, liveFundingAPR, now)
 	}
 	if e.preTradeGuard != nil {
 		e.preTradeGuard.UpdatePortfolioState(currEq, peakEq, posSnapshot, marksSnapshot, now)
@@ -2754,6 +2771,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if currentInv > 0 && convictionUp < buyThreshold {
 			allowBuy = false // Position accumulation gate: adding to existing long requires >= buyThreshold
 		}
+		if currentInv == 0 && e.quantOrch != nil && e.quantOrch.Report(now).CurrentMode != orchestrator.ModeLowLatency && convictionUp < 0.50 {
+			allowBuy = false // Structural wave gate: do not open new long without positive conviction
+		}
 		if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
 			allowBuy = false // Extreme leakage circuit: halt opening new long positions until recalibrated!
 		}
@@ -2828,6 +2848,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			}
 			if currentInv < 0 && convictionUp > sellThreshold {
 				allowSell = false // Position accumulation gate: adding to existing short requires <= sellThreshold
+			}
+			if currentInv == 0 && e.quantOrch != nil && e.quantOrch.Report(now).CurrentMode != orchestrator.ModeLowLatency && convictionUp > 0.50 {
+				allowSell = false // Structural wave gate: do not open new short without negative conviction
 			}
 			if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
 				allowSell = false // Extreme leakage circuit: halt opening new short positions until recalibrated!

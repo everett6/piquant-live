@@ -250,12 +250,16 @@ func (is *AdaptiveShortfallRouter) ComputeSchedule(
 		sumAllocated += nk
 		prevRem = remNext
 	}
+	remQty := totalQuantity - sumAllocated
+	if remQty < 0 || math.Abs(remQty) < 1e-12 {
+		remQty = 0.0
+	}
 	slices[numSlices-1] = ChildOrderSlice{
 		Index:          numSlices - 1,
 		TotalSlices:    numSlices,
-		Quantity:       totalQuantity - sumAllocated,
+		Quantity:       remQty,
 		Algorithm:      "IMPLEMENTATION_SHORTFALL_ADAPTIVE",
-		PacingModifier: (totalQuantity - sumAllocated) / (totalQuantity / bigT),
+		PacingModifier: remQty / (totalQuantity / bigT),
 	}
 
 	return slices

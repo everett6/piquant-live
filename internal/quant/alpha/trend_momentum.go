@@ -42,7 +42,7 @@ func NewKalmanTrendFilter(processNoise, measurementNoise float64) *KalmanTrendFi
 
 // Update processes a raw noisy market price observation and returns the filtered latent price and trend velocity.
 func (kf *KalmanTrendFilter) Update(rawPrice float64, now time.Time) (filteredPrice float64, velocityBpsPerSec float64) {
-	if rawPrice <= 0 {
+	if rawPrice <= 0 || math.IsNaN(rawPrice) || math.IsInf(rawPrice, 0) {
 		return kf.Price, 0
 	}
 	if kf.LastUpdate.IsZero() {
@@ -102,9 +102,22 @@ func (kf *KalmanTrendFilter) Update(rawPrice float64, now time.Time) (filteredPr
 	kf.P10 = p10 - k1*p00
 	kf.P11 = p11 - k1*p01
 
+	if math.IsNaN(kf.Price) || math.IsInf(kf.Price, 0) {
+		kf.Price = rawPrice
+		kf.Velocity = 0
+		kf.P00 = 1.0
+		kf.P11 = 1.0
+	}
+	if math.IsNaN(kf.Velocity) || math.IsInf(kf.Velocity, 0) {
+		kf.Velocity = 0
+	}
+
 	// Convert velocity into basis points per second
 	if kf.Price > 0 {
 		velocityBpsPerSec = (kf.Velocity / kf.Price) * 1e4
+	}
+	if math.IsNaN(velocityBpsPerSec) || math.IsInf(velocityBpsPerSec, 0) {
+		velocityBpsPerSec = 0
 	}
 	return kf.Price, velocityBpsPerSec
 }

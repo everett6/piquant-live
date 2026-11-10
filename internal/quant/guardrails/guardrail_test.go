@@ -160,8 +160,10 @@ func TestPreTradeGuard_KillSwitch(t *testing.T) {
 		t.Fatalf("kill switch should NOT trip at -1.5%% drawdown")
 	}
 
-	// Equity drops to 9,790 (-2.1% drawdown) -> trips!
-	guard.UpdatePortfolioState(9790.0, 10000.0, nil, nil, now.Add(2*time.Minute))
+	// Equity drops to 9,790 (-2.1% drawdown) with open long position 0.01 BTC -> trips!
+	openPositions := map[string]float64{"BTCUSDT": 0.01}
+	marks := map[string]float64{"BTCUSDT": 60000.0}
+	guard.UpdatePortfolioState(9790.0, 10000.0, openPositions, marks, now.Add(2*time.Minute))
 	isTripped, reason, _, _, _, _ := guard.Status()
 	if !isTripped {
 		t.Fatalf("kill switch SHOULD trip at -2.1%% drawdown")
@@ -179,7 +181,19 @@ func TestPreTradeGuard_KillSwitch(t *testing.T) {
 		t.Errorf("expected ErrKillSwitchTripped, got: %v", err)
 	}
 
-	// Closing / reduce-only order should be permitted to flatten positions
+	// Pseudo reduce-only order that exceeds open position (e.g. SELL 0.05 when holding 0.01) must be rejected
+	fakeReduceOrd := OrderRequest{
+		Symbol:       "BTCUSDT",
+		Side:         "SELL",
+		Price:        60000.0,
+		Quantity:     0.05,
+		IsReduceOnly: true,
+	}
+	if err := guard.ValidateOrder(fakeReduceOrd, 59990.0, 60010.0, now.Add(3*time.Minute)); !errors.Is(err, ErrInvalidReduceOnly) {
+		t.Errorf("expected ErrInvalidReduceOnly for oversize reduce-only order, got: %v", err)
+	}
+
+	// Authentic reduce-only order (closing exact 0.01 BTC position) should be permitted to flatten positions
 	closeOrd := OrderRequest{
 		Symbol:       "BTCUSDT",
 		Side:         "SELL",

@@ -65,6 +65,28 @@ func (bl *BlackLittermanModel) Optimize2Asset(
 	viewExpectedReturn1, viewExpectedReturn2 float64,
 	viewConfidence1, viewConfidence2 float64,
 ) (w1, w2 float64, expectedRet1, expectedRet2 float64) {
+	if math.IsNaN(sigma1) || math.IsInf(sigma1, 0) || sigma1 <= 0 {
+		sigma1 = 1e-2
+	}
+	if math.IsNaN(sigma2) || math.IsInf(sigma2, 0) || sigma2 <= 0 {
+		sigma2 = 1e-2
+	}
+	if math.IsNaN(corr) || math.IsInf(corr, 0) {
+		corr = 0.50
+	}
+	if math.IsNaN(priorWeight1) || math.IsInf(priorWeight1, 0) {
+		priorWeight1 = 0.50
+	}
+	if math.IsNaN(priorWeight2) || math.IsInf(priorWeight2, 0) {
+		priorWeight2 = 0.50
+	}
+	if math.IsNaN(viewExpectedReturn1) || math.IsInf(viewExpectedReturn1, 0) {
+		viewExpectedReturn1 = 0.0
+	}
+	if math.IsNaN(viewExpectedReturn2) || math.IsInf(viewExpectedReturn2, 0) {
+		viewExpectedReturn2 = 0.0
+	}
+
 	s1 := math.Max(1e-4, sigma1)
 	s2 := math.Max(1e-4, sigma2)
 	rho := math.Max(-0.95, math.Min(0.95, corr))
@@ -151,8 +173,21 @@ func (ks *DynamicKellySizer) ComputeBetSize(
 	equity float64, price float64, atrBps float64,
 	winRate float64, payoffRatio float64, stopLossBps float64,
 ) (orderQty float64, notionalUSD float64) {
-	if equity <= 0 || price <= 0 {
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 ||
+		math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 {
 		return 0, 0
+	}
+	if math.IsNaN(atrBps) || math.IsInf(atrBps, 0) || atrBps <= 0 {
+		atrBps = 35.0
+	}
+	if math.IsNaN(winRate) || math.IsInf(winRate, 0) {
+		winRate = 0.55
+	}
+	if math.IsNaN(payoffRatio) || math.IsInf(payoffRatio, 0) {
+		payoffRatio = 0.833
+	}
+	if math.IsNaN(stopLossBps) || math.IsInf(stopLossBps, 0) || stopLossBps <= 0 {
+		stopLossBps = 60.0
 	}
 
 	// Default parameters if uninitialized
@@ -212,6 +247,11 @@ func (ks *DynamicKellySizer) ComputeBetSize(
 	if rawNotional < ks.MinNotional {
 		rawNotional = ks.MinNotional
 		rawQty = rawNotional / price
+	}
+
+	if math.IsNaN(rawQty) || math.IsInf(rawQty, 0) || rawQty <= 0 {
+		rawQty = 0
+		rawNotional = 0
 	}
 
 	return rawQty, rawNotional

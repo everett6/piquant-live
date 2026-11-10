@@ -24,6 +24,11 @@ func ComputeADF(series []float64, lags int) (ADFResult, error) {
 	if n < 20 {
 		return ADFResult{}, errors.New("adf: series length must be >= 20")
 	}
+	for _, v := range series {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return ADFResult{}, errors.New("adf: series contains NaN or Inf")
+		}
+	}
 	if lags < 0 {
 		lags = 1
 	}
@@ -94,6 +99,9 @@ func ComputeADF(series []float64, lags int) (ADFResult, error) {
 		return ADFResult{}, errors.New("adf: zero degrees of freedom")
 	}
 	sigmaSq := rss / dof
+	if sigmaSq < 1e-14 || math.IsNaN(sigmaSq) {
+		sigmaSq = 1e-14
+	}
 	// Standard error of \hat{\gamma} (which is parameter b[1]):
 	// SE(b[1]) = sqrt(sigmaSq * (X^T X)^{-1}_{1,1})
 	inv11 := invDiag[1]
@@ -101,11 +109,14 @@ func ComputeADF(series []float64, lags int) (ADFResult, error) {
 		inv11 = 1e-6
 	}
 	seGamma := math.Sqrt(sigmaSq * inv11)
-	if seGamma < 1e-12 {
+	if seGamma < 1e-12 || math.IsNaN(seGamma) {
 		seGamma = 1e-12
 	}
 
 	tStat := b[1] / seGamma
+	if math.IsNaN(tStat) || math.IsInf(tStat, 0) {
+		tStat = 0.0
+	}
 
 	// MacKinnon (1994) asymptotic critical values for model with constant
 	crit1Pct := -3.43 - 5.999/float64(rows)
@@ -242,7 +253,7 @@ func NewCointegrationModel(leader, follower string, lookbackWindow int) *Cointeg
 // Update ingests new price observations for the pair (e.g. BTC and ETH prices).
 // Calculates dynamic OLS hedge ratio, residual spread, and rolling Z-score.
 func (cm *CointegrationModel) Update(priceLeader, priceFollower float64) (zScore float64, isCointegrated bool) {
-	if priceLeader <= 0 || priceFollower <= 0 {
+	if priceLeader <= 0 || priceFollower <= 0 || math.IsNaN(priceLeader) || math.IsInf(priceLeader, 0) || math.IsNaN(priceFollower) || math.IsInf(priceFollower, 0) {
 		return 0, false
 	}
 
@@ -304,11 +315,15 @@ func (cm *CointegrationModel) Update(priceLeader, priceFollower float64) (zScore
 	}
 
 	cm.LatestSpread = priceFollower - cm.Beta*priceLeader - cm.Alpha
-	if cm.RollingStd > 0 {
+	if cm.RollingStd > 1e-12 {
 		cm.LatestZScore = (cm.LatestSpread - cm.RollingMean) / cm.RollingStd
+	} else {
+		cm.LatestZScore = 0.0
 	}
-	// Clamp Z-score to realistic standard deviation bounds [-5.0, +5.0]
-	if cm.LatestZScore > 5.0 {
+	// Clamp Z-score to realistic standard deviation bounds [-5.0, +5.0] and guard against NaN
+	if math.IsNaN(cm.LatestZScore) || math.IsInf(cm.LatestZScore, 0) {
+		cm.LatestZScore = 0.0
+	} else if cm.LatestZScore > 5.0 {
 		cm.LatestZScore = 5.0
 	} else if cm.LatestZScore < -5.0 {
 		cm.LatestZScore = -5.0
