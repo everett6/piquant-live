@@ -619,9 +619,16 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	}
 	if cfg.InitialCapital > 0 {
 		buyingPower := cfg.InitialCapital * maxLev
-		guardCfg.Exposure.MaxGrossUSD = math.Max(25000.0, buyingPower*1.50)
-		guardCfg.Exposure.MaxNetUSD = math.Max(15000.0, buyingPower*1.20)
-		guardCfg.Exposure.MaxOrderQtyUSD = math.Max(5000.0, buyingPower*0.85)
+		if buyingPower >= 10000.0 {
+			guardCfg.Exposure.MaxGrossUSD = math.Max(25000.0, buyingPower*1.50)
+			guardCfg.Exposure.MaxNetUSD = math.Max(15000.0, buyingPower*1.20)
+			guardCfg.Exposure.MaxOrderQtyUSD = math.Max(5000.0, buyingPower*0.85)
+		} else {
+			// Micro-capital scale-down for $50–$1,000 investor accounts
+			guardCfg.Exposure.MaxGrossUSD = math.Max(50.0, buyingPower*1.50)
+			guardCfg.Exposure.MaxNetUSD = math.Max(50.0, buyingPower*1.20)
+			guardCfg.Exposure.MaxOrderQtyUSD = math.Max(25.0, buyingPower*0.85)
+		}
 		guardCfg.Exposure.MaxConcentrationPct = math.Max(80.0, 100.0*maxLev)
 	}
 	guardCfg.RateLimitRate = 200.0

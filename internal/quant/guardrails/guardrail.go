@@ -202,16 +202,17 @@ func (g *PreTradeGuard) ValidateOrder(ord OrderRequest, bestBid, bestAsk float64
 	}
 
 	// 4. Fat-Finger Collar
-	// A) Max Order Qty
-	if g.cfg.MaxOrderQty > 0 && ord.Quantity > g.cfg.MaxOrderQty {
-		return fmt.Errorf("%w: qty %.4f > max %.4f", ErrFatFingerQty, ord.Quantity, g.cfg.MaxOrderQty)
+	// A) Max Order Qty & USD (opening orders only; reduce-only orders are bounded by open position size)
+	if !ord.IsReduceOnly {
+		if g.cfg.MaxOrderQty > 0 && ord.Quantity > g.cfg.MaxOrderQty {
+			return fmt.Errorf("%w: qty %.4f > max %.4f", ErrFatFingerQty, ord.Quantity, g.cfg.MaxOrderQty)
+		}
+		orderUSD := ord.Price * ord.Quantity
+		if g.cfg.Exposure.MaxOrderQtyUSD > 0 && orderUSD > g.cfg.Exposure.MaxOrderQtyUSD {
+			return fmt.Errorf("%w: notional $%.2f > max $%.2f", ErrFatFingerQty, orderUSD, g.cfg.Exposure.MaxOrderQtyUSD)
+		}
 	}
-	// B) Max Order USD
-	orderUSD := ord.Price * ord.Quantity
-	if g.cfg.Exposure.MaxOrderQtyUSD > 0 && orderUSD > g.cfg.Exposure.MaxOrderQtyUSD {
-		return fmt.Errorf("%w: notional $%.2f > max $%.2f", ErrFatFingerQty, orderUSD, g.cfg.Exposure.MaxOrderQtyUSD)
-	}
-	// C) Price Deviation Collar (1.5% from inside touch)
+	// B) Price Deviation Collar (1.5% from inside touch)
 	collar := g.cfg.FatFingerMaxDeviation
 	if ord.Side == "BUY" {
 		// Buying way above inside ask is aggressive or fat-finger

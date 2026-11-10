@@ -137,7 +137,11 @@ func (g *DailyReportGenerator) GenerateReport(state DryRunState, date time.Time)
 
 	sb.WriteString("# PiQuant Institutional Daily Risk & Performance Tear-Sheet\n\n")
 	sb.WriteString(fmt.Sprintf("**Report Date:** %s  \n", date.Format("2006-01-02")))
-	sb.WriteString(fmt.Sprintf("**Trading Session:** Day %d of 14 (336h Autonomous Dry Run)  \n", dayNum))
+	totalDays := state.TargetDays
+	if totalDays <= 0 {
+		totalDays = 14
+	}
+	sb.WriteString(fmt.Sprintf("**Trading Session:** Day %d of %d (%dh Autonomous Dry Run)  \n", dayNum, totalDays, totalDays*24))
 	sb.WriteString(fmt.Sprintf("**Generated Timestamp:** %s  \n", time.Now().UTC().Format(time.RFC3339)))
 	modeStr := "Spot/Futures Margin"
 	if state.SpotOnly {
@@ -149,7 +153,7 @@ func (g *DailyReportGenerator) GenerateReport(state DryRunState, date time.Time)
 	sb.WriteString("## 1. Executive Summary & Capital Account\n\n")
 	sb.WriteString("| Metric | Value | Institutional Target | Status |\n")
 	sb.WriteString("| :--- | :--- | :--- | :--- |\n")
-	sb.WriteString(fmt.Sprintf("| **Starting Capital** | $%s USDT | $100,000.00 USDT | BASELINE |\n", formatComma(initCap, 2)))
+	sb.WriteString(fmt.Sprintf("| **Starting Capital** | $%s USDT | $%s USDT Baseline | BASELINE |\n", formatComma(initCap, 2), formatComma(initCap, 2)))
 	sb.WriteString(fmt.Sprintf("| **Closing Capital (Equity)** | $%s USDT | — | %s |\n", formatComma(equity, 2), pick(equity >= initCap, "PROFITABLE", "DRAWDOWN")))
 	if state.TaxRatePct > 0 {
 		sb.WriteString(fmt.Sprintf("| **Estimated Tax Reserve (%.1f%%)** | $%s USDT | — | TAX ESCROW |\n", state.TaxRatePct, formatComma(state.EstimatedTaxUSDT, 2)))
@@ -207,6 +211,9 @@ func (g *DailyReportGenerator) GenerateReport(state DryRunState, date time.Time)
 }
 
 func formatComma(v float64, decimals int) string {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return "0.00"
+	}
 	raw := fmt.Sprintf("%.*f", decimals, v)
 	parts := strings.Split(raw, ".")
 	intPart := parts[0]

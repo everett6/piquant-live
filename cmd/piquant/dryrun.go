@@ -184,6 +184,21 @@ func runDryRun(ctx context.Context, args []string) error {
 	paperCfg.WindowPreset = f.window
 	if f.durationH > 0 {
 		paperCfg.TargetDuration = time.Duration(f.durationH) * time.Hour
+	} else {
+		switch f.window {
+		case "30d", "1m", "month":
+			paperCfg.TargetDuration = 30 * 24 * time.Hour
+		case "14d", "2w":
+			paperCfg.TargetDuration = 14 * 24 * time.Hour
+		case "7d", "1w":
+			paperCfg.TargetDuration = 7 * 24 * time.Hour
+		case "3d":
+			paperCfg.TargetDuration = 3 * 24 * time.Hour
+		case "1d":
+			paperCfg.TargetDuration = 24 * time.Hour
+		default:
+			paperCfg.TargetDuration = 14 * 24 * time.Hour
+		}
 	}
 	paperCfg.MaxDrawdownPct = f.maxDD
 	if f.baseLev > 0 {
