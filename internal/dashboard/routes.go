@@ -1655,30 +1655,22 @@ func (s *Server) handlePaperDryRun(w http.ResponseWriter, r *http.Request) {
 
 	// 1. If an active DryRun instance is registered directly on the server:
 	if s.opts.DryRun != nil {
-		if provider, ok := s.opts.DryRun.(interface {
-			State() any
-			RecentFills() any
-		}); ok {
-			st := provider.State()
-			fills := provider.RecentFills()
+		if eng, ok := s.opts.DryRun.(*paper.DryRunEngine); ok {
+			st := eng.State()
+			fills := eng.RecentFills()
 			ds := "live"
-			if drySt, ok := st.(paper.DryRunState); ok && drySt.DataSource != "" {
-				ds = drySt.DataSource
+			if st.DataSource != "" {
+				ds = st.DataSource
 			}
-			var streamStats map[string]any
-			if streamer, ok := s.opts.DryRun.(interface {
-				StreamStats() (uint64, uint64, uint64, uint64, uint64, uint64, int64)
-			}); ok {
-				tot, dep, tr, gaps, reconn, fallb, lastNs := streamer.StreamStats()
-				streamStats = map[string]any{
-					"total_events":      tot,
-					"depth_updates":     dep,
-					"trades":            tr,
-					"gaps":              gaps,
-					"reconnects":        reconn,
-					"fallbacks":         fallb,
-					"last_timestamp_ns": lastNs,
-				}
+			tot, dep, tr, gaps, reconn, fallb, lastNs := eng.StreamStats()
+			streamStats := map[string]any{
+				"total_events":      tot,
+				"depth_updates":     dep,
+				"trades":            tr,
+				"gaps":              gaps,
+				"reconnects":        reconn,
+				"fallbacks":         fallb,
+				"last_timestamp_ns": lastNs,
 			}
 			writeJSON(w, http.StatusOK, map[string]any{
 				"status":       "active",

@@ -37,6 +37,7 @@ type dryRunFlags struct {
 	spotOnly          bool
 	taxRate           float64
 	zeroFeeMaker      bool
+	clipFraction      float64
 	cleanReset        bool
 	enableTaker       bool
 	statusOnly        bool
@@ -68,13 +69,14 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.Float64Var(&f.baseLev, "base-leverage", 2.5, "nominal base leverage multiplier (e.g. 2.5 for 2.5x, 3.5 for 3.5x to reach $20/mo on $200)")
 	fs.Float64Var(&f.maxLev, "max-leverage", 3.5, "maximum allowable leverage ceiling")
 	fs.StringVar(&f.symbols, "symbols", "BTCUSDC,ETHUSDT", "comma-separated trading symbols")
-	fs.Float64Var(&f.targetProfitBps, "target-profit", 18.0, "net target profit margin per swing in bps (default: 18.0 bps = 0.18%)")
-	fs.Float64Var(&f.entryOffsetBps, "entry-offset", 5.5, "minimum maker entry distance from mid in bps (default: 5.5 bps = 0.055%)")
+	fs.Float64Var(&f.targetProfitBps, "target-profit", 14.0, "net target profit margin per swing in bps (default: 14.0 bps = 0.14%)")
+	fs.Float64Var(&f.entryOffsetBps, "entry-offset", 1.75, "minimum maker entry distance from mid in bps (default: 1.75 bps = 0.0175%)")
 	fs.Float64Var(&f.stopLossBps, "stop-loss", 50.0, "structural invalidation stop loss in bps (default: 50.0 bps = 0.50%)")
 	fs.Float64Var(&f.monthlyGainCap, "monthly-cap", 15.0, "maximum target gain percentage per month before entering capital preservation (default: 15.0%)")
 	fs.BoolVar(&f.spotOnly, "spot-only", false, "spot-only cash account mode: disable naked shorting, long inventory only (default false)")
 	fs.Float64Var(&f.taxRate, "tax-rate", 35.0, "estimated income/capital gains tax rate percentage for after-tax reserve (default: 35.0% for US/CA)")
 	fs.BoolVar(&f.zeroFeeMaker, "zero-fee-btc", true, "zero-fee maker tier on BTC pairs (default true for Binance.US)")
+	fs.Float64Var(&f.clipFraction, "clip-fraction", 0.45, "fraction of max allocation per quote clip (default: 0.45 = 45% for high capital turnover)")
 	fs.BoolVar(&f.enableTaker, "enable-taker", false, "opt-in to tactical taker executions on high-conviction momentum (default false)")
 	fs.BoolVar(&f.cleanReset, "reset", false, "reset cumulative historical win/loss stats and trade count on start")
 	fs.BoolVar(&f.statusOnly, "status", false, "print terminal summary of active dry run and exit")
@@ -202,6 +204,9 @@ func runDryRun(ctx context.Context, args []string) error {
 	}
 	if f.monthlyGainCap > 0 {
 		paperCfg.MonthlyGainCapPct = f.monthlyGainCap
+	}
+	if f.clipFraction > 0 {
+		paperCfg.ClipFraction = f.clipFraction
 	}
 	paperCfg.SpotOnly = f.spotOnly
 	paperCfg.TaxRatePct = f.taxRate

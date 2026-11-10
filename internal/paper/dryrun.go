@@ -53,6 +53,7 @@ type DryRunConfig struct {
 	SpotOnly          bool          // Spot-only cash account mode: disable naked shorting, long inventory only (default: false)
 	TaxRatePct        float64       // Estimated income/capital gains tax rate percentage (default: 35.0% for US/CA)
 	ZeroFeeMaker      bool          // Zero-fee tier on major pairs (e.g. Binance.US BTC/USD, BTC/USDT, BTC/USDC)
+	ClipFraction      float64       // Fraction of max symbol allocation per quote clip (default: 0.45 = 45%)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -79,13 +80,14 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		MaxLeverage:       3.5,
 		EnableMacroShield: true,
 		DataDir:           dataDir,
-		TargetProfitBps:   18.0, // Calibrated for ~10% monthly average return target
-		EntryOffsetBps:    5.5,  // Patient maker entry: avoid micro-churning adverse sweeps
+		TargetProfitBps:   14.0, // Calibrated for high-turnover ~10% monthly average return target
+		EntryOffsetBps:    1.75, // Agile spread-capturing maker entry: placed near inside touch for frequent turnover
 		StopLossBps:       50.0, // Structural stop-loss protecting against crashes
 		MonthlyGainCapPct: 15.0, // Hard ceiling for monthly profit target (preserves banked gains)
 		SpotOnly:          false,
 		TaxRatePct:        35.0, // Default 35% estimated tax reserve for US/CA
 		ZeroFeeMaker:      false, // Default standard maker fee (1.5 bps); opt-in to zero-fee BTC maker via --zero-fee-btc
+		ClipFraction:      0.45,  // 45% clip sizing for small spot cash accounts ($50-$75 per clip on $200 capital)
 		CleanReset:        false,
 		EnableTaker:       false,
 	}
@@ -486,16 +488,19 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		cfg.OrderLatency = 50 * time.Millisecond
 	}
 	if cfg.TargetProfitBps <= 0 {
-		cfg.TargetProfitBps = 18.0
+		cfg.TargetProfitBps = 14.0
 	}
 	if cfg.EntryOffsetBps <= 0 {
-		cfg.EntryOffsetBps = 5.5
+		cfg.EntryOffsetBps = 1.75
 	}
 	if cfg.StopLossBps <= 0 {
 		cfg.StopLossBps = 50.0
 	}
 	if cfg.MonthlyGainCapPct <= 0 {
 		cfg.MonthlyGainCapPct = 15.0
+	}
+	if cfg.ClipFraction <= 0 {
+		cfg.ClipFraction = 0.45
 	}
 
 	if cfg.SpotOnly {
@@ -510,6 +515,9 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	}
 	if cfg.MaxLeverage > 0 {
 		levCfg.MaxLeverage = cfg.MaxLeverage
+	}
+	if cfg.ClipFraction > 0 {
+		levCfg.ClipFraction = cfg.ClipFraction
 	}
 	levCtrl := NewDynamicLeverageController(levCfg)
 
@@ -2168,7 +2176,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	// Both scale with real-time volatility variance sm.VolVarBps.
 	entrySpreadBps := e.cfg.EntryOffsetBps
 	if entrySpreadBps <= 0 {
-		entrySpreadBps = 7.5
+		entrySpreadBps = 1.75
 	}
 	symMultiplier := 1.0
 	uSym := strings.ToUpper(symbol)
@@ -2187,7 +2195,15 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		volScale := math.Min(2.5, math.Sqrt(sm.VolVarBps/0.40))
 		effectiveEntryBps *= volScale
 	}
-	feeFloorBps := math.Max(floorBps, effectiveEntryBps)
+	// Dynamic Hurdle: ensure fee floor covers round-trip maker fee if applicable.
+	// On Binance.US zero-fee BTC pairs (makerFee == 0), min hurdle is agile (1.25 bps).
+	// On standard fee-bearing pairs (makerFee > 0), hurdle guarantees fee clearance (2.0 * makerFee + 1.25 bps).
+	curMakerFee := e.makerFeeBps(symbol)
+	minHurdleBps := 1.25
+	if curMakerFee > 0 {
+		minHurdleBps = (2.0 * curMakerFee) + 1.25
+	}
+	feeFloorBps := math.Max(floorBps, math.Max(minHurdleBps, effectiveEntryBps))
 	if bidOffsetBps < feeFloorBps {
 		bidOffsetBps = feeFloorBps
 	}
@@ -2285,9 +2301,18 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				if targetAsk < minProfitAsk {
 					targetAsk = minProfitAsk
 				}
-				// Profit-locking ratchet: if market surged into confirmed net profit, take inside ask
+				// Profit-locking ratchet: if market surged into confirmed net profit:
+				// In calm or neutral flow, capture the inside ask immediately.
+				// In strong upward momentum (blendedSkewBps > 1.0), trail the ask higher with momentum skew
+				// to capture outsized runner profits (25-50 bps) instead of exiting prematurely!
 				if bestAsk >= minProfitAsk {
 					targetAsk = bestAsk
+					if blendedSkewBps > 1.0 {
+						momentumRunnerAsk := bestAsk * (1.0 + (blendedSkewBps * 0.50 * 1e-4))
+						if momentumRunnerAsk > targetAsk {
+							targetAsk = momentumRunnerAsk
+						}
+					}
 				}
 			}
 		} else if pos.Size < 0 { // Holding SHORT position
@@ -2313,9 +2338,18 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				if targetBid > maxProfitBid {
 					targetBid = maxProfitBid
 				}
-				// Profit-locking ratchet: if market dumped into confirmed net profit, take inside bid
+				// Profit-locking ratchet: if market dumped into confirmed net profit:
+				// In calm or neutral flow, capture the inside bid immediately.
+				// In strong downward momentum (blendedSkewBps < -1.0), trail the bid lower with momentum skew
+				// to capture runner profits instead of covering prematurely!
 				if bestBid <= maxProfitBid && bestBid > 0 {
 					targetBid = bestBid
+					if blendedSkewBps < -1.0 {
+						momentumRunnerBid := bestBid * (1.0 - (math.Abs(blendedSkewBps) * 0.50 * 1e-4))
+						if momentumRunnerBid < targetBid && momentumRunnerBid > 0 {
+							targetBid = momentumRunnerBid
+						}
+					}
 				}
 			}
 		}

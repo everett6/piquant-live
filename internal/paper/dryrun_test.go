@@ -1220,6 +1220,92 @@ func TestUSDCMarketMakingAndVolatilityAdaptiveQuoting(t *testing.T) {
 	}
 }
 
+func TestAgileZeroFeeMakerQuotingAndTrailingProfitRatchet(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.ZeroFeeMaker = true
+	cfg.SpotOnly = true
+	cfg.EntryOffsetBps = 1.75
+	cfg.TargetProfitBps = 14.0
+	cfg.ClipFraction = 0.45
+	cfg.Symbols = []string{"BTCUSDT", "ETHUSDT"}
+
+	ring := engine.NewSPSCRing(1024)
+	streamCfg := DefaultStreamConfig()
+	streamCfg.Symbols = cfg.Symbols
+	stream := NewMarketStreamIngestor(streamCfg, ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	// 1. Verify maker fee differentiation
+	if btcFee := dryRun.makerFeeBps("BTCUSDT"); btcFee != 0.0 {
+		t.Errorf("expected 0.0 bps maker fee for BTCUSDT under ZeroFeeMaker, got %.2f", btcFee)
+	}
+	if ethFee := dryRun.makerFeeBps("ETHUSDT"); ethFee != 1.5 {
+		t.Errorf("expected 1.5 bps maker fee for ETHUSDT, got %.2f", ethFee)
+	}
+
+	// 2. Test agile entry quoting on zero-fee BTCUSDT
+	now := time.Now()
+	dryRun.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
+
+	st := dryRun.State()
+	orders := st.ActiveOrders["BTCUSDT"]
+	if len(orders) == 0 {
+		t.Fatalf("expected active orders for BTCUSDT")
+	}
+	var buyQuote *ActiveMakerOrder
+	for _, o := range orders {
+		if o.Side == "BUY" {
+			buyQuote = &o
+			break
+		}
+	}
+	if buyQuote == nil {
+		t.Fatalf("expected resting BUY quote for BTCUSDT")
+	}
+	bidOffsetBps := (75000.00 - buyQuote.Price) / 75000.00 * 1e4
+	// For BTCUSDT with entryOffset 1.75 * 0.90 = 1.575 bps, offset should be around 1.5 - 2.5 bps, NOT 6.2 bps!
+	if bidOffsetBps > 3.0 {
+		t.Errorf("expected agile quote offset <= 3.0 bps for zero-fee BTC, got %.2f bps", bidOffsetBps)
+	}
+
+	// 3. Test dynamic trailing profit ratchet on exit
+	// Inject a long position at 75000.00
+	dryRun.mu.Lock()
+	dryRun.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          0.005,
+		AvgEntryPrice: 75000.00,
+		MarkPrice:     75200.00,
+	}
+	dryRun.mu.Unlock()
+
+	sm := dryRun.symMicro["BTCUSDT"]
+	sm.Ret5sBps = 3.5
+
+	dryRun.evaluateQuotesAndGating("BTCUSDT", 75200.00, now.Add(2*time.Second))
+	stRally := dryRun.State()
+	rallyOrders := stRally.ActiveOrders["BTCUSDT"]
+	var exitAsk *ActiveMakerOrder
+	for _, o := range rallyOrders {
+		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
+			exitAsk = &o
+			break
+		}
+	}
+	if exitAsk == nil {
+		t.Fatalf("expected resting SELL exit quote for BTCUSDT")
+	}
+	// Exit quote should be at or above min profit (entry 75000 * (1 + 14 bps) = 75105)
+	if exitAsk.Price < 75105.00 {
+		t.Errorf("expected exit quote >= min profit price 75105, got %.2f", exitAsk.Price)
+	}
+}
+
 
 
 
