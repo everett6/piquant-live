@@ -103,6 +103,67 @@ func (r *SPSCRing) Pop() (MarketEvent, bool) {
 	return ev, true
 }
 
+// PopBatch drains up to len(dest) unconsumed events into preallocated dest slice.
+// Uses a single atomic read of head and a single atomic store of tail, minimizing
+// inter-core cache line bouncing and L1/L2 coherence stalls under heavy bursts (>10,000 events/sec).
+// Zero heap allocations (0 B/op, 0 allocs/op).
+func (r *SPSCRing) PopBatch(dest []MarketEvent) int {
+	maxToRead := len(dest)
+	if maxToRead == 0 {
+		return 0
+	}
+
+	t := r.tail.Load()
+	h := r.head.Load()
+
+	available := int(h - t)
+	if available <= 0 {
+		return 0
+	}
+
+	n := available
+	if n > maxToRead {
+		n = maxToRead
+	}
+
+	for i := 0; i < n; i++ {
+		dest[i] = r.buf[(t+uint64(i))&r.mask]
+	}
+
+	r.tail.Store(t + uint64(n))
+	return n
+}
+
+// PushBatch enqueues a contiguous slice of events with a single atomic head store.
+// Returns the number of events actually written (may be less than len(events) if ring capacity is reached).
+// Zero heap allocations (0 B/op, 0 allocs/op).
+func (r *SPSCRing) PushBatch(events []MarketEvent) int {
+	toWrite := len(events)
+	if toWrite == 0 {
+		return 0
+	}
+
+	h := r.head.Load()
+	t := r.tail.Load()
+
+	freeSlots := int(uint64(len(r.buf)) - (h - t))
+	if freeSlots <= 0 {
+		return 0
+	}
+
+	n := toWrite
+	if n > freeSlots {
+		n = freeSlots
+	}
+
+	for i := 0; i < n; i++ {
+		r.buf[(h+uint64(i))&r.mask] = events[i]
+	}
+
+	r.head.Store(h + uint64(n))
+	return n
+}
+
 // Reset clears the head and tail cursors. Must be called only when quiescent.
 func (r *SPSCRing) Reset() {
 	r.head.Store(0)

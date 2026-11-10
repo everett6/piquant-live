@@ -132,16 +132,18 @@ type TradeRecord struct {
 
 // ActiveMakerOrder tracks an active resting limit maker order in the paper book.
 type ActiveMakerOrder struct {
-	Symbol         string    `json:"symbol"`
-	Side           string    `json:"side"` // "BUY" or "SELL"
-	Price          float64   `json:"price"`
-	Size           float64   `json:"size"`
-	PlacedAt       time.Time `json:"placed_at"`
-	ActiveAt       time.Time `json:"active_at"` // PlacedAt + OrderLatency
-	QueueAhead     float64   `json:"queue_ahead"`
-	Strategy       string    `json:"strategy"`
-	EdgeBps        float64   `json:"edge_bps"`
-	CancelingUntil time.Time `json:"canceling_until,omitempty"` // Cancel propagation transit delay (cancel race)
+	Symbol          string    `json:"symbol"`
+	Side            string    `json:"side"` // "BUY" or "SELL"
+	Price           float64   `json:"price"`
+	Size            float64   `json:"size"`
+	PlacedAt        time.Time `json:"placed_at"`
+	ActiveAt        time.Time `json:"active_at"` // PlacedAt + OrderLatency
+	QueueAhead      float64   `json:"queue_ahead"`
+	Strategy        string    `json:"strategy"`
+	EdgeBps         float64   `json:"edge_bps"`
+	FairValue       float64   `json:"fair_value,omitempty"`
+	TargetInventory float64   `json:"target_inventory,omitempty"`
+	CancelingUntil  time.Time `json:"canceling_until,omitempty"` // Cancel propagation transit delay (cancel race)
 }
 
 // DryRunState is the checkpointable state of the 14-day paper trading engine.
@@ -198,6 +200,8 @@ type ScalpingRegimeState struct {
 	ConsecutiveLoss int     `json:"consecutive_losses"`
 	RollingWinRate  float64 `json:"rolling_win_rate"`
 	RollingPnlUSDT  float64 `json:"rolling_pnl_usdt"`
+	TargetInventory float64 `json:"target_inventory"`
+	FairValue       float64 `json:"fair_value"`
 }
 
 // SelfAdaptationState reports autonomous parameter backtesting and hot-reloading progress.
@@ -254,6 +258,15 @@ type SymbolMicrostructure struct {
 	// Delta-Neutral Funding Carry Tracker
 	FundingTracker *common.FundingCarryTracker
 
+	// Tribeca Institutional Fair Value & Target Inventory
+	FairValueEngine *common.TribecaFairValueEngine
+	LatestFairValue float64
+	LatestTargetInv float64
+	top5BidsP       [5]float64
+	top5BidsS       [5]float64
+	top5AsksP       [5]float64
+	top5AsksS       [5]float64
+
 	// Self-Improving Scalping Defense
 	ScalpingDisabled       bool
 	ScalpingDisabledReason string
@@ -280,8 +293,10 @@ func newSymbolMicrostructure(symbol string, kylesLambda float64) *SymbolMicrostr
 		AdaHedge:    common.NewAdaHedgeEnsemble(7, 0.985),
 		VolVarBps:   0.15,
 		AtrBps:      35.0, // Baseline 15-minute ATR volatility in bps
-		TradeRate1s:    4.0,
+		Conviction:  0.50, // Neutral 50/50 baseline
+		TradeRate1s: 4.0,
 		FundingTracker: common.NewFundingCarryTracker(0.05, 0.0001),
+		FairValueEngine: common.NewTribecaFairValueEngine(common.FairValueMicroPrice, 0.10, 1.5, 0.02),
 	}
 }
 
@@ -1001,6 +1016,41 @@ func (e *DryRunEngine) State() DryRunState {
 		cp.Coinbase = &cbSnap
 	}
 
+	// Populate per-symbol scalping regime state for UI & telemetry observability
+	cp.ScalpingState = make(map[string]ScalpingRegimeState, len(e.symMicro))
+	for sym, sm := range e.symMicro {
+		regime := "ACTIVE_SCALP"
+		if sm.ScalpingDisabled {
+			if sm.ConsecutiveLosses >= 4 {
+				regime = "DISABLED_LEAK_GUARD"
+			} else {
+				regime = "PATIENT_SWING"
+			}
+		}
+		winRate := 0.0
+		sumPnL := 0.0
+		if len(sm.RecentPnlWindow) > 0 {
+			losses := 0
+			for _, p := range sm.RecentPnlWindow {
+				sumPnL += p
+				if p < 0 {
+					losses++
+				}
+			}
+			winRate = float64(len(sm.RecentPnlWindow)-losses) / float64(len(sm.RecentPnlWindow)) * 100.0
+		}
+		cp.ScalpingState[sym] = ScalpingRegimeState{
+			ScalpingEnabled: !sm.ScalpingDisabled,
+			Regime:          regime,
+			Reason:          sm.ScalpingDisabledReason,
+			ConsecutiveLoss: sm.ConsecutiveLosses,
+			RollingWinRate:  winRate,
+			RollingPnlUSDT:  sumPnL,
+			TargetInventory: sm.LatestTargetInv,
+			FairValue:       sm.LatestFairValue,
+		}
+	}
+
 	return cp
 }
 
@@ -1299,6 +1349,8 @@ func (e *DryRunEngine) saveCheckpoint() error {
 			ConsecutiveLoss: sm.ConsecutiveLosses,
 			RollingWinRate:  winRate,
 			RollingPnlUSDT:  sumPnL,
+			TargetInventory: sm.LatestTargetInv,
+			FairValue:       sm.LatestFairValue,
 		}
 	}
 	if e.state.SelfAdaptation.Status == "" {
@@ -2261,11 +2313,23 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 	e.mu.Unlock()
 
-	// Normalize inventory into [-5.0, +5.0] clip units so GLFT & Cartea-Jaimungal inventory risk aversion
-	// scales identically across high-price (BTC) and low-price (ETH/SOL) contracts.
+	// Tribeca Institutional Dynamic Target Inventory (q*):
+	// Sized by directional alpha conviction and high funding carry APR.
+	targetInv := 0.0
+	if sm.FairValueEngine != nil {
+		if maxInvQty > 0 {
+			sm.FairValueEngine.MaxInventoryCap = maxInvQty
+		}
+		targetInv = sm.FairValueEngine.ComputeTargetInventory(sm.Conviction, liveFundingAPR, e.cfg.SpotOnly)
+	}
+
+	// Inventory discrepancy relative to institutional target inventory q* (Tribeca model):
+	// When on target (currentInv == targetInv), restoring skew is ZERO, allowing the fund
+	// to hold structural swing positions for days/weeks without fee churn!
+	invDeviation := currentInv - targetInv
 	normInv := 0.0
 	if maxInvQty > 0 {
-		normInv = (currentInv / maxInvQty) * 5.0
+		normInv = (invDeviation / maxInvQty) * 5.0
 		if normInv > 5.0 {
 			normInv = 5.0
 		} else if normInv < -5.0 {
@@ -2344,17 +2408,22 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 	e.mu.Unlock()
 
-	// Proportional inventory skew restoring force:
+	// Proportional inventory skew restoring force relative to institutional target q*:
 	// In Avellaneda-Stoikov, inventory risk scales with gamma * sigma^2.
-	// For volatile assets or volatility bursts (e.g. volatile USDC pairs), scale restoring force with volatility variance!
+	// When currentInv == targetInv, invFraction is ZERO, so restoring force is ZERO!
 	var invSkewBps float64
 	if maxInvQty > 0 {
-		invFraction := currentInv / maxInvQty // [-1.0, 1.0]
+		invFraction := invDeviation / maxInvQty // [-1.0, 1.0] relative to target q*
+		if invFraction > 1.0 {
+			invFraction = 1.0
+		} else if invFraction < -1.0 {
+			invFraction = -1.0
+		}
 		volMult := 1.0
 		if sm.VolVarBps > 0.40 {
 			volMult = math.Min(2.0, sm.VolVarBps/0.40)
 		}
-		invSkewBps = invFraction * 2.5 * volMult // Volatility-scaled inventory restoring force
+		invSkewBps = invFraction * 2.5 * volMult // Volatility-scaled inventory restoring force relative to target
 	}
 
 	// Blend AdaHedge online meta-prediction with GLFT reservation skew and Coinbase institutional lead-lag skew
@@ -2397,6 +2466,10 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		convictionUp = 0.01
 	}
 	sm.Conviction = convictionUp
+	if sm.FairValueEngine != nil {
+		targetInv = sm.FairValueEngine.ComputeTargetInventory(sm.Conviction, liveFundingAPR, e.cfg.SpotOnly)
+		invDeviation = currentInv - targetInv
+	}
 
 	bidOffsetBps := math.Max(floorBps, qd.HalfSpreadBps-blendedSkewBps) + tcaPenaltyBps + driftWidenBps
 	askOffsetBps := math.Max(floorBps, qd.HalfSpreadBps+blendedSkewBps) + tcaPenaltyBps + driftWidenBps
@@ -2480,8 +2553,47 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		clipQty *= 0.25 // Reduce clip size by 75%
 	}
 
-	targetBid := midPrice - (bidOffsetBps * midPrice * 1e-4)
-	targetAsk := midPrice + (askOffsetBps * midPrice * 1e-4)
+	var top5BidsPrice, top5BidsSize []float64
+	var top5AsksPrice, top5AsksSize []float64
+	if hasLiveBook {
+		for i := 0; i < 5 && curBids[i].Price > 0; i++ {
+			sm.top5BidsP[i] = curBids[i].Price
+			sm.top5BidsS[i] = curBids[i].Size
+		}
+		for i := 0; i < 5 && curAsks[i].Price > 0; i++ {
+			sm.top5AsksP[i] = curAsks[i].Price
+			sm.top5AsksS[i] = curAsks[i].Size
+		}
+		top5BidsPrice = sm.top5BidsP[:5]
+		top5BidsSize = sm.top5BidsS[:5]
+		top5AsksPrice = sm.top5AsksP[:5]
+		top5AsksSize = sm.top5AsksS[:5]
+	}
+	fairVal := midPrice
+	if sm.FairValueEngine != nil {
+		cbPrice := 0.0
+		if cbSig.CoinbasePrice > 0 {
+			cbPrice = cbSig.CoinbasePrice
+		}
+		fv := sm.FairValueEngine.ComputeFairValue(
+			bestBid, bestAsk, bidSize, askSize,
+			top5BidsPrice, top5BidsSize,
+			top5AsksPrice, top5AsksSize,
+			cbPrice,
+		)
+		if fv > 0 && !math.IsNaN(fv) && !math.IsInf(fv, 0) {
+			fairVal = fv
+		}
+	}
+	sm.LatestFairValue = fairVal
+	sm.LatestTargetInv = targetInv
+
+	centerPrice := midPrice
+	if fairVal > 0 && !math.IsNaN(fairVal) && !math.IsInf(fairVal, 0) {
+		centerPrice = fairVal
+	}
+	targetBid := centerPrice - (bidOffsetBps * centerPrice * 1e-4)
+	targetAsk := centerPrice + (askOffsetBps * centerPrice * 1e-4)
 
 	// Institutional Breakeven Floor & Dynamic Profit Decay Ratchet:
 	// When holding open inventory, the closing quote guarantees net profitability
@@ -2771,7 +2883,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if currentInv > 0 && convictionUp < buyThreshold {
 			allowBuy = false // Position accumulation gate: adding to existing long requires >= buyThreshold
 		}
-		if currentInv == 0 && e.quantOrch != nil && e.quantOrch.Report(now).CurrentMode != orchestrator.ModeLowLatency && convictionUp < 0.50 {
+		if currentInv == 0 && e.quantOrch != nil && e.quantOrch.Report(now).CurrentMode != orchestrator.ModeLowLatency && convictionUp < 0.48 {
 			allowBuy = false // Structural wave gate: do not open new long without positive conviction
 		}
 		if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
@@ -2807,15 +2919,17 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				stratName = string(rep.CurrentMode)
 			}
 			orders = append(orders, &ActiveMakerOrder{
-				Symbol:     symbol,
-				Side:       "BUY",
-				Price:      targetBid,
-				Size:       buySize,
-				PlacedAt:   now,
-				ActiveAt:   now.Add(latency),
-				QueueAhead: queueEst,
-				Strategy:   stratName,
-				EdgeBps:    bidOffsetBps,
+				Symbol:          symbol,
+				Side:            "BUY",
+				Price:           targetBid,
+				Size:            buySize,
+				PlacedAt:        now,
+				ActiveAt:        now.Add(latency),
+				QueueAhead:      queueEst,
+				Strategy:        stratName,
+				EdgeBps:         bidOffsetBps,
+				FairValue:       fairVal,
+				TargetInventory: targetInv,
 			})
 		}
 	}
@@ -2849,7 +2963,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			if currentInv < 0 && convictionUp > sellThreshold {
 				allowSell = false // Position accumulation gate: adding to existing short requires <= sellThreshold
 			}
-			if currentInv == 0 && e.quantOrch != nil && e.quantOrch.Report(now).CurrentMode != orchestrator.ModeLowLatency && convictionUp > 0.50 {
+			if currentInv == 0 && e.quantOrch != nil && e.quantOrch.Report(now).CurrentMode != orchestrator.ModeLowLatency && convictionUp > 0.52 {
 				allowSell = false // Structural wave gate: do not open new short without negative conviction
 			}
 			if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
@@ -2882,15 +2996,17 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				stratName = string(rep.CurrentMode)
 			}
 			orders = append(orders, &ActiveMakerOrder{
-				Symbol:     symbol,
-				Side:       "SELL",
-				Price:      targetAsk,
-				Size:       sellSize,
-				PlacedAt:   now,
-				ActiveAt:   now.Add(latency),
-				QueueAhead: queueEst,
-				Strategy:   stratName,
-				EdgeBps:    askOffsetBps,
+				Symbol:          symbol,
+				Side:            "SELL",
+				Price:           targetAsk,
+				Size:            sellSize,
+				PlacedAt:        now,
+				ActiveAt:        now.Add(latency),
+				QueueAhead:      queueEst,
+				Strategy:        stratName,
+				EdgeBps:         askOffsetBps,
+				FairValue:       fairVal,
+				TargetInventory: targetInv,
 			})
 		}
 	}

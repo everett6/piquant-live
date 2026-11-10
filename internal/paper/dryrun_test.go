@@ -1492,7 +1492,64 @@ func TestQuantHedgeFundAlphaAndVolatilityKellySizing(t *testing.T) {
 	}
 }
 
+func TestTribecaTargetInventoryAndFairValueIntegration(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.OrderLatency = 10 * time.Millisecond
 
+	ring := engine.NewSPSCRing(128)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+	eng, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
 
+	now := time.Now()
+	eng.mu.Lock()
+	sm := eng.symMicro["BTCUSDT"]
+	if sm == nil {
+		sm = newSymbolMicrostructure("BTCUSDT", 0.25)
+		eng.symMicro["BTCUSDT"] = sm
+	}
+	sm.Conviction = 0.70 // Bullish directional conviction
+	eng.mu.Unlock()
 
+	eng.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
+
+	st := eng.State()
+	orders := st.ActiveOrders["BTCUSDT"]
+	if len(orders) == 0 {
+		t.Fatalf("expected active orders for BTCUSDT")
+	}
+
+	// Verify FairValue and TargetInventory populated on orders
+	var buyOrder *ActiveMakerOrder
+	for _, o := range orders {
+		if o.Side == "BUY" {
+			buyOrder = &o
+			break
+		}
+	}
+	if buyOrder == nil {
+		t.Fatalf("expected active BUY order")
+	}
+	if buyOrder.FairValue <= 0 {
+		t.Errorf("expected positive FairValue, got %f", buyOrder.FairValue)
+	}
+	if buyOrder.TargetInventory <= 0 {
+		t.Errorf("expected positive TargetInventory for bullish conviction 0.70, got %f", buyOrder.TargetInventory)
+	}
+
+	// Verify ScalpingState contains TargetInventory and FairValue
+	scalpSt, ok := st.ScalpingState["BTCUSDT"]
+	if !ok {
+		t.Fatalf("missing ScalpingState for BTCUSDT")
+	}
+	if scalpSt.TargetInventory <= 0 {
+		t.Errorf("expected positive TargetInventory in ScalpingState, got %f", scalpSt.TargetInventory)
+	}
+	if scalpSt.FairValue <= 0 {
+		t.Errorf("expected positive FairValue in ScalpingState, got %f", scalpSt.FairValue)
+	}
+}
 
