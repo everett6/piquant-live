@@ -191,8 +191,12 @@ func Runtime() RuntimeInfo {
 		Isolation:  Available(FeatureIsolation),
 		Watchdog:   Available(FeatureWatchdog),
 	}
-	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", os.Getpid())); err == nil {
-		for _, line := range strings.Split(string(b), "\n") {
+	statusBytes, err := os.ReadFile("/proc/thread-self/status")
+	if err != nil {
+		statusBytes, err = os.ReadFile(fmt.Sprintf("/proc/%d/status", os.Getpid()))
+	}
+	if err == nil {
+		for _, line := range strings.Split(string(statusBytes), "\n") {
 			if strings.HasPrefix(line, "Cpus_allowed_list:") {
 				info.Affinity = strings.TrimSpace(strings.TrimPrefix(line, "Cpus_allowed_list:"))
 			}

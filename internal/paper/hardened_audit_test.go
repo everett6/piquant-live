@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"piquant-live/internal/engine"
 )
 
 // TestJournalRecoveryFloatDustDivisionByZero verifies that floating point residual dust
@@ -314,4 +316,139 @@ func TestMonthlyGainCapPreservationAndNoiseScratchElimination(t *testing.T) {
 		}
 	}
 }
+
+func TestSpotOnlyModeAndTaxReserveAccounting(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "spot_tax_audit_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.Symbols = []string{"BTCUSDT", "ETHUSDT"}
+	cfg.InitialCapital = 200.0
+	cfg.SpotOnly = true
+	cfg.TaxRatePct = 35.0
+	cfg.ZeroFeeMaker = true
+
+	ring := engine.NewSPSCRing(128)
+	eng, err := NewDryRunEngine(cfg, ring, nil)
+	if err != nil {
+		t.Fatalf("failed to initialize dry run engine: %v", err)
+	}
+
+	// 1. In SpotOnly mode, base and max leverage must be locked to 1.0x
+	if eng.cfg.BaseLeverage != 1.0 || eng.cfg.MaxLeverage != 1.0 {
+		t.Fatalf("expected leverage locked to 1.0x in SpotOnly mode, got base=%.1f, max=%.1f", eng.cfg.BaseLeverage, eng.cfg.MaxLeverage)
+	}
+
+	// 2. Test ZeroFeeMaker fee logic
+	if fee := eng.makerFeeBps("BTCUSDT"); fee != 0.0 {
+		t.Fatalf("expected 0.0 bps maker fee for BTCUSDT, got %.2f", fee)
+	}
+	if fee := eng.makerFeeBps("ETHUSDT"); fee != cfg.MakerFeeBps {
+		t.Fatalf("expected standard maker fee %.2f bps for ETHUSDT, got %.2f", cfg.MakerFeeBps, fee)
+	}
+
+	now := time.Now()
+	// 3. Test Spot-Only quoting when flat: MUST NOT place SELL quotes (no naked shorting!)
+	eng.evaluateQuotesAndGating("BTCUSDT", 75000.0, now)
+	eng.mu.Lock()
+	ordersFlat := eng.activeOrders["BTCUSDT"]
+	eng.mu.Unlock()
+
+	hasBuy := false
+	for _, o := range ordersFlat {
+		if !o.CancelingUntil.IsZero() {
+			continue
+		}
+		if o.Side == "SELL" {
+			t.Fatalf("SpotOnly mode placed SELL quote while flat (naked shorting breach!): %+v", o)
+		}
+		if o.Side == "BUY" {
+			hasBuy = true
+		}
+	}
+	if !hasBuy {
+		t.Fatalf("expected BUY quote placed while flat in SpotOnly mode")
+	}
+
+	// 4. Test Spot-Only quoting when long: MUST allow SELL quote (inventory exit)
+	eng.mu.Lock()
+	pos := eng.state.Positions["BTCUSDT"]
+	if pos == nil {
+		pos = &Position{Symbol: "BTCUSDT"}
+		eng.state.Positions["BTCUSDT"] = pos
+	}
+	pos.Size = 0.001
+	pos.AvgEntryPrice = 75000.0
+	eng.mu.Unlock()
+
+	eng.evaluateQuotesAndGating("BTCUSDT", 75000.0, now.Add(500*time.Millisecond))
+	eng.mu.Lock()
+	ordersLong := eng.activeOrders["BTCUSDT"]
+	eng.mu.Unlock()
+
+	hasExitSell := false
+	for _, o := range ordersLong {
+		if !o.CancelingUntil.IsZero() {
+			continue
+		}
+		if o.Side == "SELL" {
+			hasExitSell = true
+			if math.Abs(o.Size-0.001) > 1e-6 {
+				t.Fatalf("expected exit SELL size 0.001 matching inventory, got %.4f", o.Size)
+			}
+		}
+	}
+	if !hasExitSell {
+		t.Fatalf("expected inventory exit SELL quote placed when holding long in SpotOnly mode")
+	}
+
+	// 5. Test cash gating in SpotOnly mode: if Cash < order value, cannot place BUY order
+	eng.mu.Lock()
+	pos.Size = 0.0 // Return to flat
+	eng.state.Cash = 1.0 // Only $1 cash left (cannot buy 0.001 BTC = $75)
+	eng.mu.Unlock()
+
+	// Clear out existing quotes
+	eng.evaluateQuotesAndGating("BTCUSDT", 75000.0, now.Add(1*time.Second))
+	eng.evaluateQuotesAndGating("BTCUSDT", 75000.0, now.Add(2*time.Second))
+
+	eng.mu.Lock()
+	ordersNoCash := eng.activeOrders["BTCUSDT"]
+	eng.mu.Unlock()
+
+	for _, o := range ordersNoCash {
+		if !o.CancelingUntil.IsZero() {
+			continue
+		}
+		if o.Side == "BUY" {
+			t.Fatalf("SpotOnly mode placed BUY quote with insufficient cash ($1.00): %+v", o)
+		}
+	}
+
+	// 6. Test California / US Tax Reserve Accounting
+	eng.mu.Lock()
+	eng.state.Cash = 200.0
+	eng.state.Equity = 220.0
+	eng.state.RealizedPnL = 20.0 // +$20 realized gains (10% on $200)
+	eng.updateTaxReservesLocked()
+
+	expectedTax := 20.0 * 0.35 // $7.00
+	expectedAfterTaxEquity := 220.0 - 7.00 // $213.00
+	expectedAfterTaxReturn := (213.0 - 200.0) / 200.0 * 100.0 // +6.50%
+
+	if math.Abs(eng.state.EstimatedTaxUSDT-expectedTax) > 1e-4 {
+		t.Fatalf("expected tax reserve $%.2f, got $%.2f", expectedTax, eng.state.EstimatedTaxUSDT)
+	}
+	if math.Abs(eng.state.AfterTaxEquity-expectedAfterTaxEquity) > 1e-4 {
+		t.Fatalf("expected after-tax equity $%.2f, got $%.2f", expectedAfterTaxEquity, eng.state.AfterTaxEquity)
+	}
+	if math.Abs(eng.state.AfterTaxReturnPct-expectedAfterTaxReturn) > 1e-4 {
+		t.Fatalf("expected after-tax return %.2f%%, got %.2f%%", expectedAfterTaxReturn, eng.state.AfterTaxReturnPct)
+	}
+	eng.mu.Unlock()
+}
+
 

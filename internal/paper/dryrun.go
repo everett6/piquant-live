@@ -50,6 +50,9 @@ type DryRunConfig struct {
 	CleanReset        bool          // Reset cumulative historical win/loss stats on start
 	EnableTaker       bool          // Opt-in to tactical taker executions on high-conviction momentum (default: false)
 	MonthlyGainCapPct float64       // Soft ceiling for monthly profit target; triggers capital preservation when reached (default: 15.0%)
+	SpotOnly          bool          // Spot-only cash account mode: disable naked shorting, long inventory only (default: false)
+	TaxRatePct        float64       // Estimated income/capital gains tax rate percentage (default: 35.0% for US/CA)
+	ZeroFeeMaker      bool          // Zero-fee tier on major pairs (e.g. Binance.US BTC/USD, BTC/USDT, BTC/USDC)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -80,6 +83,9 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		EntryOffsetBps:    5.5,  // Patient maker entry: avoid micro-churning adverse sweeps
 		StopLossBps:       50.0, // Structural stop-loss protecting against crashes
 		MonthlyGainCapPct: 15.0, // Hard ceiling for monthly profit target (preserves banked gains)
+		SpotOnly:          false,
+		TaxRatePct:        35.0, // Default 35% estimated tax reserve for US/CA
+		ZeroFeeMaker:      false, // Default standard maker fee (1.5 bps); opt-in to zero-fee BTC maker via --zero-fee-btc
 		CleanReset:        false,
 		EnableTaker:       false,
 	}
@@ -168,6 +174,11 @@ type DryRunState struct {
 	ScalpingState          map[string]ScalpingRegimeState `json:"scalping_state,omitempty"` // Per-symbol scalping viability & regime
 	SelfAdaptation         SelfAdaptationState           `json:"self_adaptation"`          // Autonomous parameter backtesting & hot-reloading
 	Coinbase               *CoinbaseSignalState          `json:"coinbase_signal,omitempty"` // Real-time institutional lead-lag oracle
+	SpotOnly               bool                          `json:"spot_only"`                 // Cash-only spot account mode (no naked shorting)
+	TaxRatePct             float64                       `json:"tax_rate_pct"`              // Estimated income/capital gains tax rate (e.g. 35.0%)
+	EstimatedTaxUSDT       float64                       `json:"estimated_tax_usdt"`        // Cumulative estimated tax reserve
+	AfterTaxEquity         float64                       `json:"after_tax_equity"`          // Equity net of estimated tax reserve
+	AfterTaxReturnPct      float64                       `json:"after_tax_return_pct"`      // Post-tax return percentage
 }
 
 // ScalpingRegimeState reports per-symbol scalping viability and mode (Scalp vs Patient Swing).
@@ -487,6 +498,11 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		cfg.MonthlyGainCapPct = 15.0
 	}
 
+	if cfg.SpotOnly {
+		cfg.BaseLeverage = 1.0
+		cfg.MaxLeverage = 1.0
+	}
+
 	levCfg := DefaultDynamicLeverageConfig()
 	levCfg.MaxDrawdownPct = cfg.MaxDrawdownPct
 	if cfg.BaseLeverage > 0 {
@@ -625,8 +641,41 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	if e.macroGuardian != nil {
 		e.state.Macro = e.macroGuardian.Evaluate(time.Now())
 	}
+	e.updateTaxReservesLocked()
 
 	return e, nil
+}
+
+// makerFeeBps returns the effective exchange maker fee for a given instrument.
+func (e *DryRunEngine) makerFeeBps(symbol string) float64 {
+	if e.cfg.ZeroFeeMaker {
+		u := strings.ToUpper(symbol)
+		if strings.HasPrefix(u, "BTC") {
+			return 0.0 // 0% fee on Binance.US Tier 0 BTC pairs
+		}
+	}
+	return e.cfg.MakerFeeBps
+}
+
+// updateTaxReservesLocked recalculates estimated tax liabilities and post-tax returns.
+// Caller must hold e.mu.
+func (e *DryRunEngine) updateTaxReservesLocked() {
+	e.state.SpotOnly = e.cfg.SpotOnly
+	e.state.TaxRatePct = e.cfg.TaxRatePct
+	if e.cfg.TaxRatePct > 0 {
+		if e.state.RealizedPnL > 0 {
+			e.state.EstimatedTaxUSDT = e.state.RealizedPnL * (e.cfg.TaxRatePct * 0.01)
+		} else {
+			e.state.EstimatedTaxUSDT = 0.0
+		}
+		e.state.AfterTaxEquity = e.state.Equity - e.state.EstimatedTaxUSDT
+		if e.state.InitialCapital > 0 {
+			e.state.AfterTaxReturnPct = (e.state.AfterTaxEquity - e.state.InitialCapital) / e.state.InitialCapital * 100.0
+		}
+	} else {
+		e.state.AfterTaxEquity = e.state.Equity
+		e.state.AfterTaxReturnPct = e.state.TotalReturnPct
+	}
 }
 
 // Start launches the strategy evaluation loop, periodic state checkpointing, and independent feed watchdog.
@@ -749,6 +798,7 @@ func (e *DryRunEngine) emergencyFlattenLocked(reason string) {
 	// Reset unrealized PnL and lock equity into cash
 	e.state.UnrealizedPnL = 0
 	e.state.Equity = e.state.Cash
+	e.updateTaxReservesLocked()
 }
 
 // runJournalWriter provides non-blocking, asynchronous serialization of trade records to the journal file
@@ -1634,6 +1684,7 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 	if e.state.InitialCapital > 0 {
 		e.state.TotalReturnPct = (e.state.Equity - e.state.InitialCapital) / e.state.InitialCapital * 100.0
 	}
+	e.updateTaxReservesLocked()
 	sm := e.getOrCreateSymbolMicro(symbol)
 
 	// Update TCA multi-horizon markouts on incoming live market tick
@@ -2191,11 +2242,14 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if baseTargetProfitBps <= 0 {
 			baseTargetProfitBps = 18.0
 		}
+		if sm.VolVarBps > 0.40 {
+			baseTargetProfitBps *= math.Min(2.0, math.Sqrt(sm.VolVarBps/0.40))
+		}
 		stopLossBps := e.cfg.StopLossBps
 		if stopLossBps <= 0 {
 			stopLossBps = 50.0
 		}
-		roundTripFeeBps := 2.0 * e.cfg.MakerFeeBps
+		roundTripFeeBps := 2.0 * e.makerFeeBps(symbol)
 
 		minNetFloorBps := math.Max(8.0, baseTargetProfitBps*0.50)
 		targetProfitBps := minNetFloorBps
@@ -2322,6 +2376,18 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			keptOrders = append(keptOrders, ord)
 			continue
 		}
+		// In spot-only mode, if flat or short, cancel any resting SELL quote immediately
+		if e.cfg.SpotOnly && currentInv <= 0 && ord.Side == "SELL" {
+			ord.CancelingUntil = now.Add(cancelLatency)
+			keptOrders = append(keptOrders, ord)
+			continue
+		}
+		// In spot-only mode, if unencumbered cash is insufficient for resting BUY quote, cancel immediately
+		if e.cfg.SpotOnly && ord.Side == "BUY" && currentInv >= 0 && e.state.Cash < ord.Size*ord.Price {
+			ord.CancelingUntil = now.Add(cancelLatency)
+			keptOrders = append(keptOrders, ord)
+			continue
+		}
 		// Toxic momentum pull: immediately cancel resting opening quotes if flow becomes adverse
 		if (ord.Side == "SELL" && currentInv <= 0 && (sm.Ret5sBps > 1.5 || blendedSkewBps > 1.5 || cbSig.IsAdverseAsk)) ||
 			(ord.Side == "BUY" && currentInv >= 0 && (sm.Ret5sBps < -1.5 || blendedSkewBps < -1.5 || cbSig.IsAdverseBid)) {
@@ -2373,6 +2439,10 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
 			allowBuy = false // Extreme leakage circuit: halt opening new long positions until recalibrated!
 		}
+		// Spot-only cash account: buying requires having sufficient unencumbered cash!
+		if e.cfg.SpotOnly && e.state.Cash < buySize*targetBid {
+			allowBuy = false
+		}
 	}
 	if allowBuy {
 		queueEst := bidSize
@@ -2402,14 +2472,19 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		sellSize = math.Abs(currentInv)
 	} else {
 		// Opening / accumulating short inventory
-		if currentInv-clipQty < -maxInvQty || blendedSkewBps >= 3.5 || currentInv <= -2.0*clipQty {
+		if e.cfg.SpotOnly {
+			// Spot-only cash account: naked shorting is strictly prohibited! Cannot sell if flat or short.
 			allowSell = false
-		}
-		if blendedSkewBps > 1.5 || sm.Ret5sBps > 1.5 || cbSig.IsAdverseAsk || (!sm.AskCooldownUntil.IsZero() && now.Before(sm.AskCooldownUntil)) {
-			allowSell = false // Toxic cascade defense: do not short into surging knife whether flat or short!
-		}
-		if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
-			allowSell = false // Extreme leakage circuit: halt opening new short positions until recalibrated!
+		} else {
+			if currentInv-clipQty < -maxInvQty || blendedSkewBps >= 3.5 || currentInv <= -2.0*clipQty {
+				allowSell = false
+			}
+			if blendedSkewBps > 1.5 || sm.Ret5sBps > 1.5 || cbSig.IsAdverseAsk || (!sm.AskCooldownUntil.IsZero() && now.Before(sm.AskCooldownUntil)) {
+				allowSell = false // Toxic cascade defense: do not short into surging knife whether flat or short!
+			}
+			if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
+				allowSell = false // Extreme leakage circuit: halt opening new short positions until recalibrated!
+			}
 		}
 	}
 	if allowSell {
@@ -2476,7 +2551,7 @@ func (e *DryRunEngine) simulateTakerFill(symbol string, midPrice float64, alphaB
 // executeMakerFillLocked executes a passive maker order fill with spread capture. Caller must hold e.mu.
 func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty float64, side string, edgeBps float64, strategy string) {
 	valUSDT := orderPrice * qty
-	feeUSDT := valUSDT * (e.cfg.MakerFeeBps * 1e-4)
+	feeUSDT := valUSDT * (e.makerFeeBps(symbol) * 1e-4)
 
 	pos := e.state.Positions[symbol]
 	realizedPnL := 0.0
@@ -2590,6 +2665,7 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 	} else if e.state.TotalTrades > 0 {
 		e.state.WinRate = float64(e.state.WinningTrades) / float64(e.state.TotalTrades) * 100.0
 	}
+	e.updateTaxReservesLocked()
 
 	dataSource := e.state.DataSource
 	if dataSource == "" {
@@ -2718,6 +2794,7 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 	} else if e.state.TotalTrades > 0 {
 		e.state.WinRate = float64(e.state.WinningTrades) / float64(e.state.TotalTrades) * 100.0
 	}
+	e.updateTaxReservesLocked()
 
 	dataSource := e.state.DataSource
 	if dataSource == "" {

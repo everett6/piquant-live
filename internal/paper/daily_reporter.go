@@ -139,7 +139,11 @@ func (g *DailyReportGenerator) GenerateReport(state DryRunState, date time.Time)
 	sb.WriteString(fmt.Sprintf("**Report Date:** %s  \n", date.Format("2006-01-02")))
 	sb.WriteString(fmt.Sprintf("**Trading Session:** Day %d of 14 (336h Autonomous Dry Run)  \n", dayNum))
 	sb.WriteString(fmt.Sprintf("**Generated Timestamp:** %s  \n", time.Now().UTC().Format(time.RFC3339)))
-	sb.WriteString(fmt.Sprintf("**Execution Engine:** PiQuant Live (`%s/%s`)  \n\n", runtime.GOOS, runtime.GOARCH))
+	modeStr := "Spot/Futures Margin"
+	if state.SpotOnly {
+		modeStr = "Spot-Only Cash Account (No Margin / No Naked Shorting)"
+	}
+	sb.WriteString(fmt.Sprintf("**Execution Engine:** PiQuant Live (`%s/%s` - %s)  \n\n", runtime.GOOS, runtime.GOARCH, modeStr))
 	sb.WriteString("---\n\n")
 
 	sb.WriteString("## 1. Executive Summary & Capital Account\n\n")
@@ -147,6 +151,11 @@ func (g *DailyReportGenerator) GenerateReport(state DryRunState, date time.Time)
 	sb.WriteString("| :--- | :--- | :--- | :--- |\n")
 	sb.WriteString(fmt.Sprintf("| **Starting Capital** | $%s USDT | $100,000.00 USDT | BASELINE |\n", formatComma(initCap, 2)))
 	sb.WriteString(fmt.Sprintf("| **Closing Capital (Equity)** | $%s USDT | — | %s |\n", formatComma(equity, 2), pick(equity >= initCap, "PROFITABLE", "DRAWDOWN")))
+	if state.TaxRatePct > 0 {
+		sb.WriteString(fmt.Sprintf("| **Estimated Tax Reserve (%.1f%%)** | $%s USDT | — | TAX ESCROW |\n", state.TaxRatePct, formatComma(state.EstimatedTaxUSDT, 2)))
+		sb.WriteString(fmt.Sprintf("| **After-Tax Net Equity** | $%s USDT | — | %s |\n", formatComma(state.AfterTaxEquity, 2), pick(state.AfterTaxEquity >= initCap, "NET GREEN", "DRAWDOWN")))
+		sb.WriteString(fmt.Sprintf("| **After-Tax Return %%** | %+.2f%% | Target ~10.0%%/mo | %s |\n", state.AfterTaxReturnPct, pick(state.AfterTaxReturnPct >= 0, "IN-BOUNDS", "WATCHLIST")))
+	}
 	sb.WriteString(fmt.Sprintf("| **Daily Net PnL** | %s$%s USDT | > $0.00 | %s |\n", pick(netPnL >= 0, "+", "-"), formatComma(math.Abs(netPnL), 2), pick(netPnL >= 0, "SURPASSING", "NEGATIVE")))
 	sb.WriteString(fmt.Sprintf("| **Return %%** | %+.2f%% | > +0.25%% / day | %s |\n", returnPct, pick(returnPct >= 0, "IN-BOUNDS", "WATCHLIST")))
 	sb.WriteString(fmt.Sprintf("| **Peak Equity** | $%s USDT | — | HIGH-WATER MARK |\n", formatComma(peakEq, 2)))

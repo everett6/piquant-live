@@ -34,6 +34,9 @@ type dryRunFlags struct {
 	entryOffsetBps    float64
 	stopLossBps       float64
 	monthlyGainCap    float64
+	spotOnly          bool
+	taxRate           float64
+	zeroFeeMaker      bool
 	cleanReset        bool
 	enableTaker       bool
 	statusOnly        bool
@@ -69,6 +72,9 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.Float64Var(&f.entryOffsetBps, "entry-offset", 5.5, "minimum maker entry distance from mid in bps (default: 5.5 bps = 0.055%)")
 	fs.Float64Var(&f.stopLossBps, "stop-loss", 50.0, "structural invalidation stop loss in bps (default: 50.0 bps = 0.50%)")
 	fs.Float64Var(&f.monthlyGainCap, "monthly-cap", 15.0, "maximum target gain percentage per month before entering capital preservation (default: 15.0%)")
+	fs.BoolVar(&f.spotOnly, "spot-only", false, "spot-only cash account mode: disable naked shorting, long inventory only (default false)")
+	fs.Float64Var(&f.taxRate, "tax-rate", 35.0, "estimated income/capital gains tax rate percentage for after-tax reserve (default: 35.0% for US/CA)")
+	fs.BoolVar(&f.zeroFeeMaker, "zero-fee-btc", true, "zero-fee maker tier on BTC pairs (default true for Binance.US)")
 	fs.BoolVar(&f.enableTaker, "enable-taker", false, "opt-in to tactical taker executions on high-conviction momentum (default false)")
 	fs.BoolVar(&f.cleanReset, "reset", false, "reset cumulative historical win/loss stats and trade count on start")
 	fs.BoolVar(&f.statusOnly, "status", false, "print terminal summary of active dry run and exit")
@@ -197,6 +203,9 @@ func runDryRun(ctx context.Context, args []string) error {
 	if f.monthlyGainCap > 0 {
 		paperCfg.MonthlyGainCapPct = f.monthlyGainCap
 	}
+	paperCfg.SpotOnly = f.spotOnly
+	paperCfg.TaxRatePct = f.taxRate
+	paperCfg.ZeroFeeMaker = f.zeroFeeMaker
 	paperCfg.CleanReset = f.cleanReset
 	paperCfg.EnableTaker = f.enableTaker
 	paperCfg.EnableAllModels = f.enableAllModels
@@ -365,6 +374,9 @@ func printDryRunStatus(stateFile string) error {
 	fmt.Println("=======================================================")
 	fmt.Printf(" Status:          %s\n", pick(!st.CircuitHalted, "ACTIVE (OK)", "CIRCUIT BREAKER HALTED"))
 	fmt.Printf(" Window Preset:   %s (%d days)\n", presetName, totDays)
+	if st.SpotOnly {
+		fmt.Printf(" Trading Mode:    SPOT-ONLY (Cash Account - No Margin / No Naked Shorting)\n")
+	}
 	fmt.Printf(" Data Source:     %s\n", ds)
 	fmt.Printf(" Feed Down Time:  %.1fs\n", st.FeedDownSeconds)
 	fmt.Printf(" Progress:        Day %d of %d (%.1f hours remaining)\n", st.DaysElapsed, totDays, rem.Hours())
@@ -372,6 +384,10 @@ func printDryRunStatus(stateFile string) error {
 	fmt.Printf(" Target End:      %s\n", st.TargetEndTime.Format(time.RFC3339))
 	fmt.Printf(" Initial Capital: $%.2f USDT\n", st.InitialCapital)
 	fmt.Printf(" Current Equity:  $%.2f USDT (%+.2f%%)\n", st.Equity, st.TotalReturnPct)
+	if st.TaxRatePct > 0 {
+		fmt.Printf(" Tax Reserve:     $%.2f USDT (%.1f%% estimated US/CA tax liability)\n", st.EstimatedTaxUSDT, st.TaxRatePct)
+		fmt.Printf(" Post-Tax Equity: $%.2f USDT (Net Return: %+.2f%%)\n", st.AfterTaxEquity, st.AfterTaxReturnPct)
+	}
 	fmt.Printf(" Cash:            $%.2f USDT\n", st.Cash)
 	fmt.Printf(" Realized PnL:    $%.2f USDT\n", st.RealizedPnL)
 	fmt.Printf(" Unrealized PnL:  $%.2f USDT\n", st.UnrealizedPnL)
