@@ -136,11 +136,13 @@ func (a *AdaHedgeEnsemble) UpdateAndCombine(prevActual float64, prevPreds, currP
 	if deltaGap < 0 {
 		deltaGap = 0
 	}
-	a.CumMixGap = decay*a.CumMixGap + deltaGap + 1e-4
+	// Bounded mixability gap prevents learning rate collapse under long-running regime drift
+	a.CumMixGap = math.Min(6.0, decay*a.CumMixGap+deltaGap)
 
-	// Adaptive AdaHedge learning rate \eta_{t+1} = \ln(K) / \Delta_t
+	// Adaptive AdaHedge learning rate \eta_{t+1} = \ln(K) / \Delta_t with non-stationary agility floor
+	// Floor of 0.15 prevents learning rate freezing (anti-overfitting to past regimes)
 	logK := math.Log(float64(n))
-	a.Eta = math.Max(0.01, math.Min(5.0, logK/math.Max(0.05, a.CumMixGap)))
+	a.Eta = math.Max(0.15, math.Min(3.0, logK/math.Max(0.05, a.CumMixGap)))
 
 	// Update cumulative losses, regrets, and multiplicative weights
 	minCumLoss := math.MaxFloat64
@@ -149,6 +151,16 @@ func (a *AdaHedgeEnsemble) UpdateAndCombine(prevActual float64, prevPreds, currP
 		a.CumRegret[k] = decay*a.CumRegret[k] + (hedgeLoss - losses[k])
 		if a.CumLoss[k] < minCumLoss {
 			minCumLoss = a.CumLoss[k]
+		}
+	}
+
+	// Non-stationary deficit clipping (Herbster & Warmuth Tracking the Best Expert):
+	// Bounding the cumulative loss gap (CumLoss[k] - minCumLoss <= 4.5 / Eta) prevents past regime anchors
+	// from paralyzing the ensemble during sudden market regime flips (anti-overfitting to past history).
+	maxDeficit := 4.5 / a.Eta
+	for k := 0; k < n; k++ {
+		if a.CumLoss[k]-minCumLoss > maxDeficit {
+			a.CumLoss[k] = minCumLoss + maxDeficit
 		}
 	}
 
@@ -168,6 +180,15 @@ func (a *AdaHedgeEnsemble) UpdateAndCombine(prevActual float64, prevPreds, currP
 		for k := 0; k < n; k++ {
 			a.Weights[k] = u
 		}
+	}
+
+	// Anti-overfitting entropy regularization (Laplace / uniform mixture floor):
+	// Blends 5% uniform baseline weight to prevent weight starvation and single-expert path overfitting,
+	// ensuring all models maintain an exploration floor during sudden volatility regime switches.
+	const uniformMixAlpha = 0.05
+	u := 1.0 / float64(n)
+	for k := 0; k < n; k++ {
+		a.Weights[k] = (1.0-uniformMixAlpha)*a.Weights[k] + uniformMixAlpha*u
 	}
 
 	a.Steps++

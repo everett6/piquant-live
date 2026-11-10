@@ -117,8 +117,14 @@ func (r *Ridge) Fit(samples []Sample, idx []int) error {
 	for j := 0; j < k; j++ {
 		a[0][j+1] = a[j+1][0]
 	}
+	// Invariant L2 penalty scaled with sample size n so regularization strength does not vanish
+	// as sample size grows, preventing collinear feature explosion and out-of-sample overfitting.
+	effectiveLam := r.Lam
+	if n > 1.0 {
+		effectiveLam = r.Lam * n
+	}
 	for j := 1; j <= k; j++ {
-		a[j][j] += r.Lam
+		a[j][j] += effectiveLam
 	}
 	var coef [FeatureCount + 1]float64
 	if !solveFixed(&a, k+1, FeatureCount, &coef) {

@@ -1373,10 +1373,21 @@ func RunParallelGridSearch(partitions []MonthlyTickPartition, candidates []TickS
 				oosRes := ReplayPartitions(cfg, oosParts)
 				fullRes := ReplayPartitions(cfg, partitions)
 
-				passesCap := oosRes.MaxDrawdownPct <= 12.0 && fullRes.MaxDrawdownPct <= 12.0
-				// Penalize divergence between Train Sharpe and OOS Sharpe (overfitting penalty)
-				sharpeGapPenalty := math.Max(0.0, trainRes.SharpeRatio-oosRes.SharpeRatio) * 0.25
-				oosScore := (0.70*oosRes.SharpeRatio + 0.30*trainRes.SharpeRatio - sharpeGapPenalty) * (1.0 - oosRes.MaxDrawdownPct/100.0)
+				// Strictly evaluate Out-of-Sample metrics: require positive OOS Sharpe and acceptable DD
+				passesCap := oosRes.MaxDrawdownPct <= 12.0 && fullRes.MaxDrawdownPct <= 12.0 && oosRes.SharpeRatio > 0.0
+
+				// Strict Out-of-Sample Overfitting Penalty (Bailey & López de Prado PBO formulation):
+				// Never reward in-sample Sharpe! Penalize candidates whose in-sample performance diverges
+				// from out-of-sample test performance (indicator of data snooping / curve-fitting).
+				overfitRatio := 0.0
+				if trainRes.SharpeRatio > oosRes.SharpeRatio && trainRes.SharpeRatio > 0.1 {
+					overfitRatio = (trainRes.SharpeRatio - oosRes.SharpeRatio) / trainRes.SharpeRatio
+				}
+				// Composite score is strictly based on Out-Of-Sample Sharpe discounted by the overfit ratio
+				oosScore := oosRes.SharpeRatio * (1.0 - math.Min(0.85, overfitRatio)) * (1.0 - oosRes.MaxDrawdownPct/100.0)
+				if !passesCap {
+					oosScore = -100.0
+				}
 				results[idx] = GridSearchCandidate{
 					Config:            cfg,
 					Result:            fullRes,

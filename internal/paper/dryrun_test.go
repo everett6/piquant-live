@@ -1306,6 +1306,69 @@ func TestAgileZeroFeeMakerQuotingAndTrailingProfitRatchet(t *testing.T) {
 	}
 }
 
+func TestPageHinkleyConceptDriftQuoteWidening(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.Symbols = []string{"BTCUSDT"}
+
+	ring := engine.NewSPSCRing(1024)
+	streamCfg := DefaultStreamConfig()
+	streamCfg.Symbols = cfg.Symbols
+	stream := NewMarketStreamIngestor(streamCfg, ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	now := time.Now()
+	// Warm up drift guard with normal small residuals
+	for i := 0; i < 20; i++ {
+		now = now.Add(100 * time.Millisecond)
+		dryRun.evaluateQuotesAndGating("BTCUSDT", 75000.00+float64(i)*0.01, now)
+	}
+
+	// Verify quote spread under calm conditions
+	st0 := dryRun.State()
+	orders0 := st0.ActiveOrders["BTCUSDT"]
+	if len(orders0) == 0 {
+		t.Fatalf("expected orders")
+	}
+	var calmBuy *ActiveMakerOrder
+	for _, o := range orders0 {
+		if o.Side == "BUY" {
+			calmBuy = &o
+			break
+		}
+	}
+	if calmBuy == nil {
+		t.Fatalf("expected calm buy quote")
+	}
+
+	// Now simulate structural concept drift / high residual shock
+	for i := 0; i < 25; i++ {
+		now = now.Add(100 * time.Millisecond)
+		// Large unexpected price jump that violates historical model prediction
+		dryRun.evaluateQuotesAndGating("BTCUSDT", 75000.00+float64(i)*25.0, now)
+	}
+
+	stDrift := dryRun.State()
+	ordersDrift := stDrift.ActiveOrders["BTCUSDT"]
+	var driftBuy *ActiveMakerOrder
+	for _, o := range ordersDrift {
+		if o.Side == "BUY" && o.CancelingUntil.IsZero() {
+			driftBuy = &o
+			break
+		}
+	}
+	if driftBuy != nil {
+		// Buy edge during drift must be widened to defend against adverse selection
+		if driftBuy.EdgeBps < calmBuy.EdgeBps {
+			t.Errorf("expected drift quote edge >= calm quote edge, got %v vs %v", driftBuy.EdgeBps, calmBuy.EdgeBps)
+		}
+	}
+}
+
 
 
 

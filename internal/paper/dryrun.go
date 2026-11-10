@@ -2116,6 +2116,16 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		carteaSignal,                                // Expert 6: Cartea-Jaimungal
 		0,
 	}
+	// Anti-overfitting: clamp individual expert outputs to realistic 1-tick bounds [-15, +15] bps
+	// to prevent rogue outlier feature spikes from corrupting the online ensemble weights.
+	for i := 0; i < common.MaxEnsembleExperts; i++ {
+		if currPreds[i] > 15.0 {
+			currPreds[i] = 15.0
+		} else if currPreds[i] < -15.0 {
+			currPreds[i] = -15.0
+		}
+	}
+
 	e.mu.Lock()
 	var metaPred float64
 	if sm.HasPrevPreds {
@@ -2124,6 +2134,24 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	} else {
 		metaPred = qd.ReservationBps
 	}
+
+	var driftWidenBps float64
+	if e.driftGuard != nil && sm.HasPrevPreds {
+		resBps := tickRetBps - metaPred
+		var featSq float64
+		for _, fv := range x {
+			featSq += fv * fv
+		}
+		featNorm := math.Sqrt(featSq)
+		driftDetected, stat, thresh := e.driftGuard.Update(resBps, featNorm)
+		if driftDetected {
+			// Statistical concept drift detected: live market distribution has departed from training distribution
+			// (overfitting to prior regime). Widen quotes defensively and trigger autonomous walk-forward recalibration.
+			driftWidenBps = math.Min(2.5, (stat-thresh)*0.20)
+			e.maybeTriggerAutoRecalibrationLocked(symbol)
+		}
+	}
+
 	sm.PrevPreds = currPreds
 	sm.HasPrevPreds = true
 
@@ -2160,8 +2188,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 	blendedSkewBps := 0.60*(qd.ReservationBps-invSkewBps) + 0.25*metaPred + 0.15*cbSig.LeadLagSkewBps
 
-	bidOffsetBps := math.Max(floorBps, qd.HalfSpreadBps-blendedSkewBps) + tcaPenaltyBps
-	askOffsetBps := math.Max(floorBps, qd.HalfSpreadBps+blendedSkewBps) + tcaPenaltyBps
+	bidOffsetBps := math.Max(floorBps, qd.HalfSpreadBps-blendedSkewBps) + tcaPenaltyBps + driftWidenBps
+	askOffsetBps := math.Max(floorBps, qd.HalfSpreadBps+blendedSkewBps) + tcaPenaltyBps + driftWidenBps
 
 	// Apply Macro Event Shield spread scaling (e.g. 2.5x pre-event, 1.5x post-event drift)
 	if macroSt.SpreadMultiplier > 1.0 {
