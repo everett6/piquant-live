@@ -123,3 +123,35 @@ func TestAdaptiveShortfallRouter(t *testing.T) {
 		t.Errorf("expected calm initial slice (%f) > toxic initial slice (%f)", calmSlices[0].Quantity, toxicSlices[0].Quantity)
 	}
 }
+
+func TestAdaptiveShortfallRouter_ZeroEtaProtection(t *testing.T) {
+	// If TempImpactEta or RiskAversionLambda are 0 or uninitialized, must not panic or return NaNs
+	badRouter := &AdaptiveShortfallRouter{}
+	slices := badRouter.ComputeSchedule(10.0, 5, 20.0, 50000.0, 0.5)
+	if len(slices) != 5 {
+		t.Fatalf("expected 5 slices from uninitialized router, got %d", len(slices))
+	}
+	var sum float64
+	for _, s := range slices {
+		if math.IsNaN(s.Quantity) || math.IsInf(s.Quantity, 0) {
+			t.Fatalf("slice quantity is NaN/Inf")
+		}
+		sum += s.Quantity
+	}
+	if math.Abs(sum-10.0) > 1e-8 {
+		t.Fatalf("expected sum 10.0, got %f", sum)
+	}
+}
+
+func TestTWAPRouter_ZeroIntervalProtection(t *testing.T) {
+	// Zero interval in raw struct must not panic with integer division by zero
+	tw := &TWAPRouter{SliceInterval: 0}
+	slices, err := tw.ScheduleSlices(10.0, 10*time.Minute, time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(slices) == 0 {
+		t.Fatalf("expected slices scheduled")
+	}
+}
+

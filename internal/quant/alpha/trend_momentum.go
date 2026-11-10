@@ -102,10 +102,12 @@ func (kf *KalmanTrendFilter) Update(rawPrice float64, now time.Time) (filteredPr
 	kf.P10 = p10 - k1*p00
 	kf.P11 = p11 - k1*p01
 
-	if math.IsNaN(kf.Price) || math.IsInf(kf.Price, 0) {
+	if math.IsNaN(kf.Price) || math.IsInf(kf.Price, 0) || math.IsNaN(kf.Velocity) || math.IsInf(kf.Velocity, 0) {
 		kf.Price = rawPrice
 		kf.Velocity = 0
 		kf.P00 = 1.0
+		kf.P01 = 0.0
+		kf.P10 = 0.0
 		kf.P11 = 1.0
 	}
 	if math.IsNaN(kf.Velocity) || math.IsInf(kf.Velocity, 0) {
@@ -192,11 +194,13 @@ func (mt *MomentumTracker) Update(rawPrice float64, now time.Time) MultiHorizonM
 
 	for i := len(mt.History) - 1; i >= 0; i-- {
 		pt := mt.History[i]
-		if pt.Price > high15m {
-			high15m = pt.Price
-		}
-		if pt.Price < low15m {
-			low15m = pt.Price
+		if !pt.Time.Before(t15m) {
+			if pt.Price > high15m {
+				high15m = pt.Price
+			}
+			if pt.Price < low15m {
+				low15m = pt.Price
+			}
 		}
 
 		if p30s == 0 && !pt.Time.After(t30s) {

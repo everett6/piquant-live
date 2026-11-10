@@ -283,3 +283,53 @@ func TestPreTradeGuard_ConcurrentSafety(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestPreTradeGuard_InvalidSideAndSanitization(t *testing.T) {
+	cfg := DefaultGuardrailConfig()
+	guard := NewPreTradeGuard(cfg)
+	now := time.Now()
+
+	// Invalid order side should fail validation
+	badOrd := OrderRequest{
+		Symbol:   "BTCUSDT",
+		Side:     "INVALID_SIDE",
+		Price:    60000.0,
+		Quantity: 0.001,
+	}
+	if err := guard.ValidateOrder(badOrd, 59990.0, 60010.0, now); !errors.Is(err, ErrInvalidOrderParams) {
+		t.Fatalf("expected ErrInvalidOrderParams for invalid side, got: %v", err)
+	}
+
+	// Lowercase "buy" should be sanitized and accepted
+	lowerOrd := OrderRequest{
+		Symbol:   "BTCUSDT",
+		Side:     "buy",
+		Price:    60000.0,
+		Quantity: 0.001,
+	}
+	if err := guard.ValidateOrder(lowerOrd, 59990.0, 60010.0, now.Add(time.Second)); err != nil {
+		t.Fatalf("expected sanitized lowercase 'buy' to be accepted, got: %v", err)
+	}
+}
+
+func TestPreTradeGuard_NaNPortfolioStateRejection(t *testing.T) {
+	cfg := DefaultGuardrailConfig()
+	guard := NewPreTradeGuard(cfg)
+	now := time.Now()
+
+	// Initial valid state
+	guard.UpdatePortfolioState(10000.0, 10000.0, nil, nil, now)
+
+	// Attempt NaN equity injection: must be rejected and must not corrupt internal peak
+	guard.UpdatePortfolioState(math.NaN(), 10000.0, nil, nil, now.Add(time.Second))
+	if math.IsNaN(guard.currentEquity) {
+		t.Fatalf("currentEquity corrupted with NaN")
+	}
+
+	// Attempt negative equity injection
+	guard.UpdatePortfolioState(-500.0, 10000.0, nil, nil, now.Add(2*time.Second))
+	if guard.currentEquity < 0 {
+		t.Fatalf("currentEquity corrupted with negative value")
+	}
+}
+

@@ -20,6 +20,7 @@ import (
 	"piquant-live/internal/macro"
 	"piquant-live/internal/marketdata"
 	"piquant-live/internal/models/common"
+	"piquant-live/internal/quant/alpha"
 	"piquant-live/internal/quant/guardrails"
 	"piquant-live/internal/quant/orchestrator"
 )
@@ -200,8 +201,10 @@ type ScalpingRegimeState struct {
 	ConsecutiveLoss int     `json:"consecutive_losses"`
 	RollingWinRate  float64 `json:"rolling_win_rate"`
 	RollingPnlUSDT  float64 `json:"rolling_pnl_usdt"`
-	TargetInventory float64 `json:"target_inventory"`
-	FairValue       float64 `json:"fair_value"`
+	TargetInventory  float64 `json:"target_inventory"`
+	FairValue        float64 `json:"fair_value"`
+	MultiFactorScore float64 `json:"multi_factor_score,omitempty"`
+	MarketRegime     string  `json:"market_regime,omitempty"`
 }
 
 // SelfAdaptationState reports autonomous parameter backtesting and hot-reloading progress.
@@ -267,6 +270,10 @@ type SymbolMicrostructure struct {
 	top5AsksP       [5]float64
 	top5AsksS       [5]float64
 
+	// QuantMuse Cross-Sectional Multi-Factor Model
+	MultiFactor       *alpha.MultiFactorModel
+	LatestMultiFactor alpha.MultiFactorScore
+
 	// Self-Improving Scalping Defense
 	ScalpingDisabled       bool
 	ScalpingDisabledReason string
@@ -297,6 +304,7 @@ func newSymbolMicrostructure(symbol string, kylesLambda float64) *SymbolMicrostr
 		TradeRate1s: 4.0,
 		FundingTracker: common.NewFundingCarryTracker(0.05, 0.0001),
 		FairValueEngine: common.NewTribecaFairValueEngine(common.FairValueMicroPrice, 0.10, 1.5, 0.02),
+		MultiFactor:     alpha.NewMultiFactorModel(100),
 	}
 }
 
@@ -1040,14 +1048,16 @@ func (e *DryRunEngine) State() DryRunState {
 			winRate = float64(len(sm.RecentPnlWindow)-losses) / float64(len(sm.RecentPnlWindow)) * 100.0
 		}
 		cp.ScalpingState[sym] = ScalpingRegimeState{
-			ScalpingEnabled: !sm.ScalpingDisabled,
-			Regime:          regime,
-			Reason:          sm.ScalpingDisabledReason,
-			ConsecutiveLoss: sm.ConsecutiveLosses,
-			RollingWinRate:  winRate,
-			RollingPnlUSDT:  sumPnL,
-			TargetInventory: sm.LatestTargetInv,
-			FairValue:       sm.LatestFairValue,
+			ScalpingEnabled:  !sm.ScalpingDisabled,
+			Regime:           regime,
+			Reason:           sm.ScalpingDisabledReason,
+			ConsecutiveLoss:  sm.ConsecutiveLosses,
+			RollingWinRate:   winRate,
+			RollingPnlUSDT:   sumPnL,
+			TargetInventory:  sm.LatestTargetInv,
+			FairValue:        sm.LatestFairValue,
+			MultiFactorScore: sm.LatestMultiFactor.CompositeScore,
+			MarketRegime:     string(sm.LatestMultiFactor.Regime),
 		}
 	}
 
@@ -1343,14 +1353,16 @@ func (e *DryRunEngine) saveCheckpoint() error {
 			winRate = float64(len(sm.RecentPnlWindow)-losses) / float64(len(sm.RecentPnlWindow)) * 100.0
 		}
 		e.state.ScalpingState[sym] = ScalpingRegimeState{
-			ScalpingEnabled: !sm.ScalpingDisabled,
-			Regime:          regime,
-			Reason:          sm.ScalpingDisabledReason,
-			ConsecutiveLoss: sm.ConsecutiveLosses,
-			RollingWinRate:  winRate,
-			RollingPnlUSDT:  sumPnL,
-			TargetInventory: sm.LatestTargetInv,
-			FairValue:       sm.LatestFairValue,
+			ScalpingEnabled:  !sm.ScalpingDisabled,
+			Regime:           regime,
+			Reason:           sm.ScalpingDisabledReason,
+			ConsecutiveLoss:  sm.ConsecutiveLosses,
+			RollingWinRate:   winRate,
+			RollingPnlUSDT:   sumPnL,
+			TargetInventory:  sm.LatestTargetInv,
+			FairValue:        sm.LatestFairValue,
+			MultiFactorScore: sm.LatestMultiFactor.CompositeScore,
+			MarketRegime:     string(sm.LatestMultiFactor.Regime),
 		}
 	}
 	if e.state.SelfAdaptation.Status == "" {
@@ -2435,7 +2447,13 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 
 	// Multi-Horizon Directional Conviction score P(Up) in [0.0, 1.0]
 	// Combines 1m, 5m, 15m return momentum, Coinbase institutional lead-lag drift,
-	// AdaHedge meta-ensemble prediction, and Order Book Imbalance (OBI).
+	// AdaHedge meta-ensemble prediction, Order Book Imbalance (OBI), and QuantMuse Multi-Factor.
+	var mfScore alpha.MultiFactorScore
+	if sm.MultiFactor != nil {
+		mfScore = sm.MultiFactor.Update(midPrice, bidSize+askSize, liveVpin, spreadBps, now)
+		sm.LatestMultiFactor = mfScore
+	}
+
 	zMom := 0.20*(sm.Ret1mBps/15.0) + 0.45*(sm.Ret5mBps/25.0) + 0.35*(sm.Ret15mBps/40.0)
 	zLeadLag := cbSig.LeadLagSkewBps / 3.0
 	if zLeadLag > 2.5 {
@@ -2455,7 +2473,13 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	} else if zOBI < -2.5 {
 		zOBI = -2.5
 	}
-	zTotal := 0.35*zMom + 0.25*zLeadLag + 0.25*zMeta + 0.15*zOBI
+	zMF := mfScore.CompositeScore * 2.0
+	if zMF > 2.5 {
+		zMF = 2.5
+	} else if zMF < -2.5 {
+		zMF = -2.5
+	}
+	zTotal := 0.25*zMom + 0.20*zLeadLag + 0.20*zMeta + 0.15*zOBI + 0.20*zMF
 	convictionUp := 1.0 / (1.0 + math.Exp(-1.8*zTotal))
 	if sm.Conviction > 0 && math.Abs(sm.Conviction-0.50) > 1e-4 {
 		convictionUp = sm.Conviction
@@ -2473,6 +2497,14 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 
 	bidOffsetBps := math.Max(floorBps, qd.HalfSpreadBps-blendedSkewBps) + tcaPenaltyBps + driftWidenBps
 	askOffsetBps := math.Max(floorBps, qd.HalfSpreadBps+blendedSkewBps) + tcaPenaltyBps + driftWidenBps
+
+	// Multi-Factor Toxic Regime Defense (QuantMuse):
+	// If multi-factor classifier flags toxic order flow, widen quotes defensively
+	if mfScore.Regime == alpha.RegimeHighVolToxic {
+		toxicWidenBps := math.Max(2.0, spreadBps*0.50)
+		bidOffsetBps += toxicWidenBps
+		askOffsetBps += toxicWidenBps
+	}
 
 	// Apply Macro Event Shield spread scaling (e.g. 2.5x pre-event, 1.5x post-event drift)
 	if macroSt.SpreadMultiplier > 1.0 {
@@ -2816,6 +2848,11 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				keptOrders = append(keptOrders, ord)
 				continue
 			}
+		}
+		if target <= 0 || math.IsNaN(target) || math.IsInf(target, 0) {
+			ord.CancelingUntil = now.Add(cancelLatency)
+			keptOrders = append(keptOrders, ord)
+			continue
 		}
 		// Preserve FIFO queue priority: only cancel & replace if target price moved > 2.5 bps.
 		devBps := math.Abs(ord.Price-target) / target * 1e4

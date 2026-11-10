@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 )
@@ -121,6 +122,13 @@ func (g *PreTradeGuard) UpdatePortfolioState(equity, peakEquity float64, positio
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity < 0 {
+		return
+	}
+	if math.IsNaN(peakEquity) || math.IsInf(peakEquity, 0) || peakEquity < equity {
+		peakEquity = equity
+	}
+
 	g.currentEquity = equity
 	if peakEquity > g.peakEquity {
 		g.peakEquity = peakEquity
@@ -165,7 +173,13 @@ func (g *PreTradeGuard) ValidateOrder(ord OrderRequest, bestBid, bestAsk float64
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	// 1. Sanity Checks: NaN, Inf, non-positive
+	// 1. Sanity Checks: NaN, Inf, non-positive, valid side
+	sideUpper := strings.ToUpper(strings.TrimSpace(ord.Side))
+	if sideUpper != "BUY" && sideUpper != "SELL" {
+		return fmt.Errorf("%w: invalid side '%s'", ErrInvalidOrderParams, ord.Side)
+	}
+	ord.Side = sideUpper
+
 	if math.IsNaN(ord.Price) || math.IsInf(ord.Price, 0) || ord.Price <= 0 ||
 		math.IsNaN(ord.Quantity) || math.IsInf(ord.Quantity, 0) || ord.Quantity <= 0 {
 		return ErrInvalidOrderParams

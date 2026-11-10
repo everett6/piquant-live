@@ -35,6 +35,9 @@ func (tw *TWAPRouter) ScheduleSlices(totalQuantity float64, totalDuration time.D
 	if totalQuantity <= 0 || totalDuration <= 0 {
 		return nil, errors.New("twap: invalid quantity or duration")
 	}
+	if tw.SliceInterval <= 0 {
+		tw.SliceInterval = 1 * time.Minute
+	}
 
 	numSlices := int(totalDuration / tw.SliceInterval)
 	if numSlices < 1 {
@@ -110,6 +113,9 @@ func NewVWAPRouter(profile VWAPProfile, interval time.Duration) *VWAPRouter {
 func (vw *VWAPRouter) ScheduleSlices(totalQuantity float64, totalDuration time.Duration, startTime time.Time) ([]ChildOrderSlice, error) {
 	if totalQuantity <= 0 || totalDuration <= 0 {
 		return nil, errors.New("vwap: invalid quantity or duration")
+	}
+	if vw.SliceInterval <= 0 {
+		vw.SliceInterval = 5 * time.Minute
 	}
 
 	numSlices := int(totalDuration / vw.SliceInterval)
@@ -195,6 +201,13 @@ func (is *AdaptiveShortfallRouter) ComputeSchedule(
 	// If VPIN is high (toxic predatory flow) or depth is thin, increase temporary impact eta -> slows down execution!
 	// If depth is deep and VPIN is calm, decrease eta -> accelerates execution to minimize volatility risk!
 	effectiveEta := is.TempImpactEta
+	if effectiveEta <= 0 || math.IsNaN(effectiveEta) {
+		effectiveEta = 0.05
+	}
+	lambda := is.RiskAversionLambda
+	if lambda <= 0 || math.IsNaN(lambda) {
+		lambda = 1e-5
+	}
 	if liveVpin > 0.65 {
 		effectiveEta *= 2.5 // Heavy predatory presence: slow down to avoid market impact
 	} else if liveVpin < 0.25 {
@@ -205,7 +218,7 @@ func (is *AdaptiveShortfallRouter) ComputeSchedule(
 	}
 
 	sigma := math.Max(1.0, volatilityBps)
-	kappa := math.Sqrt(is.RiskAversionLambda * sigma * sigma / effectiveEta)
+	kappa := math.Sqrt(lambda * sigma * sigma / effectiveEta)
 	bigT := float64(numSlices)
 	denom := math.Sinh(kappa * bigT)
 
@@ -236,6 +249,9 @@ func (is *AdaptiveShortfallRouter) ComputeSchedule(
 	var sumAllocated float64
 	for k := 0; k < numSlices-1; k++ {
 		remNext := totalQuantity * math.Sinh(kappa*(bigT-float64(k+1))) / denom
+		if math.IsNaN(remNext) || math.IsInf(remNext, 0) || remNext < 0 {
+			remNext = 0.0
+		}
 		nk := prevRem - remNext
 		if nk < 0 {
 			nk = 0

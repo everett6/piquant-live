@@ -137,3 +137,25 @@ func TestCompositeAlphaEngine(t *testing.T) {
 		}
 	}
 }
+
+func TestMomentumTracker_15MinuteATRWindowBound(t *testing.T) {
+	mt := NewMomentumTracker(2000)
+	now := time.Now()
+
+	// 1. Spike to $80,000 30 minutes ago
+	mt.Update(80000.0, now.Add(-30*time.Minute))
+
+	// 2. Calm trading in the last 15 minutes between $75,000 and $75,100 (~13.3 bps range)
+	for i := 14; i >= 0; i-- {
+		p := 75000.0 + float64(i%2)*100.0
+		mt.Update(p, now.Add(-time.Duration(i)*time.Minute))
+	}
+
+	res := mt.Update(75050.0, now)
+
+	// ATR 15m should reflect the ~13.3 bps range in the last 15 minutes, NOT the $80,000 spike from 30m ago (which would be > 600 bps)
+	if res.Atr15mBps > 50.0 {
+		t.Fatalf("Atr15mBps failed to bound to 15m window: got %f bps (likely contaminated by 30m spike)", res.Atr15mBps)
+	}
+}
+

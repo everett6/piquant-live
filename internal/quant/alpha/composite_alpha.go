@@ -90,7 +90,16 @@ func (ae *AlphaEngine) Evaluate(symbol string, midPrice, bestBid, bidSize, bestA
 	} else if zVOI < -2.0 {
 		zVOI = -2.0
 	}
-	microEdge := 0.60*l1Delta + 0.40*(microDevBps/spreadBps)
+	ratio := 0.0
+	if spreadBps > 0.05 {
+		ratio = microDevBps / spreadBps
+		if ratio > 2.0 {
+			ratio = 2.0
+		} else if ratio < -2.0 {
+			ratio = -2.0
+		}
+	}
+	microEdge := 0.60*l1Delta + 0.40*ratio
 
 	compositeScore := 0.50*mom.TrendScore + 0.30*statArbEdge + 0.20*microEdge
 	if compositeScore > 1.0 {
