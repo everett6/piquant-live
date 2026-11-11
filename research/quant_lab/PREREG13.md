@@ -46,3 +46,28 @@ core. P1 stays tracked for comparison.
   of a smaller drop.
 
 One run. No variants after results.
+
+## Result (run once, 2026-11-11): all four FAIL check 1 (max DD ≤ 50%). No ledger change.
+
+| | full geo %/mo | max DD | losing | ≥7% | worst month | D | C | B | discovery | A | bear/flat/bull | stress |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| R1 1x | +5.18 | **−57%** | 42% | 34% | −28% | +14.75 | +4.21 | +1.65 | +3.67 | +2.05 | −4.2/−1.6/+17.5 | +1.57 |
+| R2 1.5x | +7.09 | −73% | 43% | 38% | −39% | +21.61 | +5.51 | +1.54 | +5.10 | +2.78 | −6.1/−2.7/+27.4 | +1.63 |
+| R3 fast exit 2x | +8.58 | −76% | 44% | 32% | −36% | +28.44 | +6.56 | +4.43 | +3.93 | +1.59 | −4.2/−5.4/+34.1 | +2.68 |
+| R4 trailing stop 2x | +6.29 | −82% | 43% | 35% | −36% | +12.57 | +7.84 | +0.33 | +6.11 | +3.32 | −9.9/−2.2/+28.3 | +0.15 |
+| P1 2x (comparator) | +8.50 | −84% | 43% | 39% | −49% | +27.99 | +6.24 | +0.77 | +6.25 | +3.32 | −8.0/−3.9/+38.2 | +1.19 |
+
+- **No variant reaches −50%.** The smallest drawdown, 1x at −57%, earns +5.18%/month.
+- **R3 (fast exit) vs P1:** better on full return, drawdown, worst month and bear months. It is worse in
+  discovery and A.
+  - It failed this round's rule, so it is not adopted.
+  - It would need its own pre-registered comparison, or forward paper evidence.
+- **The trade-off, measured:**
+
+  | Leverage | Max DD | Return |
+  |---|---|---|
+  | 1x | −57% | 5.2%/mo |
+  | 1.5x | −73% | 7.1%/mo |
+  | 2x | −84% | 8.5%/mo |
+
+  No tested rule has ≥7%/month with a drawdown better than about −73%.
