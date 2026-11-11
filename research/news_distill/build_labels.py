@@ -144,9 +144,9 @@ def main():
     lab = df[has_mkt & df["teacher_direction"].notna()]
     if len(lab) > 200:
         for h in HORIZONS_MIN:
-            c = lab["teacher_direction"].corr(lab[f"ret_{h}m_bps"], method="spearman")
+            c = lab["teacher_direction"].rank().corr(lab[f"ret_{h}m_bps"].rank())  # Spearman without scipy
             print(f"teacher direction vs BTC {h}m return: spearman={c:+.4f} (n={len(lab)})")
-        c = lab["teacher_magnitude"].corr(lab["ret_60m_bps"].abs(), method="spearman")
+        c = lab["teacher_magnitude"].rank().corr(lab["ret_60m_bps"].abs().rank())
         print(f"teacher magnitude vs |60m return|: spearman={c:+.4f}")
 
 
