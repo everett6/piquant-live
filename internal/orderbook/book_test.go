@@ -222,3 +222,42 @@ func BenchmarkDepthApply(b *testing.B) {
 		book.Apply(e)
 	}
 }
+
+// TestHole50_SliceBoundsOutOfRangePanicProtection verifies that snapshot and depth events
+// with out-of-bounds level counts (e.g. NBids=25 or NUpdates=25 exceeding array capacity 20)
+// are safely rejected without triggering a fatal slice out of bounds panic.
+func TestHole50_SliceBoundsOutOfRangePanicProtection(t *testing.T) {
+	b := &Book{Symbol: 1}
+
+	// Corrupted Snapshot with NBids > 20
+	snapEnv := &event.Envelope{Sequence: 100, RecvTime: 1, Kind: event.KindSnapshot}
+	snapEnv.Snap.Sequence = 100
+	snapEnv.Snap.NBids = 25 // Exceeds array capacity 20
+	snapEnv.Snap.NAsks = 5
+	if b.Apply(snapEnv) {
+		t.Fatal("Hole 50 failed: Snapshot with NBids > 20 was accepted")
+	}
+	if b.Status != StatusStale {
+		t.Fatalf("Hole 50 failed: expected StatusStale, got %v", b.Status)
+	}
+
+	// Set valid snapshot first
+	validSnap := snapshot(100,
+		[]event.Level{level(100, 2), level(99.9, 3)},
+		[]event.Level{level(100.1, 1), level(100.2, 5)})
+	if !b.Apply(validSnap) {
+		t.Fatal("failed to apply valid snapshot")
+	}
+
+	// Corrupted Depth with NUpdates > 20
+	depthEnv := &event.Envelope{Sequence: 101, RecvTime: 2, Kind: event.KindDepth}
+	depthEnv.Depth.Sequence = 101
+	depthEnv.Depth.Side = event.SideBuy
+	depthEnv.Depth.NUpdates = 25 // Exceeds array capacity 20
+	if b.Apply(depthEnv) {
+		t.Fatal("Hole 50 failed: Depth with NUpdates > 20 was accepted")
+	}
+	if b.Status != StatusStale {
+		t.Fatalf("Hole 50 failed: expected StatusStale on corrupted depth, got %v", b.Status)
+	}
+}

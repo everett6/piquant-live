@@ -62,16 +62,16 @@ models:
   max_features: 64
   max_hidden: 32
   path: ./data/models/model.json
-  buy_threshold: 0.6
-  sell_threshold: 0.6
+  buy_threshold: 0.65
+  sell_threshold: 0.35
 
 exec:
   enabled: true
-  position_limit: 0.02
-  max_order_qty: 0.002
-  taker_fee_bps: 10
-  maker_fee_bps: 7.5
-  slippage_bps: 1
-  daily_loss_limit: 100
+  position_limit: 0.01   # Max gross exposure scaled to account capital
+  max_order_qty: 0.002    # Clip sizing per quote leg
+  taker_fee_bps: 0      # Maker-only passive queue execution on Binance.US Tier 0 BTC
+  maker_fee_bps: 0      # 0 bps maker fee on promotional BTC pairs eliminates friction
+  slippage_bps: 0       # Passive resting limit orders suffer 0 slippage
+  daily_loss_limit: 10.0 # 2.0% - 5.0% daily drawdown stop loss kill switch
   stale_latency_ms: 1500
   cooldown_ms: 500

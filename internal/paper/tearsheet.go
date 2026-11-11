@@ -29,16 +29,19 @@ type DryRunTearSheet struct {
 // from a DryRunState snapshot.
 func ComputeDryRunTearSheet(state DryRunState) DryRunTearSheet {
 	initCap := state.InitialCapital
-	if initCap <= 0 {
+	if math.IsNaN(initCap) || math.IsInf(initCap, 0) || initCap <= 0 {
 		initCap = 1000.0
 	}
 	equity := state.Equity
-	if equity <= 0 {
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 {
 		equity = initCap + state.RealizedPnL + state.UnrealizedPnL
+		if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 {
+			equity = initCap
+		}
 	}
 
 	totalRetPct := state.TotalReturnPct
-	if totalRetPct == 0 && equity != initCap {
+	if (totalRetPct == 0 || math.IsNaN(totalRetPct) || math.IsInf(totalRetPct, 0)) && equity != initCap {
 		totalRetPct = (equity - initCap) / initCap * 100.0
 	}
 
@@ -95,10 +98,16 @@ func ComputeDryRunTearSheet(state DryRunState) DryRunTearSheet {
 	// Compute Sharpe and Sortino ratios from DailyReturns if populated, or synthesize from trade/return profile
 	sharpe := state.SharpeRatio
 	var sortino float64
-	if len(state.DailyReturns) >= 2 {
-		n := float64(len(state.DailyReturns))
+	var validReturns []float64
+	for _, r := range state.DailyReturns {
+		if !math.IsNaN(r) && !math.IsInf(r, 0) {
+			validReturns = append(validReturns, r)
+		}
+	}
+	if len(validReturns) >= 2 {
+		n := float64(len(validReturns))
 		var sum, sumSq, downsideSq float64
-		for _, r := range state.DailyReturns {
+		for _, r := range validReturns {
 			sum += r
 			sumSq += r * r
 			if r < 0 {
@@ -107,13 +116,16 @@ func ComputeDryRunTearSheet(state DryRunState) DryRunTearSheet {
 		}
 		mean := sum / n
 		variance := sumSq/n - mean*mean
-		if sharpe == 0 && variance > 1e-12 {
+		if variance < 0 {
+			variance = 0
+		}
+		if (sharpe == 0 || math.IsNaN(sharpe) || math.IsInf(sharpe, 0)) && variance > 1e-12 {
 			sharpe = (mean / math.Sqrt(variance)) * math.Sqrt(365.0)
 		}
 		downsideDev := math.Sqrt(math.Max(1e-8, downsideSq/n))
 		sortino = (mean / downsideDev) * math.Sqrt(365.0)
 	} else {
-		if sharpe == 0 && totalRetPct != 0 {
+		if (sharpe == 0 || math.IsNaN(sharpe) || math.IsInf(sharpe, 0)) && totalRetPct != 0 {
 			volProxy := math.Max(0.15, state.MaxDrawdownPct*1.2)
 			sharpe = (totalRetPct / volProxy) * 1.4
 		}
@@ -161,6 +173,34 @@ func ComputeDryRunTearSheet(state DryRunState) DryRunTearSheet {
 	daysElapsed := state.DaysElapsed
 	if daysElapsed <= 0 {
 		daysElapsed = 1
+	}
+
+	if math.IsNaN(sharpe) || math.IsInf(sharpe, 0) {
+		sharpe = 0.0
+	}
+	if math.IsNaN(sortino) || math.IsInf(sortino, 0) {
+		sortino = 0.0
+	}
+	if math.IsNaN(calmar) || math.IsInf(calmar, 0) {
+		calmar = 0.0
+	}
+	if math.IsNaN(profitFactor) || math.IsInf(profitFactor, 0) {
+		profitFactor = 0.0
+	}
+	if math.IsNaN(winRatePct) || math.IsInf(winRatePct, 0) {
+		winRatePct = 0.0
+	}
+	if math.IsNaN(makerFillRatio) || math.IsInf(makerFillRatio, 0) {
+		makerFillRatio = 0.0
+	}
+	if math.IsNaN(totalRetPct) || math.IsInf(totalRetPct, 0) {
+		totalRetPct = 0.0
+	}
+	if math.IsNaN(annRetPct) || math.IsInf(annRetPct, 0) {
+		annRetPct = 0.0
+	}
+	if math.IsNaN(maxDD) || math.IsInf(maxDD, 0) {
+		maxDD = 0.0
 	}
 
 	return DryRunTearSheet{

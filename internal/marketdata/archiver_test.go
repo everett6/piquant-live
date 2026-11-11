@@ -233,3 +233,24 @@ func BenchmarkRollingArchiver_Ingest(b *testing.B) {
 		_ = archiver.Ingest(ev)
 	}
 }
+
+// TestHole60_DecodeMarketEventSliceBoundsProtection verifies that decoding short buffers (< 40 bytes)
+// or encoding into buffers smaller than PQBinRecordSize does NOT trigger a slice out of range panic.
+func TestHole60_DecodeMarketEventSliceBoundsProtection(t *testing.T) {
+	// 1. Truncated input slice to DecodeMarketEvent
+	shortBuf := make([]byte, 20)
+	ev := DecodeMarketEvent(shortBuf)
+	if ev.Timestamp != 0 || ev.Price != 0 {
+		t.Fatalf("Hole 60 failed: expected zero event on truncated slice, got %+v", ev)
+	}
+
+	nilEv := DecodeMarketEvent(nil)
+	if nilEv.Timestamp != 0 {
+		t.Fatalf("Hole 60 failed: expected zero event on nil slice, got %+v", nilEv)
+	}
+
+	// 2. Truncated output slice to EncodeMarketEvent
+	sampleEv := engine.MarketEvent{Timestamp: 100, Price: 60000.0}
+	smallDst := make([]byte, 50)
+	EncodeMarketEvent(&sampleEv, smallDst) // Must not panic
+}

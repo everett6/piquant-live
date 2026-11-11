@@ -1,5 +1,7 @@
 package marketdata
 
+import "math"
+
 // BookDepth is the fixed number of top price levels maintained per side.
 const BookDepth = 20
 
@@ -171,7 +173,8 @@ func (b *L2OrderBook) flagGap() {
 // applyLevel inserts, updates, or deletes a price level in the sorted fixed-size array.
 // descending: true for bids (highest price at index 0), false for asks (lowest price at index 0).
 func (b *L2OrderBook) applyLevel(levels *[BookDepth]PriceLevel, count *int, update PriceLevel, descending bool) {
-	if update.Price <= 0 {
+	if math.IsNaN(update.Price) || math.IsInf(update.Price, 0) || update.Price <= 0 ||
+		math.IsNaN(update.Size) || math.IsInf(update.Size, 0) {
 		return
 	}
 
@@ -245,7 +248,11 @@ func (b *L2OrderBook) BestAsk() (price, size float64) {
 // MidPrice returns the mid price of the book. Returns (0, false) if incomplete.
 func (b *L2OrderBook) MidPrice() (float64, bool) {
 	if b.NumBids > 0 && b.NumAsks > 0 {
-		return (b.Bids[0].Price + b.Asks[0].Price) * 0.5, true
+		mid := (b.Bids[0].Price + b.Asks[0].Price) * 0.5
+		if math.IsNaN(mid) || math.IsInf(mid, 0) || mid <= 0 {
+			return 0, false
+		}
+		return mid, true
 	}
 	return 0, false
 }
@@ -253,7 +260,11 @@ func (b *L2OrderBook) MidPrice() (float64, bool) {
 // Spread returns best ask minus best bid. Returns 0 if empty.
 func (b *L2OrderBook) Spread() float64 {
 	if b.NumBids > 0 && b.NumAsks > 0 {
-		return b.Asks[0].Price - b.Bids[0].Price
+		spread := b.Asks[0].Price - b.Bids[0].Price
+		if math.IsNaN(spread) || math.IsInf(spread, 0) || spread < 0 {
+			return 0
+		}
+		return spread
 	}
 	return 0
 }

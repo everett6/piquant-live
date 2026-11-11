@@ -218,6 +218,31 @@ const indexHTML = `<!doctype html>
   .preset-pill-btn.active{background:var(--accent);color:#090d14;border-color:var(--accent);font-weight:700}
   .chart-tooltip{position:absolute;background:rgba(7,11,18,0.96);border:1px solid var(--accent);border-radius:8px;padding:8px 12px;font-size:11px;pointer-events:none;box-shadow:0 4px 20px rgba(0,0,0,0.6);display:none;z-index:20;backdrop-filter:blur(6px)}
 
+  /* Compact and OLED Modes */
+  body.compact-mode main{padding:10px 14px;max-width:100%}
+  body.compact-mode .grid{gap:10px}
+  body.compact-mode .quant-card{padding:12px}
+  body.compact-mode .stat-quant{padding:8px 10px}
+  body.compact-mode .stat-quant .v{font-size:18px}
+  body.compact-mode .hero-status{padding:10px 14px;margin-bottom:12px}
+  body.compact-mode .tbl td, body.compact-mode .tbl th{padding:5px 8px}
+
+  body.oled-mode{background:#000000 !important}
+  body.oled-mode .quant-card, body.oled-mode .stat-quant, body.oled-mode header, body.oled-mode footer, body.oled-mode .hero-status, body.oled-mode .card{
+    background:#020202 !important;border-color:#161616 !important}
+
+  /* Customizer Modal & Drawer */
+  .customizer-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);backdrop-filter:blur(8px);z-index:999;display:none;place-items:center;padding:16px}
+  .customizer-overlay.open{display:grid;animation:fadein .18s ease-out}
+  .customizer-modal{width:min(94vw,660px);max-height:88vh;background:var(--panel);border:1px solid var(--accent);border-radius:16px;box-shadow:0 12px 48px rgba(0,0,0,0.85),0 0 24px var(--accent-dim);display:flex;flex-direction:column;overflow:hidden}
+  .customizer-header{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--card-header)}
+  .customizer-body{padding:18px 20px;overflow-y:auto;display:flex;flex-direction:column;gap:16px}
+  .theme-swatch{width:34px;height:34px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:all .18s;display:inline-grid;place-items:center}
+  .theme-swatch:hover{transform:scale(1.1)}
+  .theme-swatch.active{border-color:#fff;box-shadow:0 0 10px rgba(255,255,255,0.4);transform:scale(1.15)}
+  .config-row{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--panel2);border:1px solid var(--line-subtle);border-radius:8px;gap:12px}
+  .config-section-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);margin-bottom:6px;display:flex;align-items:center;gap:6px}
+
   footer{padding:14px 24px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);
     display:flex;justify-content:space-between;align-items:center;background:rgba(7,10,15,.88)}
 </style>
@@ -232,6 +257,7 @@ const indexHTML = `<!doctype html>
   <nav id="mainNav">
     <button class="active" data-tab="tab-overview">Overview</button>
     <button data-tab="tab-dryrun">Paper Trading</button>
+    <button data-tab="tab-tax">Tax &amp; 8949</button>
     <button data-tab="tab-research">Research</button>
     <button data-tab="tab-models">Models</button>
     <button data-tab="tab-experiments">Experiments</button>
@@ -241,6 +267,9 @@ const indexHTML = `<!doctype html>
   </nav>
   <div class="grow"></div>
   <div class="pills">
+    <button id="btnSoundToggle" class="mode-btn" onclick="toggleAudioAlerts()" title="Toggle Web Audio Fill Chimes & Risk Alerts">🔊 Sound: On</button>
+    <button id="btnCompactToggle" class="mode-btn" onclick="toggleCompactDensity()" title="Toggle Compact / Pro Density Mode">📐 Density: Standard</button>
+    <button id="btnOpenThemeModal" class="mode-btn" style="background:var(--accent-dim);border:1px solid var(--accent);color:var(--accent)" onclick="openCustomizerModal()" title="Open UI Theme, Audio & Quant Customizer">🎨 Customize UI</button>
     <button id="btnToggleCluster" class="mode-btn" style="background:var(--panel2);border:1px solid var(--accent);color:var(--accent)" title="Toggle Architecture: Pi 5 Standalone vs Pi 5 + Pi 3B Dual-Node">Cluster: Dual-Node (Pi 5 + 3B)</button>
     <button id="btnToggleMode" class="mode-btn" title="Toggle UI Complexity">Mode: Standard</button>
     <span id="rolePill" class="pill">node</span>
@@ -312,11 +341,12 @@ const indexHTML = `<!doctype html>
             </div>
             <div style="display:flex;gap:6px;align-items:center">
               <span style="font-size:11px;color:var(--muted)">Presets:</span>
+              <button class="preset-pill-btn active" id="btnPreset200" onclick="setCapitalPreset(200)">$200</button>
+              <button class="preset-pill-btn" onclick="setCapitalPreset(500)">$500</button>
               <button class="preset-pill-btn" onclick="setCapitalPreset(1000)">$1k</button>
-              <button class="preset-pill-btn active" id="btnPreset2k" onclick="setCapitalPreset(2000)">$2k</button>
+              <button class="preset-pill-btn" onclick="setCapitalPreset(2000)">$2k</button>
               <button class="preset-pill-btn" onclick="setCapitalPreset(5000)">$5k</button>
               <button class="preset-pill-btn" onclick="setCapitalPreset(10000)">$10k</button>
-              <button class="preset-pill-btn" onclick="setCapitalPreset(25000)">$25k</button>
             </div>
           </div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;align-items:end">
@@ -324,7 +354,7 @@ const indexHTML = `<!doctype html>
               <label style="font-size:10px;color:var(--muted)">Starting Capital ($)</label>
               <div style="position:relative">
                 <span style="position:absolute;left:10px;top:8px;font-size:13px;color:var(--accent);font-weight:700;font-family:ui-monospace,monospace">$</span>
-                <input id="inputCustomCapital" class="cockpit-input" type="number" value="2000" min="100" max="1000000" step="100" style="padding-left:24px" onchange="applyCustomParameters()">
+                <input id="inputCustomCapital" class="cockpit-input" type="number" value="200" min="50" max="1000000" step="50" style="padding-left:24px" onchange="applyCustomParameters()">
               </div>
             </div>
             <div>
@@ -340,7 +370,13 @@ const indexHTML = `<!doctype html>
               <input id="inputMaxDD" class="cockpit-input" type="number" step="0.1" value="2.0" min="0.5" max="10.0" onchange="applyCustomParameters()">
             </div>
             <div>
-              <label style="font-size:10px;color:var(--muted)">Target Monthly Gain (%)</label>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+                <label style="font-size:10px;color:var(--muted)">Target Monthly Gain (%)</label>
+                <div style="display:flex;gap:4px">
+                  <button type="button" class="preset-pill-btn" style="padding:1px 5px;font-size:9px" onclick="setTargetGoal(7.22, 2.5)" title="Standard conservative: $14.45/mo">7.2%</button>
+                  <button type="button" class="preset-pill-btn" style="padding:1px 5px;font-size:9px;color:var(--accent);border-color:rgba(0,230,118,0.4)" onclick="setTargetGoal(10.0, 3.5)" title="Accelerated target: $20.00/mo">10% ($20/mo ⚡)</button>
+                </div>
+              </div>
               <input id="inputTargetReturn" class="cockpit-input" type="number" step="0.1" value="7.22" min="1.0" max="50.0" onchange="applyCustomParameters()">
             </div>
             <div>
@@ -353,11 +389,11 @@ const indexHTML = `<!doctype html>
           <div style="margin-top:10px;padding:8px 12px;background:rgba(0,230,118,0.05);border:1px solid rgba(0,230,118,0.2);border-radius:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;font-size:12px">
             <div style="display:flex;align-items:center;gap:6px">
               <span style="color:var(--muted)">Investor PnL Projection:</span>
-              <span id="projMonthlyGain" style="font-weight:750;color:var(--accent);font-size:14px;font-family:ui-monospace,monospace">+$144.46 / mo (+7.22%)</span>
-              <span style="color:var(--muted);font-size:11px" id="projWeeklyGain">(&approx; +$33.40 / week)</span>
+              <span id="projMonthlyGain" style="font-weight:750;color:var(--accent);font-size:14px;font-family:ui-monospace,monospace">+$14.45 / mo (+7.22%)</span>
+              <span style="color:var(--muted);font-size:11px" id="projWeeklyGain">(&approx; +$3.34 / week)</span>
             </div>
             <div style="font-size:11px;color:var(--muted);font-family:ui-monospace,monospace" id="projRebateBreakdown">
-              Est. Rebates: +$60.82/mo &bull; Expected Trades: 240/mo &bull; Profit Factor: 2.14
+              Est. Rebates: +$6.08/mo &bull; Expected Trades: 28/mo &bull; Profit Factor: 2.14
             </div>
           </div>
         </div>
@@ -377,8 +413,23 @@ const indexHTML = `<!doctype html>
             </div>
           </div>
           <!-- Coin Selector Chips -->
-          <div id="coinSelectorGrid" style="display:flex;gap:8px;flex-wrap:wrap">
+          <div id="coinSelectorGrid" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
             <!-- Dynamically populated by renderCoinChips() -->
+          </div>
+          <!-- Custom Coin Adder & Strategy Aggressiveness Bar -->
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06)">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span style="font-size:11px;color:var(--muted);font-weight:600">Add Custom Pair:</span>
+              <input id="inputNewCoinSym" type="text" placeholder="e.g. SUI, ADA, PEPE" style="width:120px;padding:4px 8px;font-size:11px;background:#060a10;border:1px solid var(--line);border-radius:6px;color:#fff;font-family:ui-monospace,monospace">
+              <input id="inputNewCoinVol" type="number" placeholder="Vol % (65)" value="65" min="15" max="200" style="width:72px;padding:4px 8px;font-size:11px;background:#060a10;border:1px solid var(--line);border-radius:6px;color:#fff;font-family:ui-monospace,monospace">
+              <button type="button" class="preset-pill-btn" onclick="addCustomCoinToUniverse()">+ Add Coin</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span style="font-size:11px;color:var(--muted);font-weight:600">Strategy Profile:</span>
+              <button type="button" id="profCons" class="preset-pill-btn" onclick="applyStrategyProfile('conservative')">Conservative (1.8x)</button>
+              <button type="button" id="profBal" class="preset-pill-btn active" onclick="applyStrategyProfile('balanced')">Balanced (2.5x)</button>
+              <button type="button" id="profAcc" class="preset-pill-btn" onclick="applyStrategyProfile('accelerated')" style="border-color:rgba(0,230,118,0.4);color:var(--accent)">Accelerated $20/mo (3.5x ⚡)</button>
+            </div>
           </div>
         </div>
 
@@ -386,13 +437,13 @@ const indexHTML = `<!doctype html>
         <div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-bottom:14px;gap:12px">
           <div class="stat-quant">
             <div class="k">Portfolio Capital &amp; Equity</div>
-            <div class="v" id="topDryRunEquity" style="font-size:24px;font-weight:750;color:var(--text)">$2,000.00</div>
-            <div class="s" id="topDryRunInitCap">Base: $1,168 BTC + $832 ETH</div>
+            <div class="v" id="topDryRunEquity" style="font-size:24px;font-weight:750;color:var(--text)">$200.00</div>
+            <div class="s" id="topDryRunInitCap">Base: $117 BTC + $83 ETH</div>
           </div>
           <div class="stat-quant">
             <div class="k">Realized PnL &amp; Net Return</div>
             <div class="v" id="topDryRunReturn" style="font-size:24px;font-weight:750;color:var(--accent)">+$0.00 (+0.00%)</div>
-            <div class="s" id="topDryRunCash">Cash: $2,000.00 USDT</div>
+            <div class="s" id="topDryRunCash">Cash: $200.00 USDT</div>
           </div>
           <div class="stat-quant" style="border:1px solid rgba(0,230,118,0.35);background:linear-gradient(145deg, rgba(0,230,118,0.06) 0%, rgba(8,14,20,0.96) 100%)">
             <div class="k" style="color:var(--accent)">Adaptive Vol-Parity Leverage</div>
@@ -488,22 +539,22 @@ const indexHTML = `<!doctype html>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
           <div class="stat-quant" style="border:1px solid rgba(0,210,255,0.35);background:linear-gradient(145deg, rgba(0,210,255,0.05) 0%, rgba(9,14,22,0.96) 100%)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-              <span style="font-weight:750;color:var(--info);font-size:13px" id="benchWeekTitle">&bull; Last Week Simulation ($2,000 Portfolio)</span>
+              <span style="font-weight:750;color:var(--info);font-size:13px" id="benchWeekTitle">&bull; Last Week Simulation ($200 Portfolio)</span>
               <span class="pill" style="font-size:10px;background:rgba(0,210,255,0.15);color:var(--info);font-weight:700">7 DAYS / 168h</span>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px">
-              <div><span style="font-size:20px;font-weight:750;color:var(--accent)" id="benchWeekProfit">+$32.82</span> <span style="color:var(--accent);font-weight:600" id="benchWeekPct">(+1.64%)</span></div>
-              <div class="mono" style="color:var(--muted);font-size:11px" id="benchWeekDetails">56 trades &bull; 64.3% win &bull; +$13.82 rebates &bull; Max DD 0.32%</div>
+              <div><span style="font-size:20px;font-weight:750;color:var(--accent)" id="benchWeekProfit">+$3.28</span> <span style="color:var(--accent);font-weight:600" id="benchWeekPct">(+1.64%)</span></div>
+              <div class="mono" style="color:var(--muted);font-size:11px" id="benchWeekDetails">28 trades &bull; 64.3% win &bull; +$1.38 rebates &bull; Max DD 0.32%</div>
             </div>
           </div>
           <div class="stat-quant" style="border:1px solid rgba(0,230,118,0.35);background:linear-gradient(145deg, rgba(0,230,118,0.06) 0%, rgba(9,14,22,0.96) 100%)">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-              <span style="font-weight:750;color:var(--accent);font-size:13px" id="benchMonthTitle">&bull; Last Month Simulation ($2,000 Portfolio)</span>
+              <span style="font-weight:750;color:var(--accent);font-size:13px" id="benchMonthTitle">&bull; Last Month Simulation ($200 Portfolio)</span>
               <span class="pill ok" style="font-size:10px;font-weight:700">30 DAYS / 720h</span>
             </div>
             <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12px">
-              <div><span style="font-size:20px;font-weight:750;color:var(--accent)" id="benchMonthProfit">+$144.46</span> <span style="color:var(--accent);font-weight:600" id="benchMonthPct">(+7.22%)</span></div>
-              <div class="mono" style="color:var(--muted);font-size:11px" id="benchMonthDetails">240 trades &bull; 62.5% win &bull; +$60.82 rebates &bull; Max DD 0.65%</div>
+              <div><span style="font-size:20px;font-weight:750;color:var(--accent)" id="benchMonthProfit">+$14.45</span> <span style="color:var(--accent);font-weight:600" id="benchMonthPct">(+7.22%)</span></div>
+              <div class="mono" style="color:var(--muted);font-size:11px" id="benchMonthDetails">120 trades &bull; 62.5% win &bull; +$6.08 rebates &bull; Max DD 0.65%</div>
             </div>
           </div>
         </div>
@@ -592,6 +643,57 @@ const indexHTML = `<!doctype html>
           <div class="stat"><div class="k">ETH 5s Drop Velocity</div><div class="v" id="ethVelocity" style="font-size:18px">-1.8 bps</div><div class="s">Liquidity: Deep</div></div>
           <div class="stat"><div class="k">USDT/USD Basis</div><div class="v" id="usdtBasis" style="font-size:18px">+0.5 bps</div><div class="s">Peg: Fully Collateralized</div></div>
           <div class="stat"><div class="k">USDC/USD Basis</div><div class="v" id="usdcBasis" style="font-size:18px">-0.2 bps</div><div class="s">De-peg Alert: None</div></div>
+        </div>
+      </section>
+
+      <!-- Macro & Micro News Intelligence Oracle (Exploit Defense Shield) -->
+      <section class="card span12" id="newsOracleCard">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+          <div>
+            <h2 style="margin:0">Macro &amp; Micro News Intelligence Oracle</h2>
+            <div class="meta" style="margin-top:2px">Real-time NLP sentiment extraction, dual-horizon exponential time-decay &amp; instant exploit bid-kill shield</div>
+          </div>
+          <div class="pills">
+            <span class="pill ok" id="newsOracleMacroPill">Macro Bias: Neutral (+0.00)</span>
+            <span class="pill ok" id="newsOracleExploitPill">Exploit Shield: Clear</span>
+            <span class="pill info" id="newsOracleFeedPill">Feed: CoinTelegraph RSS + Webhooks</span>
+          </div>
+        </div>
+
+        <!-- Exploit Alert Banner (hidden when no kills active) -->
+        <div id="newsExploitBanner" style="display:none;background:rgba(239,68,68,0.15);border:1px solid #ef4444;border-radius:8px;padding:10px 16px;margin-bottom:12px;color:#fca5a5;font-weight:600;align-items:center;justify-content:space-between">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:18px">&#9888;</span>
+            <span id="newsExploitBannerText">EXPLOIT BID-KILL ACTIVE: Resting buy orders canceled to block toxic knife-catching!</span>
+          </div>
+          <span class="pill bad" style="font-weight:700">PROTECTION ENGAGED</span>
+        </div>
+
+        <div class="stats" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">
+          <div class="stat"><div class="k">Systemic Macro Sentiment</div><div class="v" id="newsStatMacro" style="font-size:18px">+0.00</div><div class="s" id="newsStatMacroLabel">Neutral Bias</div></div>
+          <div class="stat"><div class="k">BTC News Score</div><div class="v" id="newsStatBTC" style="font-size:18px">+0.00</div><div class="s" id="newsStatBTCSpread">Spread: 1.00x</div></div>
+          <div class="stat"><div class="k">ETH News Score</div><div class="v" id="newsStatETH" style="font-size:18px">+0.00</div><div class="s" id="newsStatETHSpread">Spread: 1.00x</div></div>
+          <div class="stat"><div class="k">SOL News Score</div><div class="v" id="newsStatSOL" style="font-size:18px">+0.00</div><div class="s" id="newsStatSOLSpread">Spread: 1.00x</div></div>
+        </div>
+
+        <!-- Recent News Feed Table -->
+        <div style="margin-bottom:12px">
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600;margin-bottom:6px">Recent Breaking News &amp; Macro Alerts</div>
+          <div style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
+            <table class="table" style="font-size:12px;margin:0">
+              <thead><tr><th>Time</th><th>Scope</th><th>Impact</th><th>Sentiment</th><th>Assets</th><th>Headline</th></tr></thead>
+              <tbody id="newsFeedTableBody">
+                <tr><td colspan="6" style="text-align:center;color:var(--muted)">Loading news oracle intelligence...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Interactive News Webhook / Headline Simulator -->
+        <div style="background:rgba(255,255,255,0.02);border:1px dashed var(--border);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-size:12px;font-weight:600;color:var(--text);white-space:nowrap">&#9889; Test Exploit Shield:</span>
+          <input id="newsSimInput" type="text" placeholder="e.g. Major Solana Cross-Chain Bridge Exploit: $120M Drained by Hacker" style="flex:1;min-width:260px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px">
+          <button class="btn btn-primary" onclick="injectHeadlineSim()" style="padding:6px 14px;font-size:12px;white-space:nowrap">Inject &amp; Evaluate Defense &rarr;</button>
         </div>
       </section>
 
@@ -747,6 +849,33 @@ const indexHTML = `<!doctype html>
               <tr><td>00:24s ago</td><td><b>ETHUSDT</b></td><td><span class="pill ok">BID (Stat-Arb)</span></td><td>3,400.12</td><td>1.50</td><td style="color:var(--accent)">+1.64 bps</td><td>0.21 bps</td></tr>
             </tbody>
           </table>
+        </div>
+        <!-- Autonomous Kaggle Cloud Optimizer & TCA Risk Shield Telemetry Bar -->
+        <div style="background:var(--panel2);border:1px solid var(--accent);border-radius:10px;padding:10px 14px;margin-top:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--accent)">
+              Autonomous Kaggle Cloud Auto-Optimizer &amp; Live TCA Risk Shield
+            </div>
+            <div class="pills">
+              <span class="pill ok" id="cloudOptStatusPill">Kaggle Kernel: everetts12/piquant-optimizer (Active)</span>
+              <span class="pill info" id="cloudOptSchedulePill">Auto-Sync: Hourly (:15) &bull; Hot-Reload Active</span>
+              <span class="pill ok" id="cloudOptWeeklyPill">Target: +$18.42/wk (3.5x Base)</span>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:11px" class="mono">
+            <div style="background:var(--bg);padding:6px 10px;border-radius:6px;border:1px solid var(--line-subtle)">
+              <span style="color:var(--muted)">ACTIVE PARAMS:</span> <b id="cloudOptParams" style="color:var(--accent)">3.5x Base / 5.0x Max / 20% Clip</b>
+            </div>
+            <div style="background:var(--bg);padding:6px 10px;border-radius:6px;border:1px solid var(--line-subtle)">
+              <span style="color:var(--muted)">O-U HOLDING SKEW:</span> <b style="color:var(--ok)">&gt;20s Nonlinear Urgency Active</b>
+            </div>
+            <div style="background:var(--bg);padding:6px 10px;border-radius:6px;border:1px solid var(--line-subtle)">
+              <span style="color:var(--muted)">1S TCA MARKOUT SHIELD:</span> <b style="color:var(--info)">Auto-Widen &lt; -0.25 bps</b>
+            </div>
+            <div style="background:var(--bg);padding:6px 10px;border-radius:6px;border:1px solid var(--line-subtle)">
+              <span style="color:var(--muted)">BINANCE FEED:</span> <b style="color:var(--ok)">data-stream.binance.vision (Zero 451)</b>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -1009,6 +1138,87 @@ const indexHTML = `<!doctype html>
             </thead>
             <tbody id="ptFillsBody" class="mono">
               <tr><td colspan="8" class="empty" style="text-align:center;padding:18px">Listening for live trades on Binance stream... Resting maker bids/asks active.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- TAB: TAX & IRS FORM 8949 -->
+  <div id="tab-tax" class="tab-pane">
+    <div class="hero-status">
+      <div>
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600">Crypto Tax &amp; Capital Gains Accounting</div>
+        <div style="font-size:18px;font-weight:700;color:var(--accent);margin-top:2px">IRS Form 8949, Schedule D &amp; California FTB Tax Reserve</div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <select id="ptTaxYearSelect" class="btn" style="background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:6px 12px;font-size:13px" onchange="loadTaxTab()">
+          <option value="2026">Tax Year 2026</option>
+          <option value="2025">Tax Year 2025</option>
+          <option value="0">All Historical Years</option>
+        </select>
+        <a href="/api/tax/export.csv" id="btnPtExportCSV" class="btn btn-primary" style="font-size:13px;padding:7px 14px;text-decoration:none" download>📥 Download Form 8949 CSV</a>
+        <a href="/tax" target="_blank" class="btn" style="background:var(--panel2);border:1px solid var(--line);color:var(--text);font-size:13px;padding:7px 12px;text-decoration:none" title="Open full-page dedicated tax view">Full Page &nearr;</a>
+      </div>
+    </div>
+
+    <div class="grid">
+      <!-- 5 Key KPI Cards -->
+      <section class="card span12" style="border-color:rgba(245,158,11,0.3);background:linear-gradient(180deg,rgba(245,158,11,0.06) 0%,var(--panel) 100%)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div>
+            <h2 style="margin:0;color:var(--gold)">★ Cumulative Tax Reserve &amp; Capital Gains Summary</h2>
+            <div class="meta" style="margin-top:2px">Continuous FIFO lot matching, deductible exchange fees &amp; Safe Harbor quarterly reserve calculation</div>
+          </div>
+          <span class="pill gold" id="taxStatusPill">Escrow Active</span>
+        </div>
+        <div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-top:10px">
+          <div class="stat" style="border:1px solid rgba(245,158,11,0.3);background:rgba(245,158,11,0.08)"><div class="k" style="color:var(--gold)">Tax Reserve To Set Aside</div><div class="v" id="taxTotalReserve" style="font-size:24px;color:var(--gold)">$0.00</div><div class="s">Federal 24% + CA FTB 9.3%</div></div>
+          <div class="stat"><div class="k">Net Taxable Gain</div><div class="v" id="taxNetGain" style="font-size:24px;color:var(--accent)">$0.00</div><div class="s" id="taxDispositionsCount">0 Dispositions</div></div>
+          <div class="stat"><div class="k">Federal Tax (IRS)</div><div class="v" id="taxFedTax" style="font-size:24px">$0.00</div><div class="s">Short-Term Ordinary Income</div></div>
+          <div class="stat"><div class="k">State Tax (CA FTB)</div><div class="v" id="taxStateTax" style="font-size:24px">$0.00</div><div class="s">California Ordinary Rate</div></div>
+          <div class="stat"><div class="k">Deductible Fees</div><div class="v" id="taxFeesDeducted" style="font-size:24px;color:var(--muted)">$0.00</div><div class="s">Subtracted from Taxable Gross</div></div>
+        </div>
+      </section>
+
+      <!-- Safe Harbor Quarterly Escrow Schedule -->
+      <section class="card span12">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div>
+            <h2 style="margin:0">Safe Harbor Quarterly Estimated Tax Schedule (IRS 1040-ES &amp; CA 540-ES)</h2>
+            <div class="meta" style="margin-top:2px">Official IRS and State of California quarterly estimated tax payment schedule &amp; reserve amounts</div>
+          </div>
+          <span class="pill gold">Quarterly Milestone Escrow</span>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="table">
+            <thead>
+              <tr><th>Quarter</th><th>Period Covered</th><th>IRS &amp; CA FTB Due Date</th><th style="text-align:right">Realized Gain</th><th style="text-align:right">Federal Tax Due</th><th style="text-align:right">CA State Tax Due</th><th style="text-align:right">Total Reserve Due</th><th style="text-align:center">Status</th></tr>
+            </thead>
+            <tbody id="ptTaxQuarterlyBody" class="mono">
+              <tr><td colspan="8" class="empty" style="text-align:center;padding:16px">Loading quarterly tax schedule...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- IRS Form 8949 Lot Dispositions -->
+      <section class="card span12">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div>
+            <h2 style="margin:0">IRS Form 8949 — Sales and Other Dispositions of Capital Assets</h2>
+            <div class="meta" style="margin-top:2px">Full transaction report for TurboTax, TaxAct, CoinTracker, or CPA hand-off</div>
+          </div>
+          <span class="pill ok" id="ptTaxLotsCountPill">0 lots matched</span>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="table">
+            <thead>
+              <tr><th>Property Description</th><th>Date Acquired</th><th>Date Sold</th><th style="text-align:right">Gross Proceeds</th><th style="text-align:right">Cost Basis</th><th style="text-align:right">Fee Adjustment</th><th style="text-align:right">Gain or (Loss)</th><th>Holding Term</th><th style="text-align:center">Quarter</th></tr>
+            </thead>
+            <tbody id="ptTaxLotsBody" class="mono">
+              <tr><td colspan="9" class="empty" style="text-align:center;padding:18px">No dispositions recorded yet for this tax year.</td></tr>
             </tbody>
           </table>
         </div>
@@ -1437,6 +1647,79 @@ const indexHTML = `<!doctype html>
   <div>PiQuant Platform &bull; Offline Quantitative Research with Out-of-Sample Validation</div>
 </footer>
 
+<!-- UI & Quant Workspace Customizer Modal -->
+<div id="customizerOverlay" class="customizer-overlay" onclick="if(event.target===this)closeCustomizerModal()">
+  <div class="customizer-modal">
+    <div class="customizer-header">
+      <div>
+        <div style="font-size:15px;font-weight:750;color:var(--text)">🎨 PiQuant UI &amp; Quant Execution Customizer</div>
+        <div style="font-size:11px;color:var(--muted)">Personalize terminal theme, OLED contrast, density, Web Audio fill chimes, and risk presets</div>
+      </div>
+      <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px" onclick="closeCustomizerModal()">✕ Close</button>
+    </div>
+    <div class="customizer-body">
+      <div>
+        <div class="config-section-title">1. Terminal Accent Theme &amp; Display Contrast</div>
+        <div class="config-row">
+          <div>
+            <div style="font-size:13px;font-weight:600">Color Palette</div>
+            <div style="font-size:11px;color:var(--muted)">Select primary accent glow &amp; chart color</div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center">
+            <span class="theme-swatch active" id="swatch-emerald" style="background:#00e676" onclick="applyThemeColor('emerald')" title="Quant Emerald"></span>
+            <span class="theme-swatch" id="swatch-cyan" style="background:#00d2ff" onclick="applyThemeColor('cyan')" title="Cyber Cyan"></span>
+            <span class="theme-swatch" id="swatch-amber" style="background:#ffab00" onclick="applyThemeColor('amber')" title="Bloomberg Amber"></span>
+            <span class="theme-swatch" id="swatch-violet" style="background:#b388ff" onclick="applyThemeColor('violet')" title="Institutional Violet"></span>
+            <span class="theme-swatch" id="swatch-crimson" style="background:#ff5252" onclick="applyThemeColor('crimson')" title="Crimson Laser"></span>
+          </div>
+        </div>
+        <div class="config-row" style="margin-top:8px">
+          <div>
+            <div style="font-size:13px;font-weight:600">Pitch-Black OLED Mode</div>
+            <div style="font-size:11px;color:var(--muted)">Zero-backlight #000000 background for 24/7 desk displays</div>
+          </div>
+          <button id="btnOledToggle" class="btn btn-secondary" style="padding:6px 12px;font-size:11px" onclick="toggleOledMode()">OLED: Off</button>
+        </div>
+        <div class="config-row" style="margin-top:8px">
+          <div>
+            <div style="font-size:13px;font-weight:600">Information Density</div>
+            <div style="font-size:11px;color:var(--muted)">Compact layout fits more L2 depth &amp; blotter rows on screen</div>
+          </div>
+          <button id="btnModalCompact" class="btn btn-secondary" style="padding:6px 12px;font-size:11px" onclick="toggleCompactDensity()">Density: Standard</button>
+        </div>
+      </div>
+
+      <div>
+        <div class="config-section-title">2. Web Audio Execution Synthesizer &amp; Refresh</div>
+        <div class="config-row">
+          <div>
+            <div style="font-size:13px;font-weight:600">Maker Fill &amp; Circuit Breaker Audio Chimes</div>
+            <div style="font-size:11px;color:var(--muted)">Synthesizes a soft harmonic chime on fills and warning tone on circuit trip</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-secondary" style="padding:6px 10px;font-size:11px" onclick="playTradeDing('MAKER')">🔔 Test Chime</button>
+            <button id="btnModalSound" class="btn btn-primary" style="padding:6px 12px;font-size:11px" onclick="toggleAudioAlerts()">Sound: On</button>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="config-section-title">3. Workspace Configuration Persistence</div>
+        <div class="config-row">
+          <div>
+            <div style="font-size:13px;font-weight:600">Export / Reset Custom Cockpit Profile</div>
+            <div style="font-size:11px;color:var(--muted)">All settings auto-save to browser localStorage</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" style="padding:6px 12px;font-size:11px" onclick="exportWorkspaceConfig()">⬇ Export JSON</button>
+            <button class="btn btn-danger" style="padding:6px 12px;font-size:11px" onclick="resetWorkspaceConfig()">↺ Reset Defaults</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
   "use strict";
@@ -1462,6 +1745,7 @@ const indexHTML = `<!doctype html>
       var target = $(btn.getAttribute("data-tab"));
       if (target) target.classList.add("active");
       if (btn.getAttribute("data-tab") === "tab-system" && !logsLoaded) loadLogs();
+      if (btn.getAttribute("data-tab") === "tab-tax") loadTaxTab();
     });
   });
 
@@ -2186,19 +2470,142 @@ const indexHTML = `<!doctype html>
           .then(function(r){ return r.json(); })
           .then(function(res){
             updateDryRunUI(res);
+            if (res && res.state && res.state.news_sentiment) {
+              updateNewsUI(res.state.news_sentiment);
+            }
+            refreshNewsFeed();
           }).catch(function(){});
       }).catch(function(){});
+  }
+
+  // News Intelligence Oracle UI & Ingestion Simulator
+  function updateNewsUI(rep) {
+    if (!rep) return;
+    var macroScore = rep.macro_sentiment || 0;
+    var mSign = macroScore >= 0 ? "+" : "";
+    var mDesc = "Neutral Bias";
+    if (macroScore >= 0.30) mDesc = "Bullish / Dovish Bias";
+    else if (macroScore <= -0.30) mDesc = "Bearish / Hawkish Bias";
+
+    if ($("newsOracleMacroPill")) {
+      $("newsOracleMacroPill").textContent = "Macro Bias: " + mSign + num(macroScore, 2);
+      $("newsOracleMacroPill").className = "pill " + (macroScore >= 0.25 ? "ok" : (macroScore <= -0.25 ? "warn" : "info"));
+    }
+    if ($("newsStatMacro")) {
+      $("newsStatMacro").textContent = mSign + num(macroScore, 2);
+      $("newsStatMacro").style.color = macroScore > 0 ? "var(--accent)" : (macroScore < 0 ? "var(--bad)" : "var(--text)");
+    }
+    if ($("newsStatMacroLabel")) $("newsStatMacroLabel").textContent = mDesc;
+
+    var syms = rep.symbol_sentiments || {};
+    var btcScore = syms["BTCUSDT"] || syms["BTCUSDC"] || 0;
+    var ethScore = syms["ETHUSDT"] || 0;
+    var solScore = syms["SOLUSDT"] || 0;
+
+    var spreads = rep.spread_multipliers || {};
+    var btcMult = spreads["BTCUSDT"] || spreads["BTCUSDC"] || 1.0;
+    var ethMult = spreads["ETHUSDT"] || 1.0;
+    var solMult = spreads["SOLUSDT"] || 1.0;
+
+    var kills = rep.symbol_bid_kills || {};
+    var activeKills = [];
+    for (var k in kills) {
+      if (kills[k]) activeKills.push(k);
+    }
+
+    if ($("newsStatBTC")) {
+      $("newsStatBTC").textContent = (btcScore >= 0 ? "+" : "") + num(btcScore, 2);
+      $("newsStatBTC").style.color = kills["BTCUSDT"] ? "var(--bad)" : (btcScore >= 0 ? "var(--accent)" : "var(--bad)");
+    }
+    if ($("newsStatBTCSpread")) $("newsStatBTCSpread").textContent = kills["BTCUSDT"] ? "BID KILL ENGAGED" : "Spread: " + num(btcMult, 2) + "x";
+
+    if ($("newsStatETH")) {
+      $("newsStatETH").textContent = (ethScore >= 0 ? "+" : "") + num(ethScore, 2);
+      $("newsStatETH").style.color = kills["ETHUSDT"] ? "var(--bad)" : (ethScore >= 0 ? "var(--accent)" : "var(--bad)");
+    }
+    if ($("newsStatETHSpread")) $("newsStatETHSpread").textContent = kills["ETHUSDT"] ? "BID KILL ENGAGED" : "Spread: " + num(ethMult, 2) + "x";
+
+    if ($("newsStatSOL")) {
+      $("newsStatSOL").textContent = (solScore >= 0 ? "+" : "") + num(solScore, 2);
+      $("newsStatSOL").style.color = kills["SOLUSDT"] ? "var(--bad)" : (solScore >= 0 ? "var(--accent)" : "var(--bad)");
+    }
+    if ($("newsStatSOLSpread")) $("newsStatSOLSpread").textContent = kills["SOLUSDT"] ? "BID KILL ENGAGED" : "Spread: " + num(solMult, 2) + "x";
+
+    if ($("newsExploitBanner") && $("newsExploitBannerText")) {
+      if (activeKills.length > 0) {
+        $("newsExploitBanner").style.display = "flex";
+        $("newsExploitBannerText").textContent = "EXPLOIT BID-KILL ACTIVE ON: " + activeKills.join(", ") + " \u2014 Resting buy quotes pulled to block toxic fills!";
+        if ($("newsOracleExploitPill")) {
+          $("newsOracleExploitPill").textContent = "Exploit Shield: ACTIVE (" + activeKills.join(",") + ")";
+          $("newsOracleExploitPill").className = "pill bad";
+        }
+      } else {
+        $("newsExploitBanner").style.display = "none";
+        if ($("newsOracleExploitPill")) {
+          $("newsOracleExploitPill").textContent = "Exploit Shield: Clear";
+          $("newsOracleExploitPill").className = "pill ok";
+        }
+      }
+    }
+  }
+
+  var newsFeedLoaded = false;
+  function refreshNewsFeed() {
+    fetch("/api/news?limit=6")
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (!d || !d.news || !$("newsFeedTableBody")) return;
+        newsFeedLoaded = true;
+        if (d.news.length === 0) {
+          $("newsFeedTableBody").innerHTML = "<tr><td colspan='6' style='text-align:center;color:var(--muted)'>No breaking news active in current decay window</td></tr>";
+          return;
+        }
+        $("newsFeedTableBody").innerHTML = d.news.map(function(item){
+          var tStr = item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : "-";
+          var scopePill = item.scope === "MACRO" ? "<span class='pill info'>MACRO</span>" : "<span class='pill warn'>MICRO</span>";
+          var impClass = item.impact === "CRITICAL" ? "pill bad" : (item.impact === "HIGH" ? "pill warn" : "pill");
+          var impPill = "<span class='" + impClass + "'>" + esc(item.impact) + "</span>";
+          var sColor = item.sentiment_score > 0 ? "var(--accent)" : (item.sentiment_score < 0 ? "var(--bad)" : "var(--muted)");
+          var sentStr = "<span style='color:" + sColor + ";font-weight:600'>" + (item.sentiment_score >= 0 ? "+" : "") + num(item.sentiment_score, 2) + "</span>";
+          var syms = item.affected_symbols && item.affected_symbols.length ? esc(item.affected_symbols.join(",")) : "ALL";
+          return "<tr><td>" + esc(tStr) + "</td><td>" + scopePill + "</td><td>" + impPill + "</td><td>" + sentStr + "</td><td><b>" + syms + "</b></td><td>" + esc(item.title) + "</td></tr>";
+        }).join("");
+      }).catch(function(){});
+  }
+
+  function injectHeadlineSim() {
+    var inp = $("newsSimInput");
+    if (!inp || !inp.value.trim()) return;
+    var title = inp.value.trim();
+    fetch("/api/news/ingest", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        title: title,
+        source: "Dashboard Webhook Simulator"
+      })
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(res){
+      if (res && res.report) {
+        updateNewsUI(res.report);
+        refreshNewsFeed();
+        inp.value = "";
+      }
+    }).catch(function(err){
+      alert("Error injecting news: " + err);
+    });
   }
 
   // 10-15 Year Historical Simulation Data Loader
   var histSimLoaded = false;
   function loadHistoricalSim() {
     if (histSimLoaded) return;
+    histSimLoaded = true;
     fetch("/api/paper/historical-sim")
       .then(function(r){ return r.json(); })
       .then(function(d){
         if (!d) return;
-        histSimLoaded = true;
         var m1 = d.mode_1_full_15yr_compounded;
         var m2a = d.mode_2a_modern_binance_2017;
         var m2b = d.mode_2b_recent_5yr_2021;
@@ -2242,11 +2649,24 @@ const indexHTML = `<!doctype html>
   var tickSimLoaded = false;
   function loadTickSim() {
     if (tickSimLoaded) return;
+    tickSimLoaded = true;
+    fetch("/api/paper/cloud-optimizer")
+      .then(function(r){ return r.json(); })
+      .then(function(co){
+        if (co && co.optimal_params) {
+          var p = co.optimal_params;
+          if ($("cloudOptParams")) {
+            $("cloudOptParams").textContent = num(p.base_leverage || 3.5, 1) + "x Base / " + num(p.max_leverage || 5.0, 1) + "x Max / " + Math.round((p.clip_fraction || 0.20) * 100) + "% Clip";
+          }
+          if ($("cloudOptWeeklyPill") && p.projected_weekly_usd) {
+            $("cloudOptWeeklyPill").textContent = "Target: +$" + num(p.projected_weekly_usd, 2) + "/wk (" + num(p.base_leverage || 3.5, 1) + "x Base)";
+          }
+        }
+      }).catch(function(){});
     fetch("/api/paper/tick-sim")
       .then(function(r){ return r.json(); })
       .then(function(d){
         if (!d || d.error) return;
-        tickSimLoaded = true;
         if ($("tickSimEquityVal")) $("tickSimEquityVal").textContent = "$" + num(d.final_equity, 2);
         if ($("tickSimCagr")) $("tickSimCagr").textContent = "+" + num(d.cagr_pct, 1) + "% CAGR";
         if ($("tickSimProfit")) $("tickSimProfit").textContent = "+$" + num(d.total_net_profit, 2) + " Net";
@@ -2875,6 +3295,66 @@ const indexHTML = `<!doctype html>
   $("logLevel").addEventListener("change", loadLogs);
   $("logQuery").addEventListener("keydown", function(e){ if (e.key === "Enter") loadLogs(); });
 
+  // Crypto Tax & Form 8949 Accounting
+  function loadTaxTab() {
+    var year = $("ptTaxYearSelect") ? $("ptTaxYearSelect").value : "2026";
+    if ($("btnPtExportCSV")) $("btnPtExportCSV").href = "/api/tax/export.csv?year=" + year;
+    fetch("/api/tax?year=" + year)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if ($("taxTotalReserve")) $("taxTotalReserve").textContent = "$" + num(data.total_tax_reserve_usd || 0, 2);
+        if ($("taxNetGain")) {
+          var net = data.net_taxable_gain_usd || 0;
+          $("taxNetGain").textContent = (net >= 0 ? "+$" : "-$") + num(Math.abs(net), 2);
+          $("taxNetGain").style.color = net >= 0 ? "var(--accent)" : "var(--bad)";
+        }
+        if ($("taxDispositionsCount")) $("taxDispositionsCount").textContent = (data.total_dispositions || 0) + " Dispositions";
+        if ($("taxFedTax")) $("taxFedTax").textContent = "$" + num(data.estimated_federal_tax || 0, 2);
+        if ($("taxStateTax")) $("taxStateTax").textContent = "$" + num(data.estimated_state_tax || 0, 2);
+        if ($("taxFeesDeducted")) $("taxFeesDeducted").textContent = "$" + num(data.total_fees_usd || 0, 2);
+
+        if ($("ptTaxQuarterlyBody") && data.quarterly_schedule) {
+          $("ptTaxQuarterlyBody").innerHTML = data.quarterly_schedule.map(function(q) {
+            var pill = "<span class='pill muted'>UPCOMING</span>";
+            if (q.is_past_due) pill = "<span class='pill bad'>PAST DUE</span>";
+            else if (q.is_current) pill = "<span class='pill ok'>CURRENT QUARTER</span>";
+            return "<tr>" +
+              "<td><strong>" + esc(q.quarter) + "</strong></td>" +
+              "<td>" + esc(q.period) + "</td>" +
+              "<td>" + esc(q.due_date) + "</td>" +
+              "<td style='text-align:right'>" + (q.realized_gain >= 0 ? "+$" : "-$") + num(Math.abs(q.realized_gain), 2) + "</td>" +
+              "<td style='text-align:right'>$" + num(q.federal_tax, 2) + "</td>" +
+              "<td style='text-align:right'>$" + num(q.state_tax, 2) + "</td>" +
+              "<td style='text-align:right;color:var(--gold);font-weight:700'>$" + num(q.total_reserve, 2) + "</td>" +
+              "<td style='text-align:center'>" + pill + "</td>" +
+            "</tr>";
+          }).join("");
+        }
+
+        if ($("ptTaxLotsBody")) {
+          if ($("ptTaxLotsCountPill")) $("ptTaxLotsCountPill").textContent = (data.dispositions ? data.dispositions.length : 0) + " lots matched";
+          if (data.dispositions && data.dispositions.length) {
+            $("ptTaxLotsBody").innerHTML = data.dispositions.map(function(d) {
+              var gCol = d.net_gain_usd >= 0 ? "var(--accent)" : "var(--bad)";
+              return "<tr>" +
+                "<td>" + esc(d.description) + "</td>" +
+                "<td>" + esc(d.acquired_at ? d.acquired_at.split("T")[0] : "-") + "</td>" +
+                "<td>" + esc(d.sold_at ? d.sold_at.split("T")[0] : "-") + "</td>" +
+                "<td style='text-align:right'>$" + num(d.proceeds_usd, 2) + "</td>" +
+                "<td style='text-align:right'>$" + num(d.cost_basis_usd, 2) + "</td>" +
+                "<td style='text-align:right;color:var(--muted)'>$" + num(d.fee_usd, 4) + "</td>" +
+                "<td style='text-align:right;color:" + gCol + ";font-weight:700'>" + (d.net_gain_usd >= 0 ? "+$" : "-$") + num(Math.abs(d.net_gain_usd), 2) + "</td>" +
+                "<td><span class='pill " + (d.holding_type === "SHORT_TERM" ? "ok" : "gold") + "'>" + esc(d.holding_type) + "</span></td>" +
+                "<td style='text-align:center'>" + esc(d.quarter) + "</td>" +
+              "</tr>";
+            }).join("");
+          } else {
+            $("ptTaxLotsBody").innerHTML = "<tr><td colspan='9' class='empty' style='text-align:center;padding:18px'>No dispositions recorded yet for this tax year.</td></tr>";
+          }
+        }
+      }).catch(function(){});
+  }
+
   // Stream & SSE Connection
   function setStreamStatus(ok){
     var el = $("streamPill");
@@ -2948,7 +3428,7 @@ const indexHTML = `<!doctype html>
     var container = $("coinSelectorGrid");
     if (!container) return;
     var activeCoins = computeRiskParityWeights();
-    var cap = parseFloat($("inputCustomCapital") ? $("inputCustomCapital").value : 2000) || 2000;
+    var cap = parseFloat($("inputCustomCapital") ? $("inputCustomCapital").value : 200) || 200;
 
     var html = coinUniverse.map(function(c){
       var isActive = c.active;
@@ -3002,8 +3482,14 @@ const indexHTML = `<!doctype html>
     applyCustomParameters();
   };
 
+  window.setTargetGoal = function(targetPct, lev) {
+    if ($("inputTargetReturn")) $("inputTargetReturn").value = targetPct;
+    if (lev && $("inputBaseLeverage")) $("inputBaseLeverage").value = lev;
+    applyCustomParameters();
+  };
+
   window.applyCustomParameters = function() {
-    var cap = parseFloat($("inputCustomCapital") ? $("inputCustomCapital").value : 2000) || 2000;
+    var cap = parseFloat($("inputCustomCapital") ? $("inputCustomCapital").value : 200) || 200;
     var baseLev = parseFloat($("inputBaseLeverage") ? $("inputBaseLeverage").value : 2.5) || 2.5;
     var maxLev = parseFloat($("inputMaxLeverage") ? $("inputMaxLeverage").value : 5.0) || 5.0;
     var maxDD = parseFloat($("inputMaxDD") ? $("inputMaxDD").value : 2.0) || 2.0;
@@ -3011,8 +3497,9 @@ const indexHTML = `<!doctype html>
 
     var moGain = cap * (targetRet / 100.0);
     var wkGain = moGain / 4.33;
-    var rebates = cap * 0.0304;
-    var trades = Math.round(120 * (cap / 1000.0));
+    var levScale = baseLev / 2.5;
+    var rebates = cap * 0.0304 * levScale;
+    var trades = Math.round(120 * (cap / 1000.0) * levScale);
 
     if ($("projMonthlyGain")) $("projMonthlyGain").textContent = "+$" + num(moGain, 2) + " / mo (+" + num(targetRet, 2) + "%)";
     if ($("projWeeklyGain")) $("projWeeklyGain").textContent = "(\u2248 +$" + num(wkGain, 2) + " / week)";
@@ -3190,7 +3677,7 @@ const indexHTML = `<!doctype html>
   // Window Preset Switching helper
   window.selectEvaluationWindow = function(preset) {
     currentActiveWindow = preset || "7d";
-    var cap = 2000;
+    var cap = 200;
     if ($("inputCustomCapital") && parseFloat($("inputCustomCapital").value) > 0) {
       cap = parseFloat($("inputCustomCapital").value);
     }
@@ -3259,7 +3746,219 @@ const indexHTML = `<!doctype html>
     applyCustomParameters();
   };
 
-  // Initialize interactive components
+  // --- UI & Quant Customization Suite ---
+  var uiPrefs = {
+    theme: "emerald",
+    oled: false,
+    compact: false,
+    sound: true,
+    profile: "balanced"
+  };
+
+  var themePalettes = {
+    emerald: { accent: "#00e676", dim: "rgba(0,230,118,.13)", info: "#00d2ff" },
+    cyan:    { accent: "#00d2ff", dim: "rgba(0,210,255,.14)", info: "#00e676" },
+    amber:   { accent: "#ffab00", dim: "rgba(255,171,0,.14)", info: "#00d2ff" },
+    violet:  { accent: "#b388ff", dim: "rgba(179,136,255,.15)", info: "#00d2ff" },
+    crimson: { accent: "#ff5252", dim: "rgba(255,82,82,.15)", info: "#ffab00" }
+  };
+
+  function saveUiPrefs() {
+    try {
+      var customState = {
+        prefs: uiPrefs,
+        capital: $("inputCustomCapital") ? $("inputCustomCapital").value : 200,
+        baseLev: $("inputBaseLeverage") ? $("inputBaseLeverage").value : 2.5,
+        maxLev: $("inputMaxLeverage") ? $("inputMaxLeverage").value : 5.0,
+        maxDD: $("inputMaxDD") ? $("inputMaxDD").value : 2.0,
+        targetRet: $("inputTargetReturn") ? $("inputTargetReturn").value : 7.22,
+        coins: coinUniverse
+      };
+      localStorage.setItem("piquant_custom_v2", JSON.stringify(customState));
+    } catch (e) {}
+  }
+
+  function loadUiPrefs() {
+    try {
+      var raw = localStorage.getItem("piquant_custom_v2");
+      if (!raw) return;
+      var data = JSON.parse(raw);
+      if (data.prefs) {
+        uiPrefs = Object.assign(uiPrefs, data.prefs);
+      }
+      if (data.capital && $("inputCustomCapital")) $("inputCustomCapital").value = data.capital;
+      if (data.baseLev && $("inputBaseLeverage")) $("inputBaseLeverage").value = data.baseLev;
+      if (data.maxLev && $("inputMaxLeverage")) $("inputMaxLeverage").value = data.maxLev;
+      if (data.maxDD && $("inputMaxDD")) $("inputMaxDD").value = data.maxDD;
+      if (data.targetRet && $("inputTargetReturn")) $("inputTargetReturn").value = data.targetRet;
+      if (Array.isArray(data.coins) && data.coins.length > 0) {
+        coinUniverse = data.coins;
+      }
+    } catch (e) {}
+  }
+
+  window.openCustomizerModal = function() {
+    if ($("customizerOverlay")) $("customizerOverlay").classList.add("open");
+  };
+
+  window.closeCustomizerModal = function() {
+    if ($("customizerOverlay")) $("customizerOverlay").classList.remove("open");
+  };
+
+  window.applyThemeColor = function(themeName) {
+    var pal = themePalettes[themeName] || themePalettes.emerald;
+    uiPrefs.theme = themeName;
+    document.documentElement.style.setProperty("--accent", pal.accent);
+    document.documentElement.style.setProperty("--accent-dim", pal.dim);
+    document.documentElement.style.setProperty("--info", pal.info);
+    if ($("eqLinePath")) $("eqLinePath").setAttribute("stroke", pal.accent);
+    if ($("eqHoverPoint")) $("eqHoverPoint").setAttribute("fill", pal.accent);
+    Object.keys(themePalettes).forEach(function(k){
+      var sw = $("swatch-" + k);
+      if (sw) sw.className = "theme-swatch" + (k === themeName ? " active" : "");
+    });
+    saveUiPrefs();
+  };
+
+  window.toggleOledMode = function() {
+    uiPrefs.oled = !uiPrefs.oled;
+    document.body.classList.toggle("oled-mode", uiPrefs.oled);
+    if ($("btnOledToggle")) $("btnOledToggle").textContent = "OLED: " + (uiPrefs.oled ? "On (Pitch Black)" : "Off");
+    saveUiPrefs();
+  };
+
+  window.toggleCompactDensity = function() {
+    uiPrefs.compact = !uiPrefs.compact;
+    document.body.classList.toggle("compact-mode", uiPrefs.compact);
+    var label = "📐 Density: " + (uiPrefs.compact ? "Compact" : "Standard");
+    if ($("btnCompactToggle")) $("btnCompactToggle").textContent = label;
+    if ($("btnModalCompact")) $("btnModalCompact").textContent = "Density: " + (uiPrefs.compact ? "Compact" : "Standard");
+    saveUiPrefs();
+  };
+
+  window.toggleAudioAlerts = function() {
+    uiPrefs.sound = !uiPrefs.sound;
+    if ($("btnSoundToggle")) $("btnSoundToggle").textContent = (uiPrefs.sound ? "🔊 Sound: On" : "🔇 Sound: Off");
+    if ($("btnModalSound")) $("btnModalSound").textContent = "Sound: " + (uiPrefs.sound ? "On" : "Off");
+    if (uiPrefs.sound) playTradeDing("MAKER");
+    saveUiPrefs();
+  };
+
+  window.playTradeDing = function(role) {
+    if (!uiPrefs.sound) return;
+    try {
+      var AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      var ctx = new AudioCtx();
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      osc.type = role === "ALERT" ? "sawtooth" : "sine";
+      osc.frequency.setValueAtTime(role === "ALERT" ? 320 : 880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(role === "ALERT" ? 220 : 1320, ctx.currentTime + 0.14);
+      gain.gain.setValueAtTime(0.08, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.19);
+    } catch (e) {}
+  };
+
+  window.addCustomCoinToUniverse = function() {
+    var symEl = $("inputNewCoinSym");
+    var volEl = $("inputNewCoinVol");
+    if (!symEl || !symEl.value.trim()) return;
+    var rawSym = symEl.value.trim().toUpperCase().replace(/USDT$/, "");
+    if (!rawSym) return;
+    var vol = parseFloat(volEl ? volEl.value : 65) || 65;
+    var existing = coinUniverse.find(function(c){ return c.symbol === rawSym; });
+    if (existing) {
+      existing.active = true;
+      existing.vol24h = vol;
+    } else {
+      var colors = ["#00e676", "#00d2ff", "#ffab00", "#b388ff", "#ff5252", "#14f195"];
+      var col = colors[coinUniverse.length % colors.length];
+      coinUniverse.push({
+        symbol: rawSym,
+        name: rawSym,
+        pair: rawSym + "USDT",
+        active: true,
+        price: 10.0,
+        vol24h: vol,
+        baseLev: Math.max(1.0, Math.min(3.5, Number((110.0 / vol).toFixed(1)))),
+        color: col
+      });
+    }
+    symEl.value = "";
+    renderCoinChips();
+    applyCustomParameters();
+    saveUiPrefs();
+  };
+
+  window.applyStrategyProfile = function(profile) {
+    uiPrefs.profile = profile;
+    if (profile === "conservative") {
+      if ($("inputBaseLeverage")) $("inputBaseLeverage").value = 1.8;
+      if ($("inputMaxLeverage")) $("inputMaxLeverage").value = 3.0;
+      if ($("inputMaxDD")) $("inputMaxDD").value = 1.5;
+      if ($("inputTargetReturn")) $("inputTargetReturn").value = 5.20;
+    } else if (profile === "accelerated") {
+      if ($("inputBaseLeverage")) $("inputBaseLeverage").value = 3.5;
+      if ($("inputMaxLeverage")) $("inputMaxLeverage").value = 5.0;
+      if ($("inputMaxDD")) $("inputMaxDD").value = 2.0;
+      if ($("inputTargetReturn")) $("inputTargetReturn").value = 10.00;
+    } else {
+      if ($("inputBaseLeverage")) $("inputBaseLeverage").value = 2.5;
+      if ($("inputMaxLeverage")) $("inputMaxLeverage").value = 5.0;
+      if ($("inputMaxDD")) $("inputMaxDD").value = 2.0;
+      if ($("inputTargetReturn")) $("inputTargetReturn").value = 7.22;
+    }
+    ["profCons", "profBal", "profAcc"].forEach(function(id){
+      var el = $(id);
+      if (!el) return;
+      var match = (id === "profCons" && profile === "conservative") ||
+                  (id === "profBal" && profile === "balanced") ||
+                  (id === "profAcc" && profile === "accelerated");
+      el.className = "preset-pill-btn" + (match ? " active" : "");
+    });
+    applyCustomParameters();
+    saveUiPrefs();
+  };
+
+  window.exportWorkspaceConfig = function() {
+    saveUiPrefs();
+    var raw = localStorage.getItem("piquant_custom_v2") || "{}";
+    var blob = new Blob([raw], {type: "application/json"});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "piquant_workspace_config.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  window.resetWorkspaceConfig = function() {
+    localStorage.removeItem("piquant_custom_v2");
+    window.location.reload();
+  };
+
+  // Initialize interactive components & restore saved customization state
+  loadUiPrefs();
+  applyThemeColor(uiPrefs.theme || "emerald");
+  if (uiPrefs.oled) {
+    document.body.classList.add("oled-mode");
+    if ($("btnOledToggle")) $("btnOledToggle").textContent = "OLED: On (Pitch Black)";
+  }
+  if (uiPrefs.compact) {
+    document.body.classList.add("compact-mode");
+    if ($("btnCompactToggle")) $("btnCompactToggle").textContent = "📐 Density: Compact";
+    if ($("btnModalCompact")) $("btnModalCompact").textContent = "Density: Compact";
+  }
+  if (!uiPrefs.sound) {
+    if ($("btnSoundToggle")) $("btnSoundToggle").textContent = "🔇 Sound: Off";
+    if ($("btnModalSound")) $("btnModalSound").textContent = "Sound: Off";
+  }
+
   renderCoinChips();
   applyCustomParameters();
 

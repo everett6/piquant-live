@@ -52,16 +52,16 @@ type TriangularArbModel struct {
 
 // NewTriangularArbModel creates an instance of TriangularArbModel.
 func NewTriangularArbModel(lambda, feeA, feeB, feeC, thresholdBps float64) *TriangularArbModel {
-	if feeA <= 0 {
+	if math.IsNaN(feeA) || math.IsInf(feeA, 0) || feeA <= 0 {
 		feeA = 2.0
 	}
-	if feeB <= 0 {
+	if math.IsNaN(feeB) || math.IsInf(feeB, 0) || feeB <= 0 {
 		feeB = 2.0
 	}
-	if feeC <= 0 {
+	if math.IsNaN(feeC) || math.IsInf(feeC, 0) || feeC <= 0 {
 		feeC = 2.0
 	}
-	if thresholdBps <= 0 {
+	if math.IsNaN(thresholdBps) || math.IsInf(thresholdBps, 0) || thresholdBps <= 0 {
 		thresholdBps = 0.5
 	}
 	return &TriangularArbModel{
@@ -89,7 +89,9 @@ func (m *TriangularArbModel) UpdatePrices(priceA, priceB, priceC float64) Triang
 // Evaluate computes the cross-rate synthetic price, divergence, and net arbitrage edge.
 // Operates in 0 B/op and 0 allocs/op.
 func (m *TriangularArbModel) Evaluate() TriangularArbDecision {
-	if m.PriceA <= 0 || m.PriceB <= 0 || m.PriceC <= 0 {
+	if math.IsNaN(m.PriceA) || math.IsInf(m.PriceA, 0) || m.PriceA <= 0 ||
+		math.IsNaN(m.PriceB) || math.IsInf(m.PriceB, 0) || m.PriceB <= 0 ||
+		math.IsNaN(m.PriceC) || math.IsInf(m.PriceC, 0) || m.PriceC <= 0 {
 		return TriangularArbDecision{
 			Leg1Side: "HOLD",
 			Leg2Side: "HOLD",
@@ -99,10 +101,23 @@ func (m *TriangularArbModel) Evaluate() TriangularArbDecision {
 
 	pSynth := m.PriceB / m.PriceA
 	pDirect := m.PriceC
+	if math.IsNaN(pSynth) || math.IsInf(pSynth, 0) || pSynth <= 0 {
+		return TriangularArbDecision{
+			Leg1Side: "HOLD",
+			Leg2Side: "HOLD",
+			Leg3Side: "HOLD",
+		}
+	}
 	divergenceBps := ((pDirect - pSynth) / pSynth) * 10000.0
+	if math.IsNaN(divergenceBps) || math.IsInf(divergenceBps, 0) {
+		divergenceBps = 0
+	}
 
 	totalFeesBps := m.FeeA + m.FeeB + m.FeeC
 	netEdgeBps := math.Abs(divergenceBps) - totalFeesBps
+	if math.IsNaN(netEdgeBps) || math.IsInf(netEdgeBps, 0) {
+		netEdgeBps = 0
+	}
 
 	arbOpp := netEdgeBps > m.ThresholdBps
 
@@ -162,12 +177,20 @@ func (m *TriangularArbModel) Predict(x *[FeatureCount]float64) float64 {
 		baseAlpha = m.BaseRidge.Predict(x)
 	}
 
-	spread := math.Max(0.1, x[4])
+	rawSpread := x[4]
+	if math.IsNaN(rawSpread) || math.IsInf(rawSpread, 0) || rawSpread < 0.1 {
+		rawSpread = 0.1
+	}
+	spread := math.Max(0.1, rawSpread)
 	microEdge := x[3] * spread * 1.2
 	flowEdge := 0.25*x[6] + 0.15*x[7] + 0.20*x[9]
 	synthEdge := microEdge + flowEdge
 
-	return baseAlpha + m.AlphaWt*synthEdge
+	pred := baseAlpha + m.AlphaWt*synthEdge
+	if math.IsNaN(pred) || math.IsInf(pred, 0) {
+		return 0.0
+	}
+	return pred
 }
 
 // Clone returns an independent deep copy of the TriangularArbModel.

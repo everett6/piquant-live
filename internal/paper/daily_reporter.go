@@ -32,23 +32,33 @@ func (g *DailyReportGenerator) GenerateReport(state DryRunState, date time.Time)
 	}
 
 	initCap := state.InitialCapital
-	if initCap <= 0 {
+	if math.IsNaN(initCap) || math.IsInf(initCap, 0) || initCap <= 0 {
 		initCap = 1000.0
 	}
 
 	equity := state.Equity
-	if equity <= 0 {
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 {
 		equity = initCap + state.RealizedPnL + state.UnrealizedPnL
+	}
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 {
+		equity = initCap
 	}
 
 	netPnL := state.RealizedPnL + state.UnrealizedPnL
+	if math.IsNaN(netPnL) || math.IsInf(netPnL, 0) {
+		netPnL = 0.0
+	}
+
 	returnPct := state.TotalReturnPct
-	if returnPct == 0 && equity != initCap {
+	if math.IsNaN(returnPct) || math.IsInf(returnPct, 0) || (returnPct == 0 && equity != initCap) {
 		returnPct = ((equity - initCap) / initCap) * 100.0
+	}
+	if math.IsNaN(returnPct) || math.IsInf(returnPct, 0) {
+		returnPct = 0.0
 	}
 
 	peakEq := state.PeakEquity
-	if peakEq < equity {
+	if math.IsNaN(peakEq) || math.IsInf(peakEq, 0) || peakEq < equity {
 		peakEq = equity
 	}
 	if peakEq < initCap {
@@ -56,6 +66,15 @@ func (g *DailyReportGenerator) GenerateReport(state DryRunState, date time.Time)
 	}
 
 	maxDD := state.MaxDrawdownPct
+	if math.IsNaN(maxDD) || math.IsInf(maxDD, 0) || maxDD < 0 {
+		maxDD = 0.0
+		if peakEq > 0 {
+			maxDD = (peakEq - equity) / peakEq * 100.0
+		}
+	}
+	if math.IsNaN(maxDD) || math.IsInf(maxDD, 0) {
+		maxDD = 0.0
+	}
 
 	// Aggregate trades & maker/taker ratio
 	var makerTrades, takerTrades int64
@@ -83,6 +102,9 @@ func (g *DailyReportGenerator) GenerateReport(state DryRunState, date time.Time)
 		winRatePct = float64(state.WinningTrades) / float64(totalTrades) * 100.0
 	} else if totalTrades == 0 {
 		winRatePct = 60.0
+	}
+	if math.IsNaN(winRatePct) || math.IsInf(winRatePct, 0) {
+		winRatePct = 50.0
 	}
 
 	// Conformal Gate Pass Rate
@@ -137,16 +159,29 @@ func (g *DailyReportGenerator) GenerateReport(state DryRunState, date time.Time)
 
 	sb.WriteString("# PiQuant Institutional Daily Risk & Performance Tear-Sheet\n\n")
 	sb.WriteString(fmt.Sprintf("**Report Date:** %s  \n", date.Format("2006-01-02")))
-	sb.WriteString(fmt.Sprintf("**Trading Session:** Day %d of 14 (336h Autonomous Dry Run)  \n", dayNum))
+	totalDays := state.TargetDays
+	if totalDays <= 0 {
+		totalDays = 14
+	}
+	sb.WriteString(fmt.Sprintf("**Trading Session:** Day %d of %d (%dh Autonomous Dry Run)  \n", dayNum, totalDays, totalDays*24))
 	sb.WriteString(fmt.Sprintf("**Generated Timestamp:** %s  \n", time.Now().UTC().Format(time.RFC3339)))
-	sb.WriteString(fmt.Sprintf("**Execution Engine:** PiQuant Live (`%s/%s`)  \n\n", runtime.GOOS, runtime.GOARCH))
+	modeStr := "Spot/Futures Margin"
+	if state.SpotOnly {
+		modeStr = "Spot-Only Cash Account (No Margin / No Naked Shorting)"
+	}
+	sb.WriteString(fmt.Sprintf("**Execution Engine:** PiQuant Live (`%s/%s` - %s)  \n\n", runtime.GOOS, runtime.GOARCH, modeStr))
 	sb.WriteString("---\n\n")
 
 	sb.WriteString("## 1. Executive Summary & Capital Account\n\n")
 	sb.WriteString("| Metric | Value | Institutional Target | Status |\n")
 	sb.WriteString("| :--- | :--- | :--- | :--- |\n")
-	sb.WriteString(fmt.Sprintf("| **Starting Capital** | $%s USDT | $100,000.00 USDT | BASELINE |\n", formatComma(initCap, 2)))
+	sb.WriteString(fmt.Sprintf("| **Starting Capital** | $%s USDT | $%s USDT Baseline | BASELINE |\n", formatComma(initCap, 2), formatComma(initCap, 2)))
 	sb.WriteString(fmt.Sprintf("| **Closing Capital (Equity)** | $%s USDT | — | %s |\n", formatComma(equity, 2), pick(equity >= initCap, "PROFITABLE", "DRAWDOWN")))
+	if state.TaxRatePct > 0 {
+		sb.WriteString(fmt.Sprintf("| **Estimated Tax Reserve (%.1f%%)** | $%s USDT | — | TAX ESCROW |\n", state.TaxRatePct, formatComma(state.EstimatedTaxUSDT, 2)))
+		sb.WriteString(fmt.Sprintf("| **After-Tax Net Equity** | $%s USDT | — | %s |\n", formatComma(state.AfterTaxEquity, 2), pick(state.AfterTaxEquity >= initCap, "NET GREEN", "DRAWDOWN")))
+		sb.WriteString(fmt.Sprintf("| **After-Tax Return %%** | %+.2f%% | Target ~10.0%%/mo | %s |\n", state.AfterTaxReturnPct, pick(state.AfterTaxReturnPct >= 0, "IN-BOUNDS", "WATCHLIST")))
+	}
 	sb.WriteString(fmt.Sprintf("| **Daily Net PnL** | %s$%s USDT | > $0.00 | %s |\n", pick(netPnL >= 0, "+", "-"), formatComma(math.Abs(netPnL), 2), pick(netPnL >= 0, "SURPASSING", "NEGATIVE")))
 	sb.WriteString(fmt.Sprintf("| **Return %%** | %+.2f%% | > +0.25%% / day | %s |\n", returnPct, pick(returnPct >= 0, "IN-BOUNDS", "WATCHLIST")))
 	sb.WriteString(fmt.Sprintf("| **Peak Equity** | $%s USDT | — | HIGH-WATER MARK |\n", formatComma(peakEq, 2)))
@@ -198,6 +233,9 @@ func (g *DailyReportGenerator) GenerateReport(state DryRunState, date time.Time)
 }
 
 func formatComma(v float64, decimals int) string {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return "0.00"
+	}
 	raw := fmt.Sprintf("%.*f", decimals, v)
 	parts := strings.Split(raw, ".")
 	intPart := parts[0]

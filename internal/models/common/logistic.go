@@ -97,9 +97,14 @@ func (l *Logistic) Fit(samples []Sample, idx []int) error {
 		}
 		// Regularise everything but the bias; add the identity so a singular
 		// Hessian still yields a step (Levenberg style damping).
+		// Scale L2 penalty with sample count n so shrinkage does not vanish on large datasets.
+		effectiveLam := l.Lam
+		if n > 1 {
+			effectiveLam = l.Lam * float64(n)
+		}
 		for j := 1; j <= k; j++ {
-			hess[j][j] += l.Lam
-			grad[j] += l.Lam * w[j]
+			hess[j][j] += effectiveLam
+			grad[j] += effectiveLam * w[j]
 		}
 		for j := 0; j <= k; j++ {
 			hess[j][j] += 1e-9

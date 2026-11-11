@@ -28,7 +28,7 @@ import (
 // StreamConfig configures the public Binance market stream ingestor.
 type StreamConfig struct {
 	// Endpoint is the Binance WebSocket URL.
-	// Default: wss://stream.binance.com:9443/stream?streams=btcusdt@depth20@100ms/ethusdt@depth20@100ms/btcusdt@trade/ethusdt@trade
+	// Default: wss://data-stream.binance.vision:9443/stream?streams=btcusdt@depth20@100ms/ethusdt@depth20@100ms/btcusdt@trade/ethusdt@trade
 	Endpoint string
 
 	// Symbols to track (default: BTCUSDT, ETHUSDT)
@@ -45,10 +45,36 @@ type StreamConfig struct {
 	EnableFallback bool
 }
 
+// BuildBinanceStreamURL constructs the Binance combined WebSocket URL for the given symbols.
+func BuildBinanceStreamURL(symbols []string) string {
+	return "wss://data-stream.binance.vision:9443/stream?streams=" + binanceStreamList(symbols)
+}
+
+// BuildBinanceUSStreamURL builds the Binance.US public combined-stream URL (depth20@100ms +
+// trades). Binance.com rejects US IPs, so US accounts must quote against the Binance.US book.
+func BuildBinanceUSStreamURL(symbols []string) string {
+	return "wss://stream.binance.us:9443/stream?streams=" + binanceStreamList(symbols)
+}
+
+func binanceStreamList(symbols []string) string {
+	if len(symbols) == 0 {
+		symbols = []string{"BTCUSDT", "ETHUSDT"}
+	}
+	streams := make([]string, 0, len(symbols)*2)
+	for _, s := range symbols {
+		clean := strings.ToLower(strings.TrimSpace(s))
+		if clean == "" {
+			continue
+		}
+		streams = append(streams, clean+"@depth20@100ms", clean+"@trade")
+	}
+	return strings.Join(streams, "/")
+}
+
 // DefaultStreamConfig returns institutional defaults for Binance public feeds.
 func DefaultStreamConfig() StreamConfig {
 	return StreamConfig{
-		Endpoint:       "wss://stream.binance.com:9443/stream?streams=btcusdt@depth20@100ms/ethusdt@depth20@100ms/btcusdt@trade/ethusdt@trade",
+		Endpoint:       "wss://data-stream.binance.vision:9443/stream?streams=btcusdt@depth20@100ms/ethusdt@depth20@100ms/btcusdt@trade/ethusdt@trade",
 		Symbols:        []string{"BTCUSDT", "ETHUSDT"},
 		ReconnectBase:  500 * time.Millisecond,
 		ReconnectMax:   15 * time.Second,
@@ -60,11 +86,12 @@ func DefaultStreamConfig() StreamConfig {
 // parses depth20 and trades, maintains sequenced L2 order books, and pushes MarketEvents
 // to an engine.SPSCRing with zero heap allocations on the hot path.
 type MarketStreamIngestor struct {
-	cfg       StreamConfig
-	ring      *engine.SPSCRing
-	booksMu   sync.RWMutex
-	books     map[string]*marketdata.L2OrderBook
-	symbolIDs map[string]uint16
+	cfg        StreamConfig
+	ring       *engine.SPSCRing
+	booksMu    sync.RWMutex
+	books      map[string]*marketdata.L2OrderBook
+	symbolIDs  map[string]uint16
+	symbolByID map[uint16]string // reverse of symbolIDs, for O(1) SymbolForID
 
 	connected atomic.Bool
 	fallback  atomic.Bool
@@ -82,6 +109,7 @@ type StreamStats struct {
 	GapsDetected  atomic.Uint64
 	Reconnects    atomic.Uint64
 	FallbackTicks atomic.Uint64
+	RingDrops     atomic.Uint64
 	LastEventNs   atomic.Int64
 }
 
@@ -102,17 +130,20 @@ func NewMarketStreamIngestor(cfg StreamConfig, ring *engine.SPSCRing) *MarketStr
 
 	books := make(map[string]*marketdata.L2OrderBook, len(cfg.Symbols))
 	symIDs := make(map[string]uint16, len(cfg.Symbols))
+	byID := make(map[uint16]string, len(cfg.Symbols))
 	for idx, s := range cfg.Symbols {
 		upper := strings.ToUpper(s)
 		books[upper] = marketdata.NewL2OrderBook(upper)
 		symIDs[upper] = uint16(idx)
+		byID[uint16(idx)] = upper
 	}
 
 	return &MarketStreamIngestor{
-		cfg:       cfg,
-		ring:      ring,
-		books:     books,
-		symbolIDs: symIDs,
+		cfg:        cfg,
+		ring:       ring,
+		books:      books,
+		symbolIDs:  symIDs,
+		symbolByID: byID,
 	}
 }
 
@@ -160,6 +191,28 @@ func (m *MarketStreamIngestor) Stats() (total, depths, trades, gaps, reconnects,
 }
 
 // GetL2Book returns a clone of the current in-memory L2 book for a symbol.
+// SymbolForID returns the symbol a ring event's SymbolID refers to ("" if unknown).
+func (m *MarketStreamIngestor) SymbolForID(id uint16) string {
+	m.booksMu.RLock()
+	defer m.booksMu.RUnlock()
+	return m.symbolByID[id]
+}
+
+// CopyL2Book copies the symbol's book into dst without allocating (engine hot path).
+func (m *MarketStreamIngestor) CopyL2Book(symbol string, dst *marketdata.L2OrderBook) bool {
+	m.booksMu.RLock()
+	defer m.booksMu.RUnlock()
+	b, ok := m.books[symbol]
+	if !ok {
+		b, ok = m.books[strings.ToUpper(symbol)]
+	}
+	if !ok {
+		return false
+	}
+	*dst = *b
+	return true
+}
+
 func (m *MarketStreamIngestor) GetL2Book(symbol string) (*marketdata.L2OrderBook, bool) {
 	m.booksMu.RLock()
 	defer m.booksMu.RUnlock()
@@ -175,6 +228,9 @@ func (m *MarketStreamIngestor) runLoop(ctx context.Context) {
 	defer m.wg.Done()
 
 	backoff := m.cfg.ReconnectBase
+	if backoff < 200*time.Millisecond {
+		backoff = 200 * time.Millisecond
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -182,6 +238,7 @@ func (m *MarketStreamIngestor) runLoop(ctx context.Context) {
 		default:
 		}
 
+		connStart := time.Now()
 		_ = m.connectAndStream(ctx)
 		m.connected.Store(false)
 		if ctx.Err() != nil {
@@ -189,10 +246,23 @@ func (m *MarketStreamIngestor) runLoop(ctx context.Context) {
 		}
 
 		m.stats.Reconnects.Add(1)
-		time.Sleep(backoff)
-		backoff *= 2
-		if backoff > m.cfg.ReconnectMax {
-			backoff = m.cfg.ReconnectMax
+
+		// If connection was healthy for > 15s, reset backoff to base
+		if time.Since(connStart) > 15*time.Second {
+			backoff = m.cfg.ReconnectBase
+		} else {
+			backoff *= 2
+			if backoff > m.cfg.ReconnectMax {
+				backoff = m.cfg.ReconnectMax
+			}
+		}
+
+		// Add +/- 20% jitter to prevent thundering-herd reconnect storms on network drops
+		jitter := time.Duration(float64(backoff) * (0.8 + 0.4*(float64(time.Now().UnixNano()%100)/100.0)))
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(jitter):
 		}
 	}
 }
@@ -200,13 +270,21 @@ func (m *MarketStreamIngestor) runLoop(ctx context.Context) {
 // connectAndStream dials the public WebSocket, performs handshake, and reads frames.
 func (m *MarketStreamIngestor) connectAndStream(ctx context.Context) error {
 	endpoints := []string{m.cfg.Endpoint}
-	// If connecting to stream.binance.com, add data-stream.binance.vision as automatic fallback
-	// if restricted (HTTP 451) from US dev locations.
-	if strings.Contains(m.cfg.Endpoint, "stream.binance.com") {
+	var visionFallback string
+	// If connecting to data-stream.binance.vision, add stream.binance.com:9443 as secondary fallback.
+	// If connecting to stream.binance.com, add data-stream.binance.vision:9443 as fallback and promote on HTTP 451.
+	if strings.Contains(m.cfg.Endpoint, "data-stream.binance.vision") {
+		if u, err := url.Parse(m.cfg.Endpoint); err == nil {
+			comURL := *u
+			comURL.Host = "stream.binance.com:9443"
+			endpoints = append(endpoints, comURL.String())
+		}
+	} else if strings.Contains(m.cfg.Endpoint, "stream.binance.com") {
 		if u, err := url.Parse(m.cfg.Endpoint); err == nil {
 			visionURL := *u
 			visionURL.Host = "data-stream.binance.vision:9443"
-			endpoints = append(endpoints, visionURL.String())
+			visionFallback = visionURL.String()
+			endpoints = append(endpoints, visionFallback)
 		}
 	}
 
@@ -222,8 +300,11 @@ func (m *MarketStreamIngestor) connectAndStream(ctx context.Context) error {
 			return err
 		}
 		lastErr = err
-		// If returned 451 legal restriction, try next candidate immediately
+		// If returned 451 legal restriction, promote data-stream.binance.vision and try next candidate immediately
 		if strings.Contains(err.Error(), "451") {
+			if visionFallback != "" && strings.Contains(ep, "stream.binance.com") {
+				m.cfg.Endpoint = visionFallback
+			}
 			log.Printf("[MarketStreamIngestor] Endpoint %s returned HTTP 451 (geoblocked in US by Binance policy); failing over to public gateway...", ep)
 			continue
 		}
@@ -248,22 +329,41 @@ func (m *MarketStreamIngestor) dialAndStreamEndpoint(ctx context.Context, endpoi
 		}
 	}
 
-	var d net.Dialer
-	dialCtx, dialCancel := context.WithTimeout(ctx, 10*time.Second)
+	d := net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 10 * time.Second,
+	}
+	dialCtx, dialCancel := context.WithTimeout(ctx, 8*time.Second)
 	defer dialCancel()
 
-	var conn net.Conn
-	if u.Scheme == "wss" {
-		conn, err = tls.DialWithDialer(&d, "tcp", host, &tls.Config{
-			ServerName: strings.Split(u.Host, ":")[0],
-		})
-	} else {
-		conn, err = d.DialContext(dialCtx, "tcp", host)
-	}
+	rawConn, err := d.DialContext(dialCtx, "tcp", host)
 	if err != nil {
 		return fmt.Errorf("dial failed to %s: %w", host, err)
 	}
+
+	var conn net.Conn = rawConn
+	if u.Scheme == "wss" {
+		tlsConn := tls.Client(rawConn, &tls.Config{
+			ServerName: strings.Split(u.Host, ":")[0],
+		})
+		if err := tlsConn.HandshakeContext(dialCtx); err != nil {
+			_ = rawConn.Close()
+			return fmt.Errorf("tls handshake failed to %s: %w", host, err)
+		}
+		conn = tlsConn
+	}
 	defer conn.Close()
+	defer m.connected.Store(false)
+
+	stopWatcher := make(chan struct{})
+	defer close(stopWatcher)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-stopWatcher:
+		}
+	}()
 
 	// WebSocket Client Handshake (RFC 6455)
 	wsKey := make([]byte, 16)
@@ -282,10 +382,12 @@ func (m *MarketStreamIngestor) dialAndStreamEndpoint(ctx context.Context, endpoi
 		"Sec-WebSocket-Key: %s\r\n"+
 		"Sec-WebSocket-Version: 13\r\n\r\n", path, u.Host, keyB64)
 
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	if _, err := conn.Write([]byte(req)); err != nil {
 		return fmt.Errorf("handshake write failed: %w", err)
 	}
 
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	br := bufio.NewReaderSize(conn, 64*1024)
 	respStatus, err := br.ReadString('\n')
 	if err != nil {
@@ -306,7 +408,26 @@ func (m *MarketStreamIngestor) dialAndStreamEndpoint(ctx context.Context, endpoi
 		}
 	}
 
+	_ = conn.SetWriteDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
+
 	m.connected.Store(true)
+
+	// Proactive keepalive ping loop to detect half-open TCP hangs in <= 15s
+	pingCtx, pingCancel := context.WithCancel(ctx)
+	defer pingCancel()
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pingCtx.Done():
+				return
+			case <-ticker.C:
+				_ = sendWSPing(conn)
+			}
+		}
+	}()
 
 	// Stream frames
 	for {
@@ -316,6 +437,7 @@ func (m *MarketStreamIngestor) dialAndStreamEndpoint(ctx context.Context, endpoi
 		default:
 		}
 
+		_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
 		payload, op, err := readWSFrame(br)
 		if err != nil {
 			return err
@@ -324,8 +446,11 @@ func (m *MarketStreamIngestor) dialAndStreamEndpoint(ctx context.Context, endpoi
 		if op == 0x8 { // Close frame
 			return io.EOF
 		}
-		if op == 0x9 { // Ping frame -> send Pong
+		if op == 0x9 { // Server Ping frame -> send Pong
 			_ = sendWSPong(conn, payload)
+			continue
+		}
+		if op == 0xA { // Pong frame in reply to our client ping
 			continue
 		}
 		if op != 0x1 && op != 0x2 { // Only text or binary payload
@@ -391,6 +516,7 @@ func (m *MarketStreamIngestor) handleDepthUpdate(payload []byte, nowNs int64) {
 		book = marketdata.NewL2OrderBook(symbol)
 		m.books[symbol] = book
 		m.symbolIDs[symbol] = uint16(len(m.symbolIDs))
+		m.symbolByID[m.symbolIDs[symbol]] = symbol
 	}
 
 	// Set fresh snapshot or update in-place with zero allocations
@@ -412,15 +538,19 @@ func (m *MarketStreamIngestor) handleDepthUpdate(payload []byte, nowNs int64) {
 	}
 
 	// Push to lock-free SPSC Ring
-	m.ring.Push(engine.MarketEvent{
-		Timestamp: nowNs,
-		Sequence:  delta.FinalUpdateID(),
-		Price:     mid,
-		Size:      size,
-		Side:      0,
-		Kind:      1, // Depth
-		SymbolID:  symID,
-	})
+	if m.ring != nil {
+		if !m.ring.Push(engine.MarketEvent{
+			Timestamp: nowNs,
+			Sequence:  delta.FinalUpdateID(),
+			Price:     mid,
+			Size:      size,
+			Side:      0,
+			Kind:      1, // Depth
+			SymbolID:  symID,
+		}) {
+			m.stats.RingDrops.Add(1)
+		}
+	}
 
 	m.stats.DepthUpdates.Add(1)
 	m.stats.TotalEvents.Add(1)
@@ -454,6 +584,7 @@ func (m *MarketStreamIngestor) handleTradeUpdate(payload []byte, nowNs int64) {
 		} else {
 			symID = uint16(len(m.symbolIDs))
 			m.symbolIDs[symbol] = symID
+			m.symbolByID[symID] = symbol
 		}
 		m.booksMu.Unlock()
 	}
@@ -463,15 +594,19 @@ func (m *MarketStreamIngestor) handleTradeUpdate(payload []byte, nowNs int64) {
 		side = 2 // Sell
 	}
 
-	m.ring.Push(engine.MarketEvent{
-		Timestamp: nowNs,
-		Sequence:  uint64(tradeTime),
-		Price:     price,
-		Size:      qty,
-		Side:      side,
-		Kind:      0, // Trade
-		SymbolID:  symID,
-	})
+	if m.ring != nil {
+		if !m.ring.Push(engine.MarketEvent{
+			Timestamp: nowNs,
+			Sequence:  uint64(tradeTime),
+			Price:     price,
+			Size:      qty,
+			Side:      side,
+			Kind:      0, // Trade
+			SymbolID:  symID,
+		}) {
+			m.stats.RingDrops.Add(1)
+		}
+	}
 
 	m.stats.Trades.Add(1)
 	m.stats.TotalEvents.Add(1)
@@ -513,25 +648,27 @@ func (m *MarketStreamIngestor) fallbackWatchdog(ctx context.Context) {
 				m.updateFallbackBook("ETHUSDT", ethMid, tickCount)
 
 				// Push synthetic Depth & Trade events to ring
-				m.ring.Push(engine.MarketEvent{
-					Timestamp: nowNs,
-					Sequence:  tickCount,
-					Price:     btcMid,
-					Size:      1.5,
-					Side:      1,
-					Kind:      1, // Depth
-					SymbolID:  0, // BTC
-				})
+				if m.ring != nil {
+					m.ring.Push(engine.MarketEvent{
+						Timestamp: nowNs,
+						Sequence:  tickCount,
+						Price:     btcMid,
+						Size:      1.5,
+						Side:      1,
+						Kind:      1, // Depth
+						SymbolID:  0, // BTC
+					})
 
-				m.ring.Push(engine.MarketEvent{
-					Timestamp: nowNs,
-					Sequence:  tickCount,
-					Price:     ethMid,
-					Size:      12.0,
-					Side:      2,
-					Kind:      0, // Trade
-					SymbolID:  1, // ETH
-				})
+					m.ring.Push(engine.MarketEvent{
+						Timestamp: nowNs,
+						Sequence:  tickCount,
+						Price:     ethMid,
+						Size:      12.0,
+						Side:      2,
+						Kind:      0, // Trade
+						SymbolID:  1, // ETH
+					})
+				}
 
 				m.stats.FallbackTicks.Add(2)
 				m.stats.TotalEvents.Add(2)
@@ -584,11 +721,15 @@ func readWSFrame(r io.Reader) ([]byte, byte, error) {
 		if _, err := io.ReadFull(r, ext[:]); err != nil {
 			return nil, 0, err
 		}
-		payloadLen = int(binary.BigEndian.Uint64(ext[:]))
+		rawLen := binary.BigEndian.Uint64(ext[:])
+		if rawLen > 10*1024*1024 {
+			return nil, 0, errors.New("frame payload exceeds 10MB limit")
+		}
+		payloadLen = int(rawLen)
 	}
 
-	if payloadLen > 10*1024*1024 { // Protect against unbounded memory
-		return nil, 0, errors.New("frame payload exceeds 10MB limit")
+	if payloadLen < 0 || payloadLen > 10*1024*1024 { // Protect against unbounded memory
+		return nil, 0, errors.New("invalid frame payload length")
 	}
 
 	var maskKey [4]byte
@@ -612,7 +753,7 @@ func readWSFrame(r io.Reader) ([]byte, byte, error) {
 	return buf, opcode, nil
 }
 
-// sendWSPong replies to a WebSocket ping frame.
+// sendWSPong replies to a WebSocket ping frame with bounded write timeout.
 func sendWSPong(w io.Writer, payload []byte) error {
 	var header []byte
 	n := len(payload)
@@ -631,6 +772,19 @@ func sendWSPong(w io.Writer, payload []byte) error {
 
 	packet := append(header, mask...)
 	packet = append(packet, maskedPayload...)
+	if c, ok := w.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		_ = c.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	}
 	_, err := w.Write(packet)
+	return err
+}
+
+// sendWSPing sends an active keepalive ping frame with bounded write timeout.
+func sendWSPing(w io.Writer) error {
+	pingFrame := []byte{0x89, 0x80, 0x12, 0x34, 0x56, 0x78}
+	if c, ok := w.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		_ = c.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	}
+	_, err := w.Write(pingFrame)
 	return err
 }

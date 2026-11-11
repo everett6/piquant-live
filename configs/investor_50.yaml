@@ -1,0 +1,83 @@
+# Investor Profile: $50 Micro-Capital 30-Day Evaluation
+# Tailored for institutional proof-of-concept testing with minimal downside risk.
+#
+# Key Risk Controls:
+# - Capital: $50.00 USDT
+# - Mode: Conservative cash account or 1.0x-1.5x conservative margin
+# - Clip Size: ~$10–$24 per clip (scaled dynamically by Fractional Kelly)
+# - Daily Drawdown Limit: 2.0% ($1.00 max daily loss kill switch)
+# - Target Monthly Return: 10%–15% (+$5.00 to +$7.50 / month)
+# - Minimum Notional: $6.00 floor ensures 100% compliance with Binance $5.00 rule
+
+engine:
+  mode: paper
+  name: piquant-investor-50
+  gomaxprocs: 4
+  gomemlimit_mib: 1024
+  gc_percent: 100
+  lock_threads: true
+  watchdog: true
+  watchdog_kick_ms: 500
+  ring_segments: 128
+  ring_slot_cap: 4096
+  max_tick_events_ps: 4000
+
+feed:
+  kind: live
+  venue: binance
+  durations: [100ms]
+  ws_url: ""
+
+symbols:
+  - name: BTC
+    venue_symbol: BTCUSDT
+    tick_size: 0.01
+    lot_size: 0.00001
+    start_mid: 0
+  - name: ETH
+    venue_symbol: ETHUSDT
+    tick_size: 0.01
+    lot_size: 0.0001
+    start_mid: 0
+  - name: SOL
+    venue_symbol: SOLUSDT
+    tick_size: 0.01
+    lot_size: 0.01
+    start_mid: 0
+
+targets:
+  BTC: [binance:BTCUSDT]
+  ETH: [binance:ETHUSDT]
+  SOL: [binance:SOLUSDT]
+
+pins:
+  ingest: 2
+  infer: 3
+  exec: 3
+  house: 0
+
+storage:
+  enabled: true
+  dir: ./data/events
+  flush_interval: 1s
+  max_file_mb: 32
+  keep_files: 32
+
+models:
+  enabled: true
+  max_features: 64
+  max_hidden: 32
+  path: ./data/models/model.json
+  buy_threshold: 0.65
+  sell_threshold: 0.35
+
+exec:
+  enabled: true
+  position_limit: 0.0006   # ~48 USDT at $80,000 BTC (strictly bounds exposure <= $50)
+  max_order_qty: 0.0003    # ~24 USDT per clip (48% allocation)
+  taker_fee_bps: 0         # Maker-only passive queue execution
+  maker_fee_bps: 0         # 0 bps maker tier eliminates fee friction
+  slippage_bps: 0          # Passive limit orders
+  daily_loss_limit: 1.00   # $1.00 daily loss kill switch (2.0% of $50)
+  stale_latency_ms: 1500
+  cooldown_ms: 500

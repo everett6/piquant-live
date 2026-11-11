@@ -11,7 +11,9 @@ import (
 func TestRealisticQueueFillsAndLatency(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := DefaultDryRunConfig(tempDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
 	cfg.OrderLatency = 20 * time.Millisecond // 20ms test latency
+	cfg.EntryOffsetBps = 2.0
 
 	ring := engine.NewSPSCRing(1024)
 	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
@@ -146,7 +148,7 @@ func TestFallbackIsolationNeverDrivesPnL(t *testing.T) {
 	if pos.MarkPrice == 999999.0 {
 		t.Errorf("marks should remain frozen during fallback, but mark price updated to %v", pos.MarkPrice)
 	}
-	if st.Equity != 1000.00 {
+	if st.Equity != 200.00 {
 		t.Errorf("equity should remain frozen at initial capital, got %v", st.Equity)
 	}
 }

@@ -114,6 +114,15 @@ func (b *Book) Apply(e *event.Envelope) bool {
 // a trustworthy book state (unsorted side, duplicate price, crossed touch); the
 // book then goes stale and waits for the next snapshot.
 func (b *Book) applySnapshot(s *event.SnapshotEvent) bool {
+	// Guard against corrupted or out-of-bounds level counts to prevent runtime slice panic
+	if int(s.NBids) > len(s.Bids) || int(s.NAsks) > len(s.Asks) {
+		b.LastSeq = s.Sequence
+		b.Status = StatusStale
+		b.Ready = false
+		b.Gaps++
+		return false
+	}
+
 	// Validate into scratch arrays first, then commit, so a rejected snapshot
 	// leaves the previous book (and its last good sequence) in place rather
 	// than replacing it with a half-built side.
@@ -196,6 +205,11 @@ func (b *Book) applyDepth(d *event.DepthEvent) bool {
 	case event.SideSell:
 		side = Asks
 	default:
+		b.fail(d.Sequence)
+		return false
+	}
+	// Guard against corrupted or out-of-bounds update counts to prevent runtime slice panic
+	if int(d.NUpdates) > len(d.Updates) {
 		b.fail(d.Sequence)
 		return false
 	}

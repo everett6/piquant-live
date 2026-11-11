@@ -72,6 +72,32 @@ func TestFundingCarryModelPredict(t *testing.T) {
 	}
 }
 
+func TestFundingCarryTracker_NaNSafety(t *testing.T) {
+	tr := NewFundingCarryTracker(0.10, 0.0001)
+	tr.UpdatePrices(50000.0, 50000.0, 1000)
+
+	// Inject NaNs and Infs
+	fNaN1 := tr.UpdatePrices(math.NaN(), 50000.0, 2000)
+	if math.IsNaN(fNaN1) || math.IsNaN(tr.PredictedFunding) {
+		t.Fatalf("UpdatePrices allowed NaN perp price to poison state: %f", fNaN1)
+	}
+
+	fNaN2 := tr.UpdatePrices(50000.0, math.NaN(), 3000)
+	if math.IsNaN(fNaN2) || math.IsNaN(tr.PredictedFunding) {
+		t.Fatalf("UpdatePrices allowed NaN spot price to poison state: %f", fNaN2)
+	}
+
+	fInf := tr.UpdatePrices(math.Inf(1), 50000.0, 4000)
+	if math.IsInf(fInf, 0) || math.IsInf(tr.PredictedFunding, 0) {
+		t.Fatalf("UpdatePrices allowed Inf perp price to poison state: %f", fInf)
+	}
+
+	apr := tr.AnnualizedAPR()
+	if math.IsNaN(apr) || math.IsInf(apr, 0) {
+		t.Fatalf("invalid APR after NaN attempts: %f", apr)
+	}
+}
+
 func BenchmarkFundingCarryUpdatePrices(b *testing.B) {
 	tr := NewFundingCarryTracker(0.05, 0.0001)
 	b.ResetTimer()

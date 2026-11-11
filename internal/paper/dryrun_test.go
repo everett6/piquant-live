@@ -3,11 +3,16 @@ package paper
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"math"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"piquant-live/internal/engine"
+	"piquant-live/internal/marketdata"
 	"piquant-live/internal/models/common"
 )
 
@@ -32,11 +37,11 @@ func TestDryRunEngineLifecycleAndCheckpoint(t *testing.T) {
 
 	// Verify initial state
 	st := dryRun.State()
-	if st.InitialCapital != 1000.00 {
-		t.Errorf("expected initial capital 1,000, got %v", st.InitialCapital)
+	if st.InitialCapital != 200.00 {
+		t.Errorf("expected initial capital 200, got %v", st.InitialCapital)
 	}
-	if st.Equity != 1000.00 {
-		t.Errorf("expected equity 1,000, got %v", st.Equity)
+	if st.Equity != 200.00 {
+		t.Errorf("expected equity 200, got %v", st.Equity)
 	}
 	if st.DaysElapsed < 1 || st.DaysElapsed > 14 {
 		t.Errorf("expected days elapsed in [1, 14], got %v", st.DaysElapsed)
@@ -359,6 +364,208 @@ func TestTwelveHourShutdownRecovery(t *testing.T) {
 	}
 }
 
+func TestFuturesMarginFillAccounting(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.InitialCapital = 200.00
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	dryRun.mu.Lock()
+	// Open long 0.19 ETH @ $2238.89 (Notional ~$425.39 on $200 capital)
+	dryRun.executeMakerFillLocked("ETHUSDT", 2238.89, 0.19, "BUY", 1.5, "glft")
+	st := dryRun.state
+	dryRun.mu.Unlock()
+
+	// Cash should be initial capital minus 0 fee = 200.00 (NOT -$225!)
+	if st.Cash < 199.0 || st.Cash > 201.0 {
+		t.Errorf("Cash should remain ~200.00 on margin buy, got %.2f", st.Cash)
+	}
+
+	// Update mark tick at entry price
+	dryRun.processMarketEvent(&engine.MarketEvent{
+		SymbolID: 1,
+		Price:    2238.89,
+	})
+	st2 := dryRun.State()
+	if st2.Equity < 199.0 || st2.Equity > 201.0 {
+		t.Errorf("Equity should remain ~200.00 at entry price, got %.2f", st2.Equity)
+	}
+	if st2.CircuitHalted {
+		t.Errorf("Circuit breaker should NOT trip on leveraged open!")
+	}
+}
+
+func TestMultiAssetMicrostructureIsolationAndClipSizing(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.InitialCapital = 200.00
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	// Populate BTC ($500k L5 depth) and ETH ($60k L5 depth) L2 books
+	stream.booksMu.Lock()
+	btcBook := &marketdata.L2OrderBook{
+		NumBids: 5,
+		NumAsks: 5,
+	}
+	ethBook := &marketdata.L2OrderBook{
+		NumBids: 5,
+		NumAsks: 5,
+	}
+	for i := 0; i < 5; i++ {
+		btcBook.Bids[i] = marketdata.PriceLevel{Price: 71800.0 - float64(i), Size: 0.70}   // ~$250k bid side
+		btcBook.Asks[i] = marketdata.PriceLevel{Price: 71801.0 + float64(i), Size: 0.70}   // ~$250k ask side
+		ethBook.Bids[i] = marketdata.PriceLevel{Price: 2238.0 - float64(i)*0.1, Size: 2.5} // ~$28k bid side
+		ethBook.Asks[i] = marketdata.PriceLevel{Price: 2238.2 + float64(i)*0.1, Size: 2.5} // ~$28k ask side
+	}
+	stream.books["BTCUSDT"] = btcBook
+	stream.books["ETHUSDT"] = ethBook
+	stream.booksMu.Unlock()
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	// Alternate BTC and ETH depth ticks within 5ms (previously triggered false depth_collapse_80pct)
+	now := time.Now().UnixNano()
+	for i := 0; i < 20; i++ {
+		dryRun.processMarketEvent(&engine.MarketEvent{
+			Timestamp: now + int64(i)*1_000_000,
+			SymbolID:  0, // BTCUSDT
+			Kind:      1, // Depth
+			Price:     71800.5,
+		})
+		dryRun.processMarketEvent(&engine.MarketEvent{
+			Timestamp: now + int64(i)*1_000_000 + 500_000,
+			SymbolID:  1, // ETHUSDT
+			Kind:      1, // Depth
+			Price:     2238.1,
+		})
+	}
+
+	st := dryRun.State()
+	if st.CircuitHalted {
+		t.Fatalf("Multi-asset BTC/ETH depth alternation must NOT trip CircuitHalted, got reason: %s", st.CircuitHaltReason)
+	}
+
+	clipBTC, maxBTC := dryRun.leverageCtrl.ComputeClipSizeForSymbol("BTCUSDT", 200.0, 2.5, 71800.5, 2)
+	if clipBTC <= 0 || maxBTC <= clipBTC {
+		t.Errorf("Expected valid clip and max inventory for BTCUSDT, got clip=%f max=%f", clipBTC, maxBTC)
+	}
+}
+
+func TestQuantBugFixesVerification(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.MakerFeeBps = 1.5
+	cfg.TakerFeeBps = 4.0
+	cfg.InitialCapital = 200.00
+	cfg.StateFile = filepath.Join(tempDir, "state.json")
+
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	// 1. Verify Entry and Exit fills with net-of-fee profitability
+	// BUY 0.001 BTC at 50,000.00 (maker)
+	dryRun.mu.Lock()
+	dryRun.executeMakerFillLocked("BTCUSDT", 50000.00, 0.001, "BUY", 1.95, "GLFT_Maker")
+	pos := dryRun.state.Positions["BTCUSDT"]
+	if pos.Size != 0.001 {
+		t.Fatalf("expected pos size 0.001, got %f", pos.Size)
+	}
+	if pos.AvgEntryPrice != 50000.00 {
+		t.Fatalf("expected avg entry 50000, got %f", pos.AvgEntryPrice)
+	}
+	// Initial open trade fee: 50 * 0.00015 = 0.0075 USDT
+	openCash := dryRun.state.Cash
+	if math.Abs(openCash-(200.00-0.0075)) > 1e-4 {
+		t.Errorf("expected cash after open fee %f, got %f", 200.00-0.0075, openCash)
+	}
+
+	// SELL 0.001 BTC at 50,020.00 (maker) -> fully closing inventory
+	// Gross profit: (50020 - 50000) * 0.001 = +0.0200 USDT
+	// Exit fee: 50.02 * 0.00015 = 0.007503 USDT
+	// Net round-trip PnL: 0.0200 - 0.0075 - 0.007503 = +0.004997 USDT
+	dryRun.executeMakerFillLocked("BTCUSDT", 50020.00, 0.001, "SELL", 1.95, "GLFT_Maker")
+	if pos.Size != 0.0 {
+		t.Errorf("expected pos size 0.0 after full close, got %f", pos.Size)
+	}
+	if pos.AvgEntryPrice != 0.0 {
+		t.Errorf("expected avg entry price reset to 0.0 on zero size, got %f", pos.AvgEntryPrice)
+	}
+	if dryRun.state.WinningTrades != 1 || dryRun.state.LosingTrades != 0 {
+		t.Errorf("expected 1 win 0 loss, got wins=%d losses=%d", dryRun.state.WinningTrades, dryRun.state.LosingTrades)
+	}
+	if dryRun.state.WinRate != 100.0 {
+		t.Errorf("expected 100%% win rate, got %f", dryRun.state.WinRate)
+	}
+	dryRun.mu.Unlock()
+
+	// 2. Verify optimal_params.json gamma hot-reloading
+	configDir := filepath.Join(tempDir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	optPath := filepath.Join(configDir, "optimal_params.json")
+	optJSON := `{"gamma": 0.0005, "min_half_spread_bps": 1.25, "clip_fraction": 0.25, "base_leverage": 2.0, "max_leverage_cap": 4.0}`
+	if err := os.WriteFile(optPath, []byte(optJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dryRun.maybeReloadCloudParams()
+	if dryRun.glftMM.Gamma != 0.0005 {
+		t.Errorf("expected reloaded gamma 0.0005, got %f", dryRun.glftMM.Gamma)
+	}
+	if dryRun.minHalfSpreadFloorBps != 1.25 {
+		t.Errorf("expected reloaded minHalfSpreadFloorBps 1.25, got %f", dryRun.minHalfSpreadFloorBps)
+	}
+
+	// 3. Verify state recovery from append-only journal when state.json is wiped
+	journalPath := filepath.Join(tempDir, "journal.jsonl")
+	jLines := `{"timestamp":"2026-11-08T10:00:00Z","symbol":"BTCUSDT","side":"BUY","role":"MAKER","price":50000.0,"size":0.001,"value_usdt":50.0,"fee_usdt":0.0075,"pnl_realized":-0.0075}
+{"timestamp":"2026-11-08T10:01:00Z","symbol":"BTCUSDT","side":"SELL","role":"MAKER","price":50020.0,"size":0.001,"value_usdt":50.02,"fee_usdt":0.007503,"pnl_realized":0.012497}
+`
+	if err := os.WriteFile(journalPath, []byte(jLines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wipe state file so engine must recover from journal
+	_ = os.Remove(cfg.StateFile)
+	cfg.JournalFile = journalPath
+
+	dryRun2, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create recovered engine: %v", err)
+	}
+
+	st := dryRun2.State()
+	if st.TotalTrades != 2 {
+		t.Errorf("expected 2 recovered trades from journal, got %d", st.TotalTrades)
+	}
+	if st.WinningTrades != 1 {
+		t.Errorf("expected 1 winning trade from journal, got %d", st.WinningTrades)
+	}
+	if st.Positions["BTCUSDT"].Size != 0.0 {
+		t.Errorf("expected flat position after round trip, got %f", st.Positions["BTCUSDT"].Size)
+	}
+	expectedNetCash := 200.00 - 0.0075 + 0.012497
+	if math.Abs(st.Cash-expectedNetCash) > 1e-4 {
+		t.Errorf("expected cash %f, got %f", expectedNetCash, st.Cash)
+	}
+}
+
 func BenchmarkProcessMarketEvent(b *testing.B) {
 	tempDir := b.TempDir()
 	cfg := DefaultDryRunConfig(tempDir)
@@ -386,5 +593,1021 @@ func BenchmarkProcessMarketEvent(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ev.Sequence = uint64(i)
 		dryRun.processMarketEvent(&ev)
+	}
+}
+
+func TestMacroGuardianEventHaltAndSpreadScaling(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.EnableMacroShield = true
+
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	engine, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	// 1. Test during active high-impact FOMC event (2026-11-05 19:00:00 UTC)
+	// Event Halt phase: T - 2m to T + 5m -> quotes MUST be pulled, AllowQuoting = false
+	fomcTime := time.Date(2026, 11, 5, 19, 0, 0, 0, time.UTC)
+	engine.evaluateQuotesAndGating("BTCUSDT", 75000.0, fomcTime)
+
+	st := engine.State()
+	if st.Macro.PhaseName != "EVENT_HALT" {
+		t.Errorf("expected phase EVENT_HALT during FOMC release, got %s", st.Macro.PhaseName)
+	}
+	if st.Macro.AllowQuoting {
+		t.Errorf("expected AllowQuoting=false during EVENT_HALT, got true")
+	}
+	if len(st.ActiveOrders["BTCUSDT"]) > 0 {
+		t.Errorf("expected zero active resting orders during EVENT_HALT, got %d", len(st.ActiveOrders["BTCUSDT"]))
+	}
+	if !st.QuotingPaused {
+		t.Errorf("expected QuotingPaused=true during EVENT_HALT")
+	}
+
+	// 2. Test during Pre-Event Defense (T - 10m before FOMC)
+	preEventTime := time.Date(2026, 11, 5, 18, 50, 0, 0, time.UTC)
+	engine.evaluateQuotesAndGating("BTCUSDT", 75000.0, preEventTime)
+
+	stPre := engine.State()
+	if stPre.Macro.PhaseName != "PRE_EVENT_DEFENSE" {
+		t.Errorf("expected phase PRE_EVENT_DEFENSE, got %s", stPre.Macro.PhaseName)
+	}
+	if !stPre.Macro.AllowQuoting {
+		t.Errorf("expected AllowQuoting=true in pre-event defense")
+	}
+	if stPre.Macro.SpreadMultiplier != 2.5 {
+		t.Errorf("expected spread multiplier 2.5x, got %f", stPre.Macro.SpreadMultiplier)
+	}
+	if stPre.Macro.LeverageMultiplier != 0.50 {
+		t.Errorf("expected leverage multiplier 0.50x, got %f", stPre.Macro.LeverageMultiplier)
+	}
+
+	// 3. Test during Nominal Conditions (> 15m away, e.g. 2 hours before)
+	nominalTime := time.Date(2026, 11, 5, 17, 0, 0, 0, time.UTC)
+	engine.evaluateQuotesAndGating("BTCUSDT", 75000.0, nominalTime)
+
+	stNom := engine.State()
+	if stNom.Macro.PhaseName != "NOMINAL" {
+		t.Errorf("expected phase NOMINAL, got %s", stNom.Macro.PhaseName)
+	}
+	if !stNom.Macro.AllowQuoting {
+		t.Errorf("expected AllowQuoting=true in nominal phase")
+	}
+	if stNom.Macro.SpreadMultiplier != 1.0 {
+		t.Errorf("expected spread multiplier 1.0x, got %f", stNom.Macro.SpreadMultiplier)
+	}
+}
+
+func TestBreakevenFloorAndProfitLockingRatchet(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.MakerFeeBps = 1.5 // 3.0 bps round trip
+
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	engine, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	// 1. Manually establish a LONG position in ETHUSDT at $2230.00
+	engine.mu.Lock()
+	engine.state.Positions["ETHUSDT"] = &Position{
+		Symbol:        "ETHUSDT",
+		Size:          0.020,
+		AvgEntryPrice: 2230.00,
+		MarkPrice:     2230.00,
+	}
+	engine.mu.Unlock()
+
+	// 2. Evaluate quotes when midPrice drops slightly to $2229.50 (normal 2 bps noise against position)
+	now := time.Now()
+	engine.evaluateQuotesAndGating("ETHUSDT", 2229.50, now)
+
+	st := engine.State()
+	orders := st.ActiveOrders["ETHUSDT"]
+	var sellOrd *ActiveMakerOrder
+	for _, o := range orders {
+		if o.Side == "SELL" {
+			sellOrd = &o
+			break
+		}
+	}
+	if sellOrd == nil {
+		t.Fatalf("expected active SELL order for ETHUSDT")
+	}
+
+	// Min profit ask = 2230.00 * (1.0 + (3.0 + 12.5)*1e-4) = 2233.456 -> rounded up to 2233.46
+	minExpectedAsk := 2233.45
+	if sellOrd.Price < minExpectedAsk {
+		t.Errorf("expected sell order price >= %f (breakeven floor), got %f", minExpectedAsk, sellOrd.Price)
+	}
+
+	// 3. Test Profit-Locking: midPrice surges to $2240.00 (> 2230 + 15.5 bps profit threshold)
+	engine.evaluateQuotesAndGating("ETHUSDT", 2240.00, now)
+	stSurge := engine.State()
+	var surgeSell *ActiveMakerOrder
+	for _, o := range stSurge.ActiveOrders["ETHUSDT"] {
+		if o.Side == "SELL" {
+			surgeSell = &o
+			break
+		}
+	}
+	if surgeSell == nil {
+		t.Fatalf("expected active SELL order during surge")
+	}
+	if surgeSell.Price < 2233.45 {
+		t.Errorf("expected surge sell price >= 2233.45, got %f", surgeSell.Price)
+	}
+}
+
+func TestUnconditionalExitQuotingAndFullPositionSizing(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	engine, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	// 1. Establish an open LONG position of 0.035 ETH (larger than standard clip)
+	targetLongQty := 0.035
+	engine.mu.Lock()
+	engine.state.Positions["ETHUSDT"] = &Position{
+		Symbol:        "ETHUSDT",
+		Size:          targetLongQty,
+		AvgEntryPrice: 2230.00,
+		MarkPrice:     2230.00,
+	}
+	engine.mu.Unlock()
+
+	now := time.Now()
+	engine.evaluateQuotesAndGating("ETHUSDT", 2230.00, now)
+
+	st := engine.State()
+	var exitSellOrd *ActiveMakerOrder
+	for _, o := range st.ActiveOrders["ETHUSDT"] {
+		if o.Side == "SELL" {
+			exitSellOrd = &o
+			break
+		}
+	}
+	if exitSellOrd == nil {
+		t.Fatalf("expected active SELL exit order for open long position")
+	}
+	if math.Abs(exitSellOrd.Size-targetLongQty) > 1e-6 {
+		t.Errorf("expected exit SELL order size to match full open inventory (%f), got %f", targetLongQty, exitSellOrd.Size)
+	}
+
+	// 2. Establish an open SHORT position of -0.0045 BTC
+	targetShortQty := 0.0045
+	engine.mu.Lock()
+	engine.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          -targetShortQty,
+		AvgEntryPrice: 76000.00,
+		MarkPrice:     76000.00,
+	}
+	engine.mu.Unlock()
+
+	engine.evaluateQuotesAndGating("BTCUSDT", 76000.00, now)
+
+	stBTC := engine.State()
+	var exitBuyOrd *ActiveMakerOrder
+	for _, o := range stBTC.ActiveOrders["BTCUSDT"] {
+		if o.Side == "BUY" {
+			exitBuyOrd = &o
+			break
+		}
+	}
+	if exitBuyOrd == nil {
+		t.Fatalf("expected active BUY exit order for open short position")
+	}
+	if math.Abs(exitBuyOrd.Size-targetShortQty) > 1e-6 {
+		t.Errorf("expected exit BUY order size to match full open short inventory (%f), got %f", targetShortQty, exitBuyOrd.Size)
+	}
+}
+
+func TestCleanResetPurgesLegacyStats(t *testing.T) {
+	tempDir := t.TempDir()
+	paperDir := filepath.Join(tempDir, "paper")
+	_ = os.MkdirAll(paperDir, 0o755)
+
+	statePath := filepath.Join(paperDir, "dryrun_state.json")
+	journalPath := filepath.Join(paperDir, "dryrun_journal.jsonl")
+
+	// Write mock contaminated legacy state
+	mockState := DryRunState{
+		WinningTrades:  4,
+		LosingTrades:   106,
+		TotalTrades:    110,
+		WinRate:        3.636,
+		RealizedPnL:    -3.50,
+		InitialCapital: 200.0,
+		Equity:         196.50,
+		Cash:           196.50,
+		PeakEquity:     200.0,
+		MaxDrawdownPct: 1.75,
+		Positions: map[string]*Position{
+			"BTCUSDT": {Symbol: "BTCUSDT", Size: 0.001, AvgEntryPrice: 75000},
+		},
+	}
+	raw, _ := json.Marshal(mockState)
+	_ = os.WriteFile(statePath, raw, 0o644)
+	_ = os.WriteFile(journalPath, []byte("{\"fill\":\"legacy\"}\n"), 0o644)
+
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.CleanReset = true
+	ring := engine.NewSPSCRing(128)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine with CleanReset: %v", err)
+	}
+
+	st := dryRun.State()
+	if st.TotalTrades != 0 || st.WinningTrades != 0 || st.LosingTrades != 0 {
+		t.Errorf("expected trade counts to be 0, got Total=%d, Win=%d, Loss=%d", st.TotalTrades, st.WinningTrades, st.LosingTrades)
+	}
+	if st.WinRate != 100.0 {
+		t.Errorf("expected WinRate 100.0, got %f", st.WinRate)
+	}
+	if st.RealizedPnL != 0.0 {
+		t.Errorf("expected RealizedPnL 0.0, got %f", st.RealizedPnL)
+	}
+	if st.Cash != 200.0 || st.Equity != 200.0 {
+		t.Errorf("expected Cash and Equity 200.0, got Cash=%f, Equity=%f", st.Cash, st.Equity)
+	}
+	if len(st.Positions) != 0 {
+		t.Errorf("expected Positions to be empty after CleanReset, got %d positions", len(st.Positions))
+	}
+	if _, err := os.Stat(journalPath + ".legacy"); err != nil {
+		t.Errorf("expected legacy journal backup file to exist: %v", err)
+	}
+}
+
+func TestAdaptiveMicrostructureFormulasAndProfitDecayRatchet(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.OrderLatency = 5 * time.Millisecond // low-latency (HFT) regime: entry offsets use the 1.0x profile
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
+	cfg.EntryOffsetBps = 7.5
+	cfg.TargetProfitBps = 12.5
+
+	ring := engine.NewSPSCRing(128)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+	engine, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	now := time.Now()
+	// Converge the latency EWMA into the low-latency (HFT) regime so offsets use the 1.0x profile
+	for i := 0; i < 60; i++ {
+		engine.quantOrch.RecordLatencyUpdate(5*time.Millisecond, 0, now)
+	}
+
+	// 1. Test Volatility-Adaptive Entry Offset:
+	// BTC should receive 0.90x tighter spread, ETH should receive 1.15x wider spread
+	engine.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
+	engine.evaluateQuotesAndGating("ETHUSDT", 2200.00, now)
+
+	st := engine.State()
+	btcOrders := st.ActiveOrders["BTCUSDT"]
+	ethOrders := st.ActiveOrders["ETHUSDT"]
+
+	if len(btcOrders) < 2 || len(ethOrders) < 2 {
+		t.Fatalf("expected active 2-sided quotes for BTC and ETH")
+	}
+
+	// BTC expected entry spread: 7.5 * 0.90 = 6.75 bps
+	// BTC Bid = 75000 * (1 - 6.75*1e-4) = 74949.375 -> floor to 74949.37
+	var btcBid *ActiveMakerOrder
+	for _, o := range btcOrders {
+		if o.Side == "BUY" {
+			btcBid = &o
+			break
+		}
+	}
+	if btcBid == nil {
+		t.Fatalf("missing BTC bid")
+	}
+	expectedBtcBid := 75000.00 * (1.0 - 6.75*1e-4)
+	if math.Abs(btcBid.Price-expectedBtcBid) > 1.0 {
+		t.Errorf("expected BTC bid ~%f (6.75 bps), got %f", expectedBtcBid, btcBid.Price)
+	}
+
+	// ETH expected entry spread: 7.5 * 1.15 = 8.625 bps
+	// ETH Bid = 2200 * (1 - 8.625*1e-4) = 2198.1025 -> floor to 2198.10
+	var ethBid *ActiveMakerOrder
+	for _, o := range ethOrders {
+		if o.Side == "BUY" {
+			ethBid = &o
+			break
+		}
+	}
+	if ethBid == nil {
+		t.Fatalf("missing ETH bid")
+	}
+	expectedEthBid := 2200.00 * (1.0 - 8.625*1e-4)
+	if math.Abs(ethBid.Price-expectedEthBid) > 0.10 {
+		t.Errorf("expected ETH bid ~%f (8.625 bps), got %f", expectedEthBid, ethBid.Price)
+	}
+
+	// 2. Test Dynamic Profit Decay Ratchet:
+	// Establish LONG ETH position at $2200.00
+	engine.mu.Lock()
+	engine.state.Positions["ETHUSDT"] = &Position{
+		Symbol:        "ETHUSDT",
+		Size:          0.020,
+		AvgEntryPrice: 2200.00,
+		MarkPrice:     2200.00,
+	}
+	sm := engine.symMicro["ETHUSDT"]
+	sm.InventorySince = now.Add(-1800 * time.Second) // 30 minutes of holding
+	engine.mu.Unlock()
+
+	// Evaluate after 30m of holding:
+	// decayFactor = exp(-1800 / 900) = exp(-2) ≈ 0.1353
+	// floor = 0.80 * 12.5 = 10.0 bps (TargetFloorFrac); targetProfit = 10 + 2.5 * 0.1353 ≈ 10.34 bps net
+	// minProfitAsk = 2200 * (1 + (3.0 + 10.34)*1e-4) ≈ 2202.93
+	engine.evaluateQuotesAndGating("ETHUSDT", 2200.00, now)
+	stDecay := engine.State()
+	var exitAsk *ActiveMakerOrder
+	for _, o := range stDecay.ActiveOrders["ETHUSDT"] {
+		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
+			exitAsk = &o
+			break
+		}
+	}
+	if exitAsk == nil {
+		t.Fatalf("missing ETH exit ask after 30m holding")
+	}
+
+	// Net edge must be >= the 10.0 bps floor and have decayed well below the 12.5 bps base target
+	netEdgeBps := (exitAsk.Price-2200.00)/2200.00*1e4 - 3.0 // subtracting 3.0 bps fee
+	if netEdgeBps < 10.0 {
+		t.Errorf("expected net edge >= 10.0 bps floor, got %f", netEdgeBps)
+	}
+	if netEdgeBps > 11.0 {
+		t.Errorf("expected net edge to have decayed towards floor (< 11.0 bps), got %f", netEdgeBps)
+	}
+}
+
+func TestSelfImprovingScalpingDefenseAndRecalibration(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
+	cfg.EntryOffsetBps = 7.5
+	cfg.TargetProfitBps = 12.5
+
+	ring := engine.NewSPSCRing(128)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+	engine, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	recalibratedCh := make(chan string, 1)
+	engine.SetAutonomousRecalibrator(func(ctx context.Context, symbol string, currentCapital float64, dataDir string) error {
+		// Mock backtest recalibration: write optimal_params.json
+		optConfig := map[string]any{
+			"symbol":              symbol,
+			"gamma":               0.0025,
+			"min_half_spread_bps": 3.50,
+			"clip_fraction":       0.15,
+			"base_leverage":       1.50,
+			"max_leverage_cap":    2.50,
+		}
+		raw, _ := json.Marshal(optConfig)
+		_ = os.WriteFile(filepath.Join(tempDir, "optimal_params.json"), raw, 0644)
+		recalibratedCh <- symbol
+		return nil
+	})
+
+	now := time.Now()
+
+	// 1. Initial State: Scalping should be active, normal tight spread
+	sm := engine.symMicro["BTCUSDT"]
+	if sm.ScalpingDisabled {
+		t.Errorf("expected scalping to be enabled initially")
+	}
+
+	// 2. Simulate 3 consecutive closing losses to trigger money leakage defense
+	engine.mu.Lock()
+	engine.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          0.001,
+		AvgEntryPrice: 75000.00,
+		MarkPrice:     74950.00,
+	}
+	// Execute closing sell at a loss
+	engine.executeMakerFillLocked("BTCUSDT", 74900.00, 0.001, "SELL", 5.0, "TEST")
+
+	engine.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          0.001,
+		AvgEntryPrice: 75000.00,
+		MarkPrice:     74950.00,
+	}
+	engine.executeMakerFillLocked("BTCUSDT", 74900.00, 0.001, "SELL", 5.0, "TEST")
+
+	engine.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          0.001,
+		AvgEntryPrice: 75000.00,
+		MarkPrice:     74950.00,
+	}
+	engine.executeMakerFillLocked("BTCUSDT", 74900.00, 0.001, "SELL", 5.0, "TEST")
+	engine.mu.Unlock()
+
+	// 3. Verify Scalping is now DISABLED
+	if !sm.ScalpingDisabled {
+		t.Fatalf("expected scalping to be disabled after 3 consecutive losses, but got false")
+	}
+	if sm.ConsecutiveLosses != 3 {
+		t.Errorf("expected 3 consecutive losses, got %d", sm.ConsecutiveLosses)
+	}
+
+	// 4. Verify quotes are widened to Patient Swing mode (>= 18.0 bps)
+	engine.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
+	st := engine.State()
+	orders := st.ActiveOrders["BTCUSDT"]
+	if len(orders) == 0 {
+		t.Fatalf("expected resting orders for BTCUSDT")
+	}
+	for _, o := range orders {
+		offsetBps := math.Abs(o.Price-75000.00) / 75000.00 * 1e4
+		if offsetBps < 17.9 {
+			t.Errorf("expected patient swing spread >= 18.0 bps when scalping disabled, got %.2f bps", offsetBps)
+		}
+	}
+
+	// 5. Verify autonomous recalibrator was triggered and hot-reloads new parameters
+	select {
+	case sym := <-recalibratedCh:
+		if sym != "BTCUSDT" {
+			t.Errorf("expected recalibration for BTCUSDT, got %s", sym)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for autonomous recalibration to be triggered")
+	}
+
+	// Wait briefly for hot reload
+	time.Sleep(100 * time.Millisecond)
+	engine.maybeReloadCloudParams()
+
+	if engine.minHalfSpreadFloorBps != 3.50 {
+		t.Errorf("expected hot-reloaded minHalfSpreadFloorBps 3.50, got %.2f", engine.minHalfSpreadFloorBps)
+	}
+
+	// 6. Test Extreme Leakage Guard (ConsecutiveLosses >= 4): opening entries must be completely halted!
+	sm.ConsecutiveLosses = 4
+	engine.evaluateQuotesAndGating("BTCUSDT", 75000.00, now.Add(time.Second))
+	stHalt := engine.State()
+	activeOrders := stHalt.ActiveOrders["BTCUSDT"]
+	// Should contain no new opening quotes (only canceling existing)
+	var activeOpen int
+	for _, o := range activeOrders {
+		if o.CancelingUntil.IsZero() {
+			activeOpen++
+		}
+	}
+	if activeOpen > 0 {
+		t.Errorf("expected 0 active opening quotes when ConsecutiveLosses >= 4, got %d", activeOpen)
+	}
+}
+
+func TestCoinbaseLeadLagOracleIntegrationInDryRun(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	cbOracle := NewCoinbaseSignalOracle([]string{"BTCUSDT"})
+	dryRun.SetCoinbaseOracle(cbOracle)
+
+	now := time.Now()
+
+	// 1. Initial State: Coinbase is aligned with Binance at 75000.00
+	cbOracle.UpdateTick("BTCUSDT", 75000.00, 74999.00, 75001.00, 0.5, true, now.Add(-1*time.Second))
+	dryRun.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
+
+	st1 := dryRun.State()
+	if st1.Coinbase == nil {
+		t.Fatalf("expected Coinbase signal state in dry run snapshot")
+	}
+	if btcSig := st1.Coinbase.Symbols["BTCUSDT"]; btcSig == nil || btcSig.CoinbasePrice != 75000.00 {
+		t.Errorf("expected btcSig with 75000.00, got %+v", btcSig)
+	}
+
+	// 2. Simulate US Institutional Bullish Surge on Coinbase:
+	// Coinbase leaps from 75000 to 75040 (+5.3 bps basis surge) with high positive velocity
+	cbOracle.UpdateTick("BTCUSDT", 75040.00, 75039.00, 75041.00, 2.0, true, now.Add(200*time.Millisecond))
+
+	// Binance mid price is still 75000.00
+	dryRun.evaluateQuotesAndGating("BTCUSDT", 75000.00, now.Add(250*time.Millisecond))
+	st2 := dryRun.State()
+	btcSig2 := st2.Coinbase.Symbols["BTCUSDT"]
+	if btcSig2 == nil {
+		t.Fatalf("expected btcSig2 in snapshot")
+	}
+	if btcSig2.BasisBps <= 0 {
+		t.Errorf("expected positive BasisBps on Coinbase surge, got %f", btcSig2.BasisBps)
+	}
+	if !btcSig2.IsAdverseAsk {
+		t.Errorf("expected IsAdverseAsk true during strong Coinbase upward surge, got false")
+	}
+
+	// Resting sell opening orders must be canceled or barred from placement during adverse ask surge!
+	orders := st2.ActiveOrders["BTCUSDT"]
+	for _, o := range orders {
+		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
+			t.Errorf("expected active SELL opening quote to be canceled or absent when IsAdverseAsk is true")
+		}
+	}
+}
+
+func TestUSDCMarketMakingAndVolatilityAdaptiveQuoting(t *testing.T) {
+	// 1. Verify tick sizes for USDC pairs
+	if tick := symbolTickSize("BTCUSDC"); tick != 0.10 {
+		t.Errorf("expected BTCUSDC tick size 0.10, got %f", tick)
+	}
+	if tick := symbolTickSize("ETHUSDC"); tick != 0.01 {
+		t.Errorf("expected ETHUSDC tick size 0.01, got %f", tick)
+	}
+	if tick := symbolTickSize("SOLUSDC"); tick != 0.01 {
+		t.Errorf("expected SOLUSDC tick size 0.01, got %f", tick)
+	}
+
+	// 2. Verify dynamic Binance stream URL builder for USDC pairs
+	streamURL := BuildBinanceStreamURL([]string{"BTCUSDC", "ETHUSDC"})
+	if !strings.Contains(streamURL, "btcusdc@depth20@100ms") || !strings.Contains(streamURL, "ethusdc@trade") {
+		t.Errorf("expected USDC streams in URL, got %s", streamURL)
+	}
+
+	// 3. Test USDC market making quote placement with volatility adaptation
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
+	cfg.Symbols = []string{"BTCUSDC", "ETHUSDC"}
+	cfg.EntryOffsetBps = 7.5
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	cbOracle := NewCoinbaseSignalOracle([]string{"BTCUSDC"})
+	dryRun.SetCoinbaseOracle(cbOracle)
+
+	now := time.Now()
+	cbOracle.UpdateTick("BTCUSDT", 75000.00, 74999.00, 75001.00, 1.0, true, now)
+
+	// Simulate high volatility variance on BTCUSDC (0.80 VolVarBps vs 0.40 baseline)
+	sm := dryRun.symMicro["BTCUSDC"]
+	sm.VolVarBps = 0.80
+
+	dryRun.evaluateQuotesAndGating("BTCUSDC", 75000.00, now)
+
+	st := dryRun.State()
+	orders := st.ActiveOrders["BTCUSDC"]
+	if len(orders) == 0 {
+		t.Fatalf("expected active orders for BTCUSDC")
+	}
+
+	for _, o := range orders {
+		offsetBps := math.Abs(o.Price-75000.00) / 75000.00 * 1e4
+		// In USDC with 0.80 vol: effectiveEntry = 7.5 * 0.90 * 1.25 * sqrt(0.80/0.40) ≈ 11.9 bps
+		if offsetBps < 10.0 {
+			t.Errorf("expected wide volatility-adaptive quote offset >= 10.0 bps for volatile USDC pair, got %.2f bps", offsetBps)
+		}
+	}
+
+	// 4. Test accelerated inventory dampening under volatility spike
+	dryRun.mu.Lock()
+	dryRun.state.Positions["BTCUSDC"] = &Position{
+		Symbol:        "BTCUSDC",
+		Size:          0.001,
+		AvgEntryPrice: 75000.00,
+		MarkPrice:     75000.00,
+	}
+	dryRun.mu.Unlock()
+
+	dryRun.evaluateQuotesAndGating("BTCUSDC", 75000.00, now.Add(time.Second))
+	stInv := dryRun.State()
+	invOrders := stInv.ActiveOrders["BTCUSDC"]
+	var sellQuote *ActiveMakerOrder
+	for _, o := range invOrders {
+		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
+			sellQuote = &o
+			break
+		}
+	}
+	if sellQuote == nil {
+		t.Fatalf("expected resting inventory closing SELL quote for BTCUSDC")
+	}
+	// Holding long inventory: sell order size must match open inventory (0.001) to return to cash
+	if math.Abs(sellQuote.Size-0.001) > 1e-6 {
+		t.Errorf("expected inventory exit size 0.001, got %f", sellQuote.Size)
+	}
+}
+
+func TestAgileZeroFeeMakerQuotingAndTrailingProfitRatchet(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
+	cfg.ZeroFeeMaker = true
+	cfg.SpotOnly = true
+	cfg.EntryOffsetBps = 1.75
+	cfg.TargetProfitBps = 14.0
+	cfg.ClipFraction = 0.45
+	cfg.Symbols = []string{"BTCUSDT", "ETHUSDT"}
+
+	ring := engine.NewSPSCRing(1024)
+	streamCfg := DefaultStreamConfig()
+	streamCfg.Symbols = cfg.Symbols
+	stream := NewMarketStreamIngestor(streamCfg, ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	// 1. Verify maker fee differentiation
+	if btcFee := dryRun.makerFeeBps("BTCUSDT"); btcFee != 0.0 {
+		t.Errorf("expected 0.0 bps maker fee for BTCUSDT under ZeroFeeMaker, got %.2f", btcFee)
+	}
+	if ethFee := dryRun.makerFeeBps("ETHUSDT"); ethFee != 1.5 {
+		t.Errorf("expected 1.5 bps maker fee for ETHUSDT, got %.2f", ethFee)
+	}
+
+	// 2. Test agile entry quoting on zero-fee BTCUSDT
+	now := time.Now()
+	dryRun.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
+
+	st := dryRun.State()
+	orders := st.ActiveOrders["BTCUSDT"]
+	if len(orders) == 0 {
+		t.Fatalf("expected active orders for BTCUSDT")
+	}
+	var buyQuote *ActiveMakerOrder
+	for _, o := range orders {
+		if o.Side == "BUY" {
+			buyQuote = &o
+			break
+		}
+	}
+	if buyQuote == nil {
+		t.Fatalf("expected resting BUY quote for BTCUSDT")
+	}
+	bidOffsetBps := (75000.00 - buyQuote.Price) / 75000.00 * 1e4
+	// For BTCUSDT with entryOffset 1.75 * 0.90 = 1.575 bps, offset should be around 1.5 - 2.5 bps, NOT 6.2 bps!
+	if bidOffsetBps > 3.0 {
+		t.Errorf("expected agile quote offset <= 3.0 bps for zero-fee BTC, got %.2f bps", bidOffsetBps)
+	}
+
+	// 3. Test dynamic trailing profit ratchet on exit
+	// Inject a long position at 75000.00
+	dryRun.mu.Lock()
+	dryRun.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          0.005,
+		AvgEntryPrice: 75000.00,
+		MarkPrice:     75200.00,
+	}
+	dryRun.mu.Unlock()
+
+	sm := dryRun.symMicro["BTCUSDT"]
+	sm.Ret5sBps = 3.5
+
+	dryRun.evaluateQuotesAndGating("BTCUSDT", 75200.00, now.Add(2*time.Second))
+	stRally := dryRun.State()
+	rallyOrders := stRally.ActiveOrders["BTCUSDT"]
+	var exitAsk *ActiveMakerOrder
+	for _, o := range rallyOrders {
+		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
+			exitAsk = &o
+			break
+		}
+	}
+	if exitAsk == nil {
+		t.Fatalf("expected resting SELL exit quote for BTCUSDT")
+	}
+	// Exit quote should be at or above min profit (entry 75000 * (1 + 14 bps) = 75105)
+	if exitAsk.Price < 75105.00 {
+		t.Errorf("expected exit quote >= min profit price 75105, got %.2f", exitAsk.Price)
+	}
+}
+
+func TestPageHinkleyConceptDriftQuoteWidening(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
+	cfg.Symbols = []string{"BTCUSDT"}
+
+	ring := engine.NewSPSCRing(1024)
+	streamCfg := DefaultStreamConfig()
+	streamCfg.Symbols = cfg.Symbols
+	stream := NewMarketStreamIngestor(streamCfg, ring)
+
+	dryRun, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create dry run engine: %v", err)
+	}
+
+	now := time.Now()
+	// Warm up drift guard with normal small residuals
+	for i := 0; i < 20; i++ {
+		now = now.Add(100 * time.Millisecond)
+		dryRun.evaluateQuotesAndGating("BTCUSDT", 75000.00+float64(i)*0.01, now)
+	}
+
+	// Verify quote spread under calm conditions
+	st0 := dryRun.State()
+	orders0 := st0.ActiveOrders["BTCUSDT"]
+	if len(orders0) == 0 {
+		t.Fatalf("expected orders")
+	}
+	var calmBuy *ActiveMakerOrder
+	for _, o := range orders0 {
+		if o.Side == "BUY" {
+			calmBuy = &o
+			break
+		}
+	}
+	if calmBuy == nil {
+		t.Fatalf("expected calm buy quote")
+	}
+
+	// Now simulate structural concept drift / high residual shock
+	for i := 0; i < 25; i++ {
+		now = now.Add(100 * time.Millisecond)
+		// Large unexpected price jump that violates historical model prediction
+		dryRun.evaluateQuotesAndGating("BTCUSDT", 75000.00+float64(i)*25.0, now)
+	}
+
+	stDrift := dryRun.State()
+	ordersDrift := stDrift.ActiveOrders["BTCUSDT"]
+	var driftBuy *ActiveMakerOrder
+	for _, o := range ordersDrift {
+		if o.Side == "BUY" && o.CancelingUntil.IsZero() {
+			driftBuy = &o
+			break
+		}
+	}
+	if driftBuy != nil {
+		// Buy edge during drift must be widened to defend against adverse selection
+		if driftBuy.EdgeBps < calmBuy.EdgeBps {
+			t.Errorf("expected drift quote edge >= calm quote edge, got %v vs %v", driftBuy.EdgeBps, calmBuy.EdgeBps)
+		}
+	}
+}
+
+func TestQuantHedgeFundAlphaAndVolatilityKellySizing(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.TargetProfitBps = 50.0 // Quant hedge fund swing target
+	cfg.StopLossBps = 60.0
+	cfg.EntryOffsetBps = 2.5
+
+	ring := engine.NewSPSCRing(128)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+	eng, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	// 1. Verify Volatility-Targeted Kelly Position Sizing
+	clipCalm, maxCalm := eng.leverageCtrl.ComputeVolatilityKellySize("BTCUSDT", 200.0, 75000.0, 35.0, 60.0, 1)
+	clipVolatile, maxVolatile := eng.leverageCtrl.ComputeVolatilityKellySize("BTCUSDT", 200.0, 75000.0, 90.0, 60.0, 1)
+
+	if clipCalm <= 0 || maxCalm <= 0 {
+		t.Fatalf("expected positive calm clip and max allocation, got clip=%f max=%f", clipCalm, maxCalm)
+	}
+	if clipVolatile <= 0 || maxVolatile <= 0 {
+		t.Fatalf("expected positive volatile clip and max allocation, got clip=%f max=%f", clipVolatile, maxVolatile)
+	}
+	// Under elevated volatility (90 bps ATR vs 35 bps baseline), inverse volatility scaling MUST downsize clip
+	if clipVolatile > clipCalm {
+		t.Errorf("expected volatile clip (%f) <= calm clip (%f) under inverse ATR scaling", clipVolatile, clipCalm)
+	}
+
+	now := time.Now()
+
+	// 2. Verify Dynamic OBI-Conditioned Entry Thresholds
+	// Simulate order book with thin bids (OBI = -0.35)
+	eng.mu.Lock()
+	sm := eng.symMicro["BTCUSDT"]
+	if sm == nil {
+		sm = newSymbolMicrostructure("BTCUSDT", 0.25)
+		eng.symMicro["BTCUSDT"] = sm
+	}
+	sm.OBI = -0.35
+	sm.Ret5mBps = -12.0
+	sm.Conviction = 0.67 // Conviction (0.67) exceeds base 0.65, but is BELOW thin-bid threshold 0.72!
+	eng.mu.Unlock()
+
+	eng.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
+
+	st := eng.State()
+	orders := st.ActiveOrders["BTCUSDT"]
+	for _, o := range orders {
+		if o.Side == "BUY" && o.CancelingUntil.IsZero() {
+			t.Fatalf("thin bid depth (OBI=-0.35) with sub-0.72 conviction should NOT place BUY quote, got: %+v", o)
+		}
+	}
+
+	// Now provide high conviction (0.75 >= 0.72) with thin bids: BUY quote should be allowed!
+	eng.mu.Lock()
+	sm.Conviction = 0.75
+	sm.Ret5mBps = 5.0
+	sm.Ret1mBps = 4.0
+	eng.mu.Unlock()
+
+	eng.evaluateQuotesAndGating("BTCUSDT", 75000.00, now.Add(500*time.Millisecond))
+	stHigh := eng.State()
+	hasHighConvictionBuy := false
+	for _, o := range stHigh.ActiveOrders["BTCUSDT"] {
+		if o.Side == "BUY" && o.CancelingUntil.IsZero() {
+			hasHighConvictionBuy = true
+			break
+		}
+	}
+	if !hasHighConvictionBuy {
+		t.Fatalf("expected BUY quote placed with high conviction (0.75 >= 0.72)")
+	}
+
+	// 3. Verify Asymmetric Hysteresis Exit & Patient Swing Profit Ratchet
+	// Establish LONG position at $75,000
+	eng.mu.Lock()
+	eng.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          clipCalm,
+		AvgEntryPrice: 75000.00,
+		MarkPrice:     75000.00,
+	}
+	sm.InventorySince = now
+	sm.Conviction = 0.52 // Moderate neutral conviction: must NOT exit on noise!
+	sm.OBI = 0.0
+	sm.Ret5mBps = 0.0
+	eng.mu.Unlock()
+
+	// Price drops slightly by 10 bps (normal consolidation noise):
+	eng.evaluateQuotesAndGating("BTCUSDT", 74925.00, now.Add(10*time.Second))
+	stNoise := eng.State()
+	for _, o := range stNoise.ActiveOrders["BTCUSDT"] {
+		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
+			// Must quote at full target profit (+50 bps), NOT panic selling at inside touch
+			if o.Price < 75000.00*(1.0+0.0025) {
+				t.Errorf("noise dip should hold for profit target (>= +25 bps gross), got sell price %f vs entry %f", o.Price, 75000.00)
+			}
+		}
+	}
+
+	// Now simulate decisive alpha invalidation:
+	// Adverse drawdown 25 bps, Conviction collapsed to 0.32 (< 0.38), OBI < -0.25, Ret5mBps < -10.0
+	eng.mu.Lock()
+	sm.Conviction = 0.32
+	sm.OBI = -0.30
+	sm.Ret5mBps = -15.0
+	eng.mu.Unlock()
+
+	eng.evaluateQuotesAndGating("BTCUSDT", 74812.50, now.Add(20*time.Second))
+	stInvalid := eng.State()
+	hasInvalidationExit := false
+	for _, o := range stInvalid.ActiveOrders["BTCUSDT"] {
+		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
+			hasInvalidationExit = true
+			break
+		}
+	}
+	if !hasInvalidationExit {
+		t.Fatalf("expected invalidation exit SELL quote placed upon decisive alpha breakdown")
+	}
+}
+
+func TestTribecaTargetInventoryAndFairValueIntegration(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tempDir)
+	cfg.OrderLatency = 10 * time.Millisecond
+
+	ring := engine.NewSPSCRing(128)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+	eng, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	now := time.Now()
+	eng.mu.Lock()
+	sm := eng.symMicro["BTCUSDT"]
+	if sm == nil {
+		sm = newSymbolMicrostructure("BTCUSDT", 0.25)
+		eng.symMicro["BTCUSDT"] = sm
+	}
+	sm.Conviction = 0.70 // Bullish directional conviction
+	eng.mu.Unlock()
+
+	eng.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
+
+	st := eng.State()
+	orders := st.ActiveOrders["BTCUSDT"]
+	if len(orders) == 0 {
+		t.Fatalf("expected active orders for BTCUSDT")
+	}
+
+	// Verify FairValue and TargetInventory populated on orders
+	var buyOrder *ActiveMakerOrder
+	for _, o := range orders {
+		if o.Side == "BUY" {
+			buyOrder = &o
+			break
+		}
+	}
+	if buyOrder == nil {
+		t.Fatalf("expected active BUY order")
+	}
+	if buyOrder.FairValue <= 0 {
+		t.Errorf("expected positive FairValue, got %f", buyOrder.FairValue)
+	}
+	if buyOrder.TargetInventory <= 0 {
+		t.Errorf("expected positive TargetInventory for bullish conviction 0.70, got %f", buyOrder.TargetInventory)
+	}
+
+	// Verify ScalpingState contains TargetInventory and FairValue
+	scalpSt, ok := st.ScalpingState["BTCUSDT"]
+	if !ok {
+		t.Fatalf("missing ScalpingState for BTCUSDT")
+	}
+	if scalpSt.TargetInventory <= 0 {
+		t.Errorf("expected positive TargetInventory in ScalpingState, got %f", scalpSt.TargetInventory)
+	}
+	if scalpSt.FairValue <= 0 {
+		t.Errorf("expected positive FairValue in ScalpingState, got %f", scalpSt.FairValue)
+	}
+}
+
+// A failed recalibration must back off for recalibFailureBackoff instead of
+// retrying on the 3-minute cooldown, and must not report HOT_RELOADED.
+func TestAutoRecalibrationFailureBacksOff(t *testing.T) {
+	cfg := DefaultDryRunConfig(t.TempDir())
+	ring := engine.NewSPSCRing(128)
+	eng, err := NewDryRunEngine(cfg, ring, NewMarketStreamIngestor(DefaultStreamConfig(), ring))
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	calls := make(chan struct{}, 4)
+	eng.SetAutonomousRecalibrator(func(ctx context.Context, symbol string, c float64, d string) error {
+		calls <- struct{}{}
+		return errors.New("no tick data")
+	})
+
+	eng.mu.Lock()
+	eng.maybeTriggerAutoRecalibrationLocked("BTCUSDT")
+	eng.mu.Unlock()
+	select {
+	case <-calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("recalibrator was not called")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for eng.recalibrating.Load() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	eng.mu.Lock()
+	status := eng.state.SelfAdaptation.Status
+	backoff := eng.recalibBackoff
+	eng.lastAutoRecalib = time.Now().Add(-10 * time.Minute) // 3-minute cooldown has passed
+	eng.maybeTriggerAutoRecalibrationLocked("BTCUSDT")
+	eng.mu.Unlock()
+
+	if !strings.HasPrefix(status, "RECALIB_ERROR") {
+		t.Errorf("expected RECALIB_ERROR status, got %q", status)
+	}
+	if time.Until(backoff) < recalibFailureBackoff-time.Minute {
+		t.Errorf("expected backoff ~%s, got %s", recalibFailureBackoff, time.Until(backoff))
+	}
+	select {
+	case <-calls:
+		t.Error("recalibrator retried during failure backoff")
+	case <-time.After(100 * time.Millisecond):
 	}
 }

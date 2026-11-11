@@ -51,7 +51,8 @@ func NewKylesLambdaEstimator(alpha, defaultLambda float64) *KylesLambdaEstimator
 //
 // Operates on the hot path in 0 B/op, 0 allocs/op.
 func (k *KylesLambdaEstimator) UpdateTrade(price, size float64, isBuyerMaker bool) {
-	if price <= 0 || size <= 0 {
+	if math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 ||
+		math.IsNaN(size) || math.IsInf(size, 0) || size <= 0 {
 		return
 	}
 	if k.LastPrice <= 0 {
@@ -120,6 +121,9 @@ func (k *KylesLambdaEstimator) Lambda() float64 {
 		return defLam
 	}
 	lam := k.CovDPQ / denom
+	if math.IsNaN(lam) || math.IsInf(lam, 0) {
+		return defLam
+	}
 	// Microstructural price impact is non-negative; floor at small positive value
 	if lam < 0.01 {
 		return 0.01
@@ -134,7 +138,7 @@ func (k *KylesLambdaEstimator) Lambda() float64 {
 // Impact calculates temporary, permanent, and total adverse price impact (in bps) for a desired order size Q.
 // Operates on the hot path in 0 B/op, 0 allocs/op.
 func (k *KylesLambdaEstimator) Impact(size float64) (tempImpact, permImpact, totalImpact float64) {
-	if size <= 0 {
+	if math.IsNaN(size) || math.IsInf(size, 0) || size <= 0 {
 		return 0, 0, 0
 	}
 	lam := k.Lambda()
@@ -156,7 +160,7 @@ func (k *KylesLambdaEstimator) Impact(size float64) (tempImpact, permImpact, tot
 //
 // Operates on the hot path in 0 B/op, 0 allocs/op.
 func (k *KylesLambdaEstimator) OptimalSize(budgetBps, midPrice float64) float64 {
-	if budgetBps <= 0 {
+	if math.IsNaN(budgetBps) || math.IsInf(budgetBps, 0) || budgetBps <= 0 {
 		return 0
 	}
 	lam := k.Lambda()

@@ -67,9 +67,15 @@ func NewOnlineHawkesEstimator(mu, alpha, beta float64) *OnlineHawkesEstimator {
 // Update recursively ingests a trade event (t_k, isBuy, size) in O(1) time.
 // Zero heap allocations (0 B/op, 0 allocs/op).
 func (h *OnlineHawkesEstimator) Update(nowNs int64, isBuy bool, size float64) {
+	if math.IsNaN(size) || math.IsInf(size, 0) || size < 0 {
+		size = 0
+	}
+
 	if h.lastTimeNs <= 0 {
-		h.lastTimeNs = nowNs
-		h.lastUpdateNs = nowNs
+		if nowNs > 0 {
+			h.lastTimeNs = nowNs
+			h.lastUpdateNs = nowNs
+		}
 		h.tradeCount = 1
 		h.empRate = h.Mu
 		return
@@ -105,8 +111,11 @@ func (h *OnlineHawkesEstimator) Update(nowNs int64, isBuy bool, size float64) {
 	h.rTot += jump
 
 	h.tradeCount++
-	h.lastTimeNs = nowNs
-	h.lastUpdateNs = nowNs
+	// Only advance the clock cursor forward monotonically; prevent out-of-order events from winding back
+	if nowNs > h.lastTimeNs {
+		h.lastTimeNs = nowNs
+		h.lastUpdateNs = nowNs
+	}
 
 	// Self-calibration: in stationary Hawkes, E[lambda] = mu / (1 - alpha/beta)
 	// Hence background mu can be smoothly adapted towards empRate * (1 - n)

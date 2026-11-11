@@ -122,22 +122,22 @@ type CircuitBreaker struct {
 
 // NewCircuitBreaker initializes the risk circuit breaker engine.
 func NewCircuitBreaker(cfg CircuitBreakerConfig) *CircuitBreaker {
-	if cfg.WarningDrawdownPct <= 0 {
+	if math.IsNaN(cfg.WarningDrawdownPct) || math.IsInf(cfg.WarningDrawdownPct, 0) || cfg.WarningDrawdownPct <= 0 {
 		cfg.WarningDrawdownPct = 2.5
 	}
-	if cfg.TrippedDrawdownPct <= 0 {
+	if math.IsNaN(cfg.TrippedDrawdownPct) || math.IsInf(cfg.TrippedDrawdownPct, 0) || cfg.TrippedDrawdownPct <= 0 {
 		cfg.TrippedDrawdownPct = 3.5
 	}
-	if cfg.MaxInventory <= 0 {
+	if math.IsNaN(cfg.MaxInventory) || math.IsInf(cfg.MaxInventory, 0) || cfg.MaxInventory <= 0 {
 		cfg.MaxInventory = 2.0
 	}
 	if cfg.WarningConsecutiveLosses <= 0 {
 		cfg.WarningConsecutiveLosses = 5
 	}
-	if cfg.MaxSpreadBps <= 0 {
+	if math.IsNaN(cfg.MaxSpreadBps) || math.IsInf(cfg.MaxSpreadBps, 0) || cfg.MaxSpreadBps <= 0 {
 		cfg.MaxSpreadBps = 50.0
 	}
-	if cfg.VPINThreshold <= 0 {
+	if math.IsNaN(cfg.VPINThreshold) || math.IsInf(cfg.VPINThreshold, 0) || cfg.VPINThreshold <= 0 {
 		cfg.VPINThreshold = 0.70
 	}
 	if cfg.CooldownDuration <= 0 {
@@ -153,6 +153,12 @@ func NewCircuitBreaker(cfg CircuitBreakerConfig) *CircuitBreaker {
 // OnFill updates fill statistics (realized PnL, new inventory) and checks consecutive loss / inventory caps.
 // Executes on the hot path in 0 B/op, 0 allocs/op.
 func (cb *CircuitBreaker) OnFill(realizedPnL, newInventory float64) (RiskState, string) {
+	if math.IsNaN(realizedPnL) || math.IsInf(realizedPnL, 0) {
+		realizedPnL = 0.0
+	}
+	if math.IsNaN(newInventory) || math.IsInf(newInventory, 0) {
+		newInventory = cb.CurrentInventory
+	}
 	cb.CurrentInventory = newInventory
 	if realizedPnL < 0 {
 		cb.ConsecutiveLosses++
@@ -186,13 +192,22 @@ func (cb *CircuitBreaker) OnFill(realizedPnL, newInventory float64) (RiskState, 
 // OnTick processes live market updates (current equity, spread, VPIN toxicity) and enforces risk state transitions.
 // Executes on the hot path in 0 B/op, 0 allocs/op.
 func (cb *CircuitBreaker) OnTick(equity, spreadBps, vpin float64, now time.Time) (RiskState, string) {
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity < 0 {
+		equity = cb.CurrentEquity
+	}
+	if math.IsNaN(spreadBps) || math.IsInf(spreadBps, 0) || spreadBps < 0 {
+		spreadBps = cb.LastSpreadBps
+	}
+	if math.IsNaN(vpin) || math.IsInf(vpin, 0) || vpin < 0 {
+		vpin = cb.LastVPIN
+	}
 	cb.CurrentEquity = equity
 	if equity > cb.PeakEquity {
 		cb.PeakEquity = equity
 	}
 	if cb.PeakEquity > 0 {
 		dd := (cb.PeakEquity - equity) / cb.PeakEquity * 100.0
-		if dd < 0 {
+		if math.IsNaN(dd) || math.IsInf(dd, 0) || dd < 0 {
 			dd = 0
 		}
 		cb.CurrentDrawdownPct = dd
@@ -279,6 +294,9 @@ func (cb *CircuitBreaker) OnTick(equity, spreadBps, vpin float64, now time.Time)
 
 // Reset clears the circuit breaker state and re-anchors peak equity.
 func (cb *CircuitBreaker) Reset(initialEquity float64) {
+	if math.IsNaN(initialEquity) || math.IsInf(initialEquity, 0) || initialEquity <= 0 {
+		initialEquity = 1000.0
+	}
 	cb.PeakEquity = initialEquity
 	cb.CurrentEquity = initialEquity
 	cb.CurrentDrawdownPct = 0

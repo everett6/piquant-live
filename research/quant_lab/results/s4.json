@@ -1,0 +1,108 @@
+{
+ "sqa": {
+  "picks": [
+   {
+    "seed": 0,
+    "params": {
+     "fast": 10,
+     "slow": 400,
+     "mode": "lf"
+    },
+    "discovery_sharpe": 1.7364966350499529
+   },
+   {
+    "seed": 1,
+    "params": {
+     "fast": 8,
+     "slow": 400,
+     "mode": "lf"
+    },
+    "discovery_sharpe": 1.7304029781887889
+   },
+   {
+    "seed": 2,
+    "params": {
+     "fast": 8,
+     "slow": 400,
+     "mode": "lf"
+    },
+    "discovery_sharpe": 1.7304029781887889
+   }
+  ],
+  "walk_forward_oos": {
+   "total_return_pct": 36.780559951483774,
+   "cagr_pct": 22.60289040588992,
+   "sharpe": 0.72458238070998,
+   "max_dd_pct": -33.59264678569984,
+   "months_ge_7pct": 0.15789473684210525,
+   "days": 561
+  },
+  "holdout_pick": {
+   "fast": 10,
+   "slow": 400,
+   "mode": "lf"
+  },
+  "holdout": {
+   "total_return_pct": -9.535951519087904,
+   "cagr_pct": -7.081991328671522,
+   "sharpe": -0.16075400627166386,
+   "max_dd_pct": -25.857968723508872,
+   "months_ge_7pct": 0.11764705882352941,
+   "days": 498
+  }
+ },
+ "random": {
+  "picks": [
+   {
+    "seed": 0,
+    "params": {
+     "fast": 24,
+     "slow": 400,
+     "mode": "lf"
+    },
+    "discovery_sharpe": 1.6842985702033357
+   },
+   {
+    "seed": 1,
+    "params": {
+     "fast": 44,
+     "slow": 336,
+     "mode": "lf"
+    },
+    "discovery_sharpe": 1.6873318295359054
+   },
+   {
+    "seed": 2,
+    "params": {
+     "fast": 8,
+     "slow": 400,
+     "mode": "lf"
+    },
+    "discovery_sharpe": 1.7304029781887889
+   }
+  ],
+  "walk_forward_oos": {
+   "total_return_pct": 33.91727437016097,
+   "cagr_pct": 20.92690078296311,
+   "sharpe": 0.6871565652386007,
+   "max_dd_pct": -37.03018213708654,
+   "months_ge_7pct": 0.2631578947368421,
+   "days": 561
+  },
+  "holdout_pick": {
+   "fast": 8,
+   "slow": 400,
+   "mode": "lf"
+  },
+  "holdout": {
+   "total_return_pct": -12.141634043868056,
+   "cagr_pct": -9.051222392102565,
+   "sharpe": -0.2407963245015507,
+   "max_dd_pct": -28.788339500532878,
+   "months_ge_7pct": 0.11764705882352941,
+   "days": 498
+  }
+ },
+ "distinct_configs_evaluated": 442,
+ "elapsed_s": 7.2
+}

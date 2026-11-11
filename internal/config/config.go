@@ -216,10 +216,10 @@ func (c *Config) Validate() error {
 			add("models.max_hidden must be in 1..128")
 		}
 		if c.Models.BuyThreshold == 0 {
-			c.Models.BuyThreshold = 0.6
+			c.Models.BuyThreshold = 0.65
 		}
 		if c.Models.SellThreshold == 0 {
-			c.Models.SellThreshold = 0.6
+			c.Models.SellThreshold = 0.35
 		}
 		if c.Models.BuyThreshold <= 0 || c.Models.BuyThreshold > 1 ||
 			c.Models.SellThreshold <= 0 || c.Models.SellThreshold > 1 {

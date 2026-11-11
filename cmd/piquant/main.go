@@ -52,6 +52,8 @@ func main() {
 		err = runDashboard(ctx, args)
 	case "agent":
 		err = runAgent(ctx, args)
+	case "top", "monitor", "tui":
+		err = runMonitor(ctx, args)
 	case "dry-run", "dryrun":
 		err = runDryRun(ctx, args)
 	case "backtest-history", "backtest":
@@ -62,6 +64,14 @@ func main() {
 		err = runBench(ctx, args)
 	case "secrets":
 		err = runSecrets(args)
+	case "tax":
+		err = runTax(ctx, args)
+	case "collect":
+		err = runCollect(ctx, args)
+	case "extract":
+		err = runExtract(ctx, args)
+	case "news":
+		err = runNews(ctx, args)
 	case "version", "-v", "--version":
 		printVersion()
 	case "help", "-h", "--help":
@@ -87,11 +97,16 @@ func usage() {
   piquant doctor      check this board and its network peer
   piquant dashboard   serve the read-only control panel (Raspberry Pi 3B)
   piquant agent       expose engine status to the panel (Raspberry Pi 5)
+  piquant top         live updating Bloomberg/HFT Terminal UI (aliases: monitor, tui)
   piquant dry-run          launch 14-day autonomous paper money dry run with live public feeds
   piquant backtest-history run 10–15+ year historical multi-regime simulation starting at $1,000
   piquant backtest-ticks   run 2-year microsecond monthly tick-by-tick market-making simulation
   piquant bench            run Pi 5 architecture stress test and micro-latency benchmark
   piquant secrets     manage the local credential store
+  piquant tax         crypto capital gains, IRS Form 8949 CSV export & CA tax reserve
+  piquant collect     record live prices + news and backfill history (dev PC)
+  piquant extract     score stored headlines with a local LLM (Ollama)
+  piquant news        macro & micro news intelligence oracle with exploit defense
   piquant version     print build information
 
 Run "piquant <command> -h" for the options of one command.

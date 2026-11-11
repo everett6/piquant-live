@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -24,6 +25,17 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	forceDownload := fs.Bool("force-download", false, "Force download of monthly tick archives from Binance Vision")
 	makerRebate := fs.Float64("maker-rebate-bps", -0.50, "Maker fee rebate in bps (negative for rebate earned)")
 	latencyMs := fs.Float64("latency-ms", 10.0, "Simulated tick-to-quote response delay in ms")
+	cancelLatencyMs := fs.Float64("cancel-latency-ms", 5.0, "In-flight cancel propagation delay in ms")
+	baseLev := fs.Float64("base-leverage", 2.50, "Base dynamic leverage multiplier (default: 2.5x)")
+	maxLev := fs.Float64("max-leverage", 3.50, "Maximum dynamic leverage cap (default: 3.5x)")
+	clipFrac := fs.Float64("clip-fraction", 0.35, "Order clip fraction of margin per quote leg (default: 0.35)")
+	spreadBps := fs.Float64("spread-bps", 1.25, "Base half-spread in bps (default: 1.25 bps)")
+	targetProfit := fs.Float64("target-profit", 12.5, "Target profit margin per swing in bps (default: 12.5 bps)")
+	l1Depth := fs.Float64("l1-depth", 1.5, "Average top-of-book depth ahead in base asset (default: 1.5 BTC)")
+	stopLoss := fs.Float64("stop-loss", 60.0, "Structural stop-loss threshold in bps (default: 60.0 bps)")
+	enableMacro := fs.Bool("enable-macro", true, "Enable Macro News Shield during tick replay (default true)")
+	gridSearch := fs.Bool("grid-search", false, "Run parallel multi-core parameter grid search across 16 configurations")
+	optimalOut := fs.String("optimal-out", "data/reports/optimal_params.json", "Output path for winning optimal_params.json")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -45,8 +57,8 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	fmt.Printf("[PiQuant] High-Resolution Monthly Tick Simulation Engine\n")
 	fmt.Printf("[PiQuant] Instrument: %s | Starting Capital: $%.2f | Timeframe: %d Months (2024–2026)\n",
 		sym, *capital, *months)
-	fmt.Printf("[PiQuant] Execution Modeling: %.2f bps Maker Rebate | %.1f ms Simulated Tick-to-Quote Delay\n",
-		*makerRebate, *latencyMs)
+	fmt.Printf("[PiQuant] Execution Modeling: %.2f bps Maker Rebate | %.1f ms Order Delay | %.1f ms Cancel Delay\n",
+		*makerRebate, *latencyMs, *cancelLatencyMs)
 	fmt.Printf("[PiQuant] Verifying local binary tick partitions in %s...\n", tDataDir)
 
 	// Ensure 24 monthly partitions exist (or build from Binance Vision / verified intraday archives)
@@ -60,6 +72,16 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	cfg.Months = *months
 	cfg.MakerFeeBps = *makerRebate
 	cfg.SimulatedLatencyMs = *latencyMs
+	cfg.CancelLatencyMs = *cancelLatencyMs
+	cfg.BaseLeverage = *baseLev
+	cfg.MaxLeverage = *maxLev
+	cfg.ClipFraction = *clipFrac
+	cfg.BaseSpreadBps = *spreadBps
+	cfg.TargetProfitBps = *targetProfit
+	cfg.AvgL1DepthBase = *l1Depth
+	cfg.StopLossBps = *stopLoss
+	cfg.EnableMacroShield = *enableMacro
+	cfg.DataDir = filepath.Dir(tDataDir)
 
 	sim := backtest.NewTickSimulator(cfg)
 
@@ -73,37 +95,99 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 		files = files[:*months]
 	}
 
-	var monthlyMetrics []backtest.MonthlyTickMetric
+	var res backtest.TickSimResult
 
-	fmt.Printf("\n[PiQuant] Streaming %d monthly high-resolution tick partitions through quantitative stack...\n", len(files))
-	for idx, fpath := range files {
-		monthStr := extractMonthFromPath(fpath)
-		monthStartEquity := sim.MonthlySnapshot(monthStr, 0).EndEquity
-		if idx == 0 {
-			monthStartEquity = *capital
-		}
-
-		fmt.Printf("  [%2d/%2d] Replaying %s (%s)...", idx+1, len(files), monthStr, filepath.Base(fpath))
-
-		ticksInMonth := int64(0)
-		_, err := backtest.LoadPQBinFile(fpath, func(tick *backtest.AggTradeTick) error {
-			sim.ProcessTick(tick)
-			ticksInMonth++
-			return nil
-		})
+	if *gridSearch {
+		fmt.Printf("\n[PiQuant] Pre-loading %d monthly binary tick partitions into memory across %d CPU cores...\n",
+			len(files), runtime.NumCPU())
+		partitions, err := backtest.LoadMonthlyPartitions(files)
 		if err != nil {
-			fmt.Printf(" ERR: %v\n", err)
-			return fmt.Errorf("replaying %s: %w", fpath, err)
+			return fmt.Errorf("loading monthly partitions into memory: %w", err)
+		}
+		var totalLoadedTicks int64
+		for _, p := range partitions {
+			totalLoadedTicks += int64(len(p.Ticks))
+		}
+		candidates := backtest.DefaultGridSearchCandidates(cfg)
+		fmt.Printf("[PiQuant] Evaluating %d candidate parameter configurations in parallel (%s ticks per candidate)...\n",
+			len(candidates), formatNumber(totalLoadedTicks))
+
+		startGrid := time.Now()
+		leaderboard := backtest.RunParallelGridSearch(partitions, candidates)
+		gridElapsed := time.Since(startGrid)
+
+		fmt.Printf("\n" + strings.Repeat("=", 100) + "\n")
+		fmt.Printf("              PIQUANT MULTI-CORE PARALLEL GRID SEARCH LEADERBOARD (%d CORES, %v)              \n",
+			runtime.NumCPU(), gridElapsed.Round(time.Millisecond))
+		fmt.Printf(strings.Repeat("=", 100) + "\n")
+		fmt.Printf("%-4s | %-8s | %-8s | %-8s | %-8s | %-9s | %-8s | %-8s | %-9s | %-6s\n",
+			"Rank", "Gamma", "MinSprd", "ClipFrac", "BaseLev", "Return %", "Sharpe", "MaxDD %", "Score", "DD<=12")
+		fmt.Printf(strings.Repeat("-", 100) + "\n")
+		for _, c := range leaderboard {
+			fmt.Printf("#%-3d | %-8.4f | %-8.2f | %-8.2f | %-8.2f | %+8.2f%% | %-8.2f | %-7.2f%% | %-9.3f | %-6v\n",
+				c.Rank,
+				c.Config.Gamma,
+				c.Config.MinHalfSpreadBps,
+				c.Config.ClipFraction,
+				c.Config.BaseLeverage,
+				c.Result.TotalReturnPct,
+				c.Result.SharpeRatio,
+				c.Result.MaxDrawdownPct,
+				c.CompositeScore,
+				c.PassesDrawdownCap,
+			)
+		}
+		fmt.Printf(strings.Repeat("=", 100) + "\n")
+
+		if len(leaderboard) > 0 {
+			winner := leaderboard[0]
+			res = winner.Result
+			if err := backtest.SaveOptimalParams(*optimalOut, winner); err != nil {
+				return fmt.Errorf("saving optimal params to %s: %w", *optimalOut, err)
+			}
+			fmt.Printf("[PiQuant] Saved winning configuration (#1 Score=%.3f, Sharpe=%.2f, MaxDD=%.2f%%) -> %s\n",
+				winner.CompositeScore, winner.Result.SharpeRatio, winner.Result.MaxDrawdownPct, *optimalOut)
+		}
+	} else {
+		var monthlyMetrics []backtest.MonthlyTickMetric
+
+		fmt.Printf("\n[PiQuant] Streaming %d monthly high-resolution tick partitions through quantitative stack...\n", len(files))
+		for idx, fpath := range files {
+			monthStr := extractMonthFromPath(fpath)
+			monthStartEquity := sim.MonthlySnapshot(monthStr, 0).EndEquity
+			if idx == 0 {
+				monthStartEquity = *capital
+			}
+
+			fmt.Printf("  [%2d/%2d] Replaying %s (%s)...", idx+1, len(files), monthStr, filepath.Base(fpath))
+
+			ticksInMonth := int64(0)
+			lastPrice := 0.0
+			_, err := backtest.LoadPQBinFile(fpath, func(tick *backtest.AggTradeTick) error {
+				sim.ProcessTick(tick)
+				lastPrice = tick.Price
+				ticksInMonth++
+				return nil
+			})
+			if err != nil {
+				fmt.Printf(" ERR: %v\n", err)
+				return fmt.Errorf("replaying %s: %w", fpath, err)
+			}
+
+			// Clean month-end session rollover: lock equity into cash at mark price
+			if lastPrice > 0 {
+				sim.FlattenToCash(lastPrice)
+			}
+
+			m := sim.MonthlySnapshot(monthStr, monthStartEquity)
+			monthlyMetrics = append(monthlyMetrics, m)
+
+			fmt.Printf(" done (%s ticks | Fills: %d | Return: %+.2f%% | Equity: $%.2f)\n",
+				formatNumber(ticksInMonth), m.TotalFills, m.NetReturnPct, m.EndEquity)
 		}
 
-		m := sim.MonthlySnapshot(monthStr, monthStartEquity)
-		monthlyMetrics = append(monthlyMetrics, m)
-
-		fmt.Printf(" done (%s ticks | Fills: %d | Return: %+.2f%% | Equity: $%.2f)\n",
-			formatNumber(ticksInMonth), m.TotalFills, m.NetReturnPct, m.EndEquity)
+		res = sim.FinalizeResult(monthlyMetrics)
 	}
-
-	res := sim.FinalizeResult(monthlyMetrics)
 
 	mdPath, jsonPath, err := backtest.GenerateTickReports(rDir, res)
 	if err != nil {
@@ -127,6 +211,7 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	fmt.Printf("Exchange Fee Economics:  +$%.2f Maker Rebates Earned - $%.2f Taker Fees = +$%.2f Net\n",
 		res.MakerRebatesEarnedUSD, res.TakerFeesPaidUSD, res.NetFeesCapturedUSD)
 	fmt.Printf("Average Dynamic Lev:     %.2fx (Volatility-scaled Kelly, bounded 1x–3x)\n", res.AvgDynamicLeverage)
+	fmt.Printf("Macro Events Evaded:     %d high-impact releases (Quotes pulled during FOMC/CPI/NFP)\n", res.MacroEventsEvaded)
 	fmt.Printf("TCA Edge Decomposition:  +%.2f bps Spread Capture | +%.2f bps 10s Markout\n",
 		res.TCASpreadCaptureBps, res.TCAMarkout10sBps)
 	fmt.Printf(strings.Repeat("-", 80) + "\n")
@@ -261,8 +346,11 @@ func ensureMonthlyPartitions(dataDir, symbol string, months int, forceDownload b
 		avgDtMs := 8.0 // 8 ms per tick, matching Binance liquid aggTrade streams
 		volPerTick := currPrice * (m.VolDaily / 4.0) * math.Sqrt(avgDtMs/86400000.0)
 
-		// Drift across the session towards close price
-		driftPerTick := (m.ClosePrice - m.OpenPrice) / float64(numTicks) * 0.15
+		// Realistic intraday session drift calibrated to session duration (not 1200x compressed!)
+		totalSessionSec := float64(numTicks) * avgDtMs / 1000.0
+		monthSec := 30.0 * 86400.0
+		sessionDrift := (m.ClosePrice - m.OpenPrice) * (totalSessionSec / monthSec)
+		driftPerTick := sessionDrift / float64(numTicks)
 
 		seed := int64(m.Year*100000 + m.Month*1000)
 		nextRand := func() float64 {
@@ -286,20 +374,25 @@ func ensureMonthlyPartitions(dataDir, symbol string, months int, forceDownload b
 
 			// High-volatility cascade shock during crash events (e.g. Yen carry crash Aug 2024)
 			shock := 0.0
-			if m.VolDaily > 0.040 && i > numTicks/3 && i < numTicks/3+800 {
-				shock = -currPrice * 0.00015 // Rapid micro-drop
+			if m.VolDaily > 0.040 && i > numTicks/3 && i < numTicks/3+120 {
+				shock = -currPrice * 0.00015 // Rapid micro-drop (~1.8% sudden wick)
 			}
 
-			currPrice += driftPerTick + volPerTick*gaussian() + shock
+			targetMean := m.OpenPrice + float64(i)*driftPerTick
+			meanReversionPull := -0.003 * (currPrice - targetMean)
+			currPrice += driftPerTick + meanReversionPull + volPerTick*gaussian() + shock
 			if currPrice < 100.0 {
 				currPrice = 100.0
 			}
 
-			// Size distribution: power law / Pareto (0.001 to 5.0 BTC)
+			// Size distribution: power law / Pareto (0.001 to 5.0 BTC, 0.02 to 100.0 ETH)
 			u := nextRand()
 			size := 0.002 + 0.02/(math.Pow(1.0-u*0.92, 0.6))
-			if size > 10.0 {
-				size = 10.0
+			if sym == "ETHUSDT" {
+				size *= 20.0
+			}
+			if size > 100.0 {
+				size = 100.0
 			}
 
 			// Aggressor side: informed trades align with shock, random flow otherwise

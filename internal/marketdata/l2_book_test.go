@@ -1,6 +1,7 @@
 package marketdata
 
 import (
+	"math"
 	"testing"
 )
 
@@ -127,3 +128,52 @@ func BenchmarkL2OrderBookApplyDelta(b *testing.B) {
 		book.ApplyDelta(delta)
 	}
 }
+
+func TestHole43_L2BookNaNProtection(t *testing.T) {
+	book := NewL2OrderBook("BTCUSDT")
+	initialBids := []PriceLevel{
+		{Price: 60000.0, Size: 1.0},
+	}
+	initialAsks := []PriceLevel{
+		{Price: 60010.0, Size: 1.0},
+	}
+	book.SetSnapshot(100, initialBids, initialAsks)
+
+	// Apply delta with NaN price and NaN size
+	delta := OrderBookDelta{
+		U:  101,
+		u:  101,
+		pu: 100,
+		Bids: []PriceLevel{
+			{Price: math.NaN(), Size: 1.0},
+			{Price: 59990.0, Size: math.NaN()},
+		},
+		Asks: []PriceLevel{
+			{Price: math.NaN(), Size: math.NaN()},
+		},
+	}
+
+	book.ApplyDelta(delta)
+
+	// Verify no NaN price levels were inserted
+	for i := 0; i < book.NumBids; i++ {
+		if math.IsNaN(book.Bids[i].Price) || math.IsNaN(book.Bids[i].Size) {
+			t.Fatalf("Hole 43 failed: NaN level found in bids: %+v", book.Bids[i])
+		}
+	}
+	for i := 0; i < book.NumAsks; i++ {
+		if math.IsNaN(book.Asks[i].Price) || math.IsNaN(book.Asks[i].Size) {
+			t.Fatalf("Hole 43 failed: NaN level found in asks: %+v", book.Asks[i])
+		}
+	}
+
+	mid, ok := book.MidPrice()
+	if !ok || math.IsNaN(mid) || mid <= 0 {
+		t.Fatalf("Hole 43 failed: MidPrice() returned invalid value: %v, %v", mid, ok)
+	}
+	spread := book.Spread()
+	if math.IsNaN(spread) || spread <= 0 {
+		t.Fatalf("Hole 43 failed: Spread() returned invalid value: %v", spread)
+	}
+}
+

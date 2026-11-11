@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 )
 
 // DynamicLeverageConfig defines risk parameters for automated leverage scaling.
@@ -13,16 +14,18 @@ type DynamicLeverageConfig struct {
 	BaseLeverage   float64 `json:"base_leverage"`    // Nominal leverage under calm market making (default: 2.5x)
 	TargetVolBps   float64 `json:"target_vol_bps"`   // Target tick volatility in basis points (default: 15.0 bps)
 	MaxDrawdownPct float64 `json:"max_drawdown_pct"` // Circuit breaker drawdown threshold (default: 2.0%)
+	ClipFraction   float64 `json:"clip_fraction"`    // Fraction of max symbol allocation per quote clip (default: 0.20)
 }
 
 // DefaultDynamicLeverageConfig returns standard quantitative risk parameters.
 func DefaultDynamicLeverageConfig() DynamicLeverageConfig {
 	return DynamicLeverageConfig{
 		MinLeverage:    0.5,
-		MaxLeverage:    5.0,
+		MaxLeverage:    3.5,
 		BaseLeverage:   2.5,
 		TargetVolBps:   15.0,
 		MaxDrawdownPct: 2.0,
+		ClipFraction:   0.35,
 	}
 }
 
@@ -42,46 +45,91 @@ type DynamicLeverageState struct {
 
 // DynamicLeverageController automatically computes optimal leverage on every tick.
 type DynamicLeverageController struct {
+	mu  sync.RWMutex
 	cfg DynamicLeverageConfig
 }
 
 // NewDynamicLeverageController constructs an automated leverage controller.
 func NewDynamicLeverageController(cfg DynamicLeverageConfig) *DynamicLeverageController {
-	if cfg.MinLeverage <= 0 {
+	if math.IsNaN(cfg.MinLeverage) || math.IsInf(cfg.MinLeverage, 0) || cfg.MinLeverage <= 0 {
 		cfg.MinLeverage = 0.5
 	}
-	if cfg.MaxLeverage <= 0 {
+	if math.IsNaN(cfg.MaxLeverage) || math.IsInf(cfg.MaxLeverage, 0) || cfg.MaxLeverage <= 0 {
 		cfg.MaxLeverage = 5.0
 	}
-	if cfg.BaseLeverage <= 0 {
+	if math.IsNaN(cfg.BaseLeverage) || math.IsInf(cfg.BaseLeverage, 0) || cfg.BaseLeverage <= 0 {
 		cfg.BaseLeverage = 2.5
 	}
-	if cfg.TargetVolBps <= 0 {
+	if math.IsNaN(cfg.TargetVolBps) || math.IsInf(cfg.TargetVolBps, 0) || cfg.TargetVolBps <= 0 {
 		cfg.TargetVolBps = 15.0
 	}
-	if cfg.MaxDrawdownPct <= 0 {
+	if math.IsNaN(cfg.MaxDrawdownPct) || math.IsInf(cfg.MaxDrawdownPct, 0) || cfg.MaxDrawdownPct <= 0 {
 		cfg.MaxDrawdownPct = 2.0
+	}
+	if math.IsNaN(cfg.ClipFraction) || math.IsInf(cfg.ClipFraction, 0) || cfg.ClipFraction <= 0 || cfg.ClipFraction > 1.0 {
+		cfg.ClipFraction = 0.20
 	}
 	return &DynamicLeverageController{cfg: cfg}
 }
 
+// UpdateCloudParams safely updates leverage and clip sizing parameters from hot-reloaded cloud configurations.
+func (c *DynamicLeverageController) UpdateCloudParams(baseLev, maxLev, clipFrac float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !math.IsNaN(maxLev) && !math.IsInf(maxLev, 0) && maxLev >= 1.0 {
+		if maxLev > 5.0 {
+			maxLev = 5.0
+		}
+		c.cfg.MaxLeverage = maxLev
+	}
+	if !math.IsNaN(baseLev) && !math.IsInf(baseLev, 0) && baseLev >= 1.0 {
+		if baseLev > c.cfg.MaxLeverage {
+			baseLev = c.cfg.MaxLeverage
+		}
+		c.cfg.BaseLeverage = baseLev
+	}
+	if !math.IsNaN(clipFrac) && !math.IsInf(clipFrac, 0) && clipFrac >= 0.05 {
+		if clipFrac > 0.35 {
+			clipFrac = 0.35
+		}
+		c.cfg.ClipFraction = clipFrac
+	}
+}
+
 // Compute evaluates real-time market microstructure and computes optimal leverage and notional sizing.
 func (c *DynamicLeverageController) Compute(volBps float64, vpin float64, hawkesBranching float64, currentDDPct float64, isCircuitHalted bool) DynamicLeverageState {
+	c.mu.RLock()
+	cfg := c.cfg
+	c.mu.RUnlock()
+
 	if isCircuitHalted {
 		return DynamicLeverageState{
 			EffectiveLeverage: 0.0,
 			TargetLeverage:    0.0,
-			MaxLeverage:       c.cfg.MaxLeverage,
-			MinLeverage:       c.cfg.MinLeverage,
+			MaxLeverage:       cfg.MaxLeverage,
+			MinLeverage:       cfg.MinLeverage,
 			DrawdownFactor:    0.0,
 			RegimeName:        "HALTED",
 			RegimeDetail:      "Circuit breaker tripped: zero leverage / emergency halt",
 		}
 	}
 
+	if math.IsNaN(volBps) || math.IsInf(volBps, 0) || volBps <= 0 {
+		volBps = cfg.TargetVolBps
+	}
+	if math.IsNaN(vpin) || math.IsInf(vpin, 0) || vpin < 0 {
+		vpin = 0.30
+	}
+	if math.IsNaN(hawkesBranching) || math.IsInf(hawkesBranching, 0) || hawkesBranching < 0 {
+		hawkesBranching = 0.20
+	}
+	if math.IsNaN(currentDDPct) || math.IsInf(currentDDPct, 0) || currentDDPct < 0 {
+		currentDDPct = 0.0
+	}
+
 	// 1. Volatility Scaling (Inverse volatility parity)
 	vol := math.Max(1.0, volBps)
-	volFactor := c.cfg.TargetVolBps / vol
+	volFactor := cfg.TargetVolBps / vol
 	if volFactor > 1.6 {
 		volFactor = 1.6
 	} else if volFactor < 0.4 {
@@ -106,8 +154,8 @@ func (c *DynamicLeverageController) Compute(volBps float64, vpin float64, hawkes
 
 	// 4. Drawdown Preservation Taper
 	ddFct := 1.0
-	if c.cfg.MaxDrawdownPct > 0 {
-		ddRatio := currentDDPct / c.cfg.MaxDrawdownPct
+	if cfg.MaxDrawdownPct > 0 {
+		ddRatio := currentDDPct / cfg.MaxDrawdownPct
 		if ddRatio >= 1.0 {
 			ddFct = 0.0
 		} else {
@@ -116,12 +164,12 @@ func (c *DynamicLeverageController) Compute(volBps float64, vpin float64, hawkes
 	}
 
 	// 5. Synthesize target & constrained effective leverage
-	targetLev := c.cfg.BaseLeverage * volFactor * toxFct * cascFct * ddFct
+	targetLev := cfg.BaseLeverage * volFactor * toxFct * cascFct * ddFct
 	effectiveLev := targetLev
-	if effectiveLev > c.cfg.MaxLeverage {
-		effectiveLev = c.cfg.MaxLeverage
-	} else if effectiveLev < c.cfg.MinLeverage {
-		effectiveLev = c.cfg.MinLeverage
+	if effectiveLev > cfg.MaxLeverage {
+		effectiveLev = cfg.MaxLeverage
+	} else if effectiveLev < cfg.MinLeverage {
+		effectiveLev = cfg.MinLeverage
 	}
 
 	// Determine descriptive regime
@@ -145,8 +193,8 @@ func (c *DynamicLeverageController) Compute(volBps float64, vpin float64, hawkes
 	return DynamicLeverageState{
 		EffectiveLeverage: effectiveLev,
 		TargetLeverage:    targetLev,
-		MaxLeverage:       c.cfg.MaxLeverage,
-		MinLeverage:       c.cfg.MinLeverage,
+		MaxLeverage:       cfg.MaxLeverage,
+		MinLeverage:       cfg.MinLeverage,
 		VolFactor:         volFactor,
 		ToxicityFactor:    toxFct,
 		CascadeFactor:     cascFct,
@@ -184,8 +232,10 @@ func (c *DynamicLeverageController) ComputeOrderSize(equity float64, effectiveLe
 // Higher-volatility assets (SOL, DOGE, AVAX) receive smaller fractional sizing to equate
 // dollar variance risk, while preserving wider spread capture and fee rebates.
 func (c *DynamicLeverageController) ComputeOrderSizeForSymbol(symbol string, equity float64, effectiveLev float64, price float64, numSymbols int) float64 {
-	if equity <= 0 || price <= 0 || effectiveLev <= 0 {
-		return 0.001
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 ||
+		math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 ||
+		math.IsNaN(effectiveLev) || math.IsInf(effectiveLev, 0) || effectiveLev <= 0 {
+		return 0
 	}
 	if numSymbols <= 0 {
 		numSymbols = 2
@@ -196,9 +246,9 @@ func (c *DynamicLeverageController) ComputeOrderSizeForSymbol(symbol string, equ
 	// Volatility parity weighting and decimal precision lookup
 	uSym := strings.ToUpper(symbol)
 	prof := SymbolRiskProfile{VolWeight: 1.0, Decimals: 3}
-	for symPrefix, p := range DefaultSymbolProfiles {
-		if strings.Contains(uSym, symPrefix) {
-			prof = p
+	for _, p := range []string{"BTC", "ETH", "SOL", "BNB", "DOGE", "XRP", "AVAX", "LINK"} {
+		if strings.HasPrefix(uSym, p) {
+			prof = DefaultSymbolProfiles[p]
 			break
 		}
 	}
@@ -212,4 +262,137 @@ func (c *DynamicLeverageController) ComputeOrderSizeForSymbol(symbol string, equ
 		rounded = 1.0 / p
 	}
 	return rounded
+}
+
+// ComputeClipSizeForSymbol returns both the individual passive quote clip size (20% of max symbol allocation,
+// floored above Binance's $5.00 USDT minimum notional) and the maximum inventory limit for that symbol.
+func (c *DynamicLeverageController) ComputeClipSizeForSymbol(symbol string, equity float64, effectiveLev float64, price float64, numSymbols int) (clipQty float64, maxInvQty float64) {
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity < 5.0 ||
+		math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 ||
+		math.IsNaN(effectiveLev) || math.IsInf(effectiveLev, 0) || effectiveLev <= 0 {
+		return 0, 0
+	}
+	maxInvQty = c.ComputeOrderSizeForSymbol(symbol, equity, effectiveLev, price, numSymbols)
+	if price <= 0 || maxInvQty <= 0 {
+		return 0, 0
+	}
+
+	uSym := strings.ToUpper(symbol)
+	prof := SymbolRiskProfile{VolWeight: 1.0, Decimals: 3}
+	for _, p := range []string{"BTC", "ETH", "SOL", "BNB", "DOGE", "XRP", "AVAX", "LINK"} {
+		if strings.HasPrefix(uSym, p) {
+			prof = DefaultSymbolProfiles[p]
+			break
+		}
+	}
+
+	c.mu.RLock()
+	clipFrac := c.cfg.ClipFraction
+	c.mu.RUnlock()
+	if clipFrac <= 0 || clipFrac > 1.0 {
+		clipFrac = 0.20
+	}
+
+	// Each quote leg is clipFrac (default 20%) of the symbol's max target position,
+	// with a minimum clip notional of $6.00 USDT to strictly satisfy Binance Futures $5.00 min notional.
+	targetClip := maxInvQty * clipFrac
+	minClip := 6.0 / price
+	if targetClip < minClip {
+		targetClip = minClip
+	}
+	if targetClip > maxInvQty {
+		targetClip = maxInvQty
+	}
+
+	p := math.Pow(10, float64(prof.Decimals))
+	clipQty = math.Round(targetClip*p) / p
+	if clipQty <= 0 {
+		if prof.Decimals > 0 {
+			clipQty = 1.0 / p
+		} else {
+			clipQty = 1.0
+		}
+	}
+	return clipQty, maxInvQty
+}
+
+// ComputeVolatilityKellySize implements institutional volatility-targeted Fractional Kelly position sizing.
+// Sizes the order so portfolio risk is strictly bounded to a fractional risk budget (1.5% of equity)
+// over the structural stop-loss distance, modulated inversely by realized ATR volatility.
+func (c *DynamicLeverageController) ComputeVolatilityKellySize(symbol string, equity float64, price float64, atrBps float64, stopLossBps float64, numSymbols int) (clipQty float64, maxInvQty float64) {
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity < 5.0 ||
+		math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 {
+		return 0, 0
+	}
+	if numSymbols <= 0 {
+		numSymbols = 1
+	}
+	if math.IsNaN(stopLossBps) || math.IsInf(stopLossBps, 0) || stopLossBps <= 0 {
+		stopLossBps = 60.0
+	}
+	if math.IsNaN(atrBps) || math.IsInf(atrBps, 0) || atrBps <= 0 {
+		atrBps = 35.0
+	}
+
+	uSym := strings.ToUpper(symbol)
+	prof := SymbolRiskProfile{VolWeight: 1.0, Decimals: 3}
+	for _, p := range []string{"BTC", "ETH", "SOL", "BNB", "DOGE", "XRP", "AVAX", "LINK"} {
+		if strings.HasPrefix(uSym, p) {
+			prof = DefaultSymbolProfiles[p]
+			break
+		}
+	}
+
+	// 1. Target dollar risk budget: 1.5% of equity per trade
+	targetRiskUSD := equity * 0.015
+
+	// 2. Stop loss distance in USD per coin: max(stopLossBps, 1.25 * atrBps)
+	effectiveStopBps := math.Max(stopLossBps, atrBps*1.25)
+	stopDistUSD := price * (effectiveStopBps * 1e-4)
+	if stopDistUSD <= 0 {
+		stopDistUSD = price * 0.0050
+	}
+
+	// 3. Base order size derived from risk budget
+	baseQty := targetRiskUSD / stopDistUSD
+
+	// 4. Volatility Scaling: scale inversely with ATR relative to baseline 35 bps
+	volFactor := math.Sqrt(35.0 / math.Max(12.0, atrBps))
+	volFactor = math.Max(0.40, math.Min(1.60, volFactor))
+
+	// 5. Fractional Kelly scaling: (p*b - q)/b with safety factor
+	// Conservative swing parameters: win rate p=0.55, payoff ratio b=50/60=0.833
+	// Full Kelly = 0.076. Conservative fractional Kelly multiplier ~ 1.15
+	kellyMultiplier := 1.15
+
+	// 6. Max symbol inventory cap: at most 80% of account equity in a single asset
+	maxInvNotional := equity * 0.80 * prof.VolWeight
+	maxInvQty = maxInvNotional / price
+
+	// 7. Passive clip sizing: clip is target fraction (e.g. 45%) of max inventory
+	targetClip := baseQty * volFactor * kellyMultiplier
+	if targetClip > maxInvQty*0.60 {
+		targetClip = maxInvQty * 0.60
+	}
+	minClip := 6.0 / price // Binance $5.00 min notional plus safety margin
+	if targetClip < minClip {
+		targetClip = minClip
+	}
+	if targetClip > maxInvQty {
+		targetClip = maxInvQty
+	}
+
+	p := math.Pow(10, float64(prof.Decimals))
+	clipQty = math.Round(targetClip*p) / p
+	if clipQty <= 0 && prof.Decimals > 0 {
+		clipQty = 1.0 / p
+	}
+	maxInvQty = math.Round(maxInvQty*p) / p
+	if math.IsNaN(clipQty) || math.IsInf(clipQty, 0) || clipQty < 0 {
+		clipQty = 0
+	}
+	if math.IsNaN(maxInvQty) || math.IsInf(maxInvQty, 0) || maxInvQty < 0 {
+		maxInvQty = 0
+	}
+	return clipQty, maxInvQty
 }

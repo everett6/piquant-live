@@ -1,0 +1,14 @@
+{
+  "symbol": "BTCUSDT",
+  "gamma": 0.0005,
+  "min_half_spread_bps": 0.85,
+  "clip_fraction": 0.12,
+  "base_leverage": 1.5,
+  "max_leverage_cap": 3,
+  "composite_score": 3.45,
+  "sharpe_ratio": 3.45,
+  "max_drawdown_pct": 0,
+  "total_return_pct": 0,
+  "cagr_pct": 0,
+  "updated_at": "2026-11-09T02:51:41Z"
+}

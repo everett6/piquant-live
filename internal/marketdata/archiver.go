@@ -50,6 +50,9 @@ func DefaultArchiverConfig() ArchiverConfig {
 // EncodeMarketEvent encodes an engine.MarketEvent into a fixed 184-byte little-endian record.
 // Zero heap allocations.
 func EncodeMarketEvent(ev *engine.MarketEvent, dst []byte) {
+	if len(dst) < PQBinRecordSize {
+		return
+	}
 	binary.LittleEndian.PutUint64(dst[0:8], uint64(ev.Timestamp))
 	binary.LittleEndian.PutUint64(dst[8:16], ev.Sequence)
 	binary.LittleEndian.PutUint64(dst[16:24], math.Float64bits(ev.Price))
@@ -66,6 +69,9 @@ func EncodeMarketEvent(ev *engine.MarketEvent, dst []byte) {
 
 // DecodeMarketEvent decodes an engine.MarketEvent from a 184-byte little-endian record.
 func DecodeMarketEvent(src []byte) engine.MarketEvent {
+	if len(src) < 40 {
+		return engine.MarketEvent{}
+	}
 	return engine.MarketEvent{
 		Timestamp: int64(binary.LittleEndian.Uint64(src[0:8])),
 		Sequence:  binary.LittleEndian.Uint64(src[8:16]),

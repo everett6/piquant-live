@@ -74,7 +74,8 @@ func (m *SpotPerpBasisModel) Update(spotPrice, perpPrice float64) BasisDecision 
 func (m *SpotPerpBasisModel) Evaluate(spotPrice, perpPrice, spreadBps float64) BasisDecision {
 	m.SpotPrice = spotPrice
 	m.PerpPrice = perpPrice
-	if spotPrice <= 0 {
+	if math.IsNaN(spotPrice) || math.IsInf(spotPrice, 0) || spotPrice <= 0 ||
+		math.IsNaN(perpPrice) || math.IsInf(perpPrice, 0) || perpPrice <= 0 {
 		return BasisDecision{Action: ActionHold, SpreadBps: spreadBps}
 	}
 
@@ -129,7 +130,8 @@ func (m *SpotPerpBasisModel) Evaluate(spotPrice, perpPrice, spreadBps float64) B
 
 // EvaluateStateless computes the decision without mutating the model's EWMA state.
 func (m *SpotPerpBasisModel) EvaluateStateless(spotPrice, perpPrice, spreadBps float64) BasisDecision {
-	if spotPrice <= 0 {
+	if math.IsNaN(spotPrice) || math.IsInf(spotPrice, 0) || spotPrice <= 0 ||
+		math.IsNaN(perpPrice) || math.IsInf(perpPrice, 0) || perpPrice <= 0 {
 		return BasisDecision{Action: ActionHold, SpreadBps: spreadBps}
 	}
 	basisBps := (perpPrice - spotPrice) / spotPrice * 10000.0

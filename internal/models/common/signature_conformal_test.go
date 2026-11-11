@@ -167,6 +167,51 @@ func TestAdaHedgeEnsembleRegretBoundedAdaptation(t *testing.T) {
 	}
 }
 
+func TestAdaHedgeAntiOverfittingUniformMixture(t *testing.T) {
+	ens := NewAdaHedgeEnsemble(7, 0.985)
+
+	// Phase 1: 100 ticks where expert 0 dominates
+	for step := 0; step < 100; step++ {
+		target := 1.5
+		prevPreds := [MaxEnsembleExperts]float64{
+			1.5,  // expert 0: perfect
+			-5.0, // expert 1: wrong
+			-5.0, // expert 2: wrong
+			-5.0, // expert 3: wrong
+			-5.0, // expert 4: wrong
+			-5.0, // expert 5: wrong
+			-5.0, // expert 6: wrong
+		}
+		currPreds := prevPreds
+		ens.UpdateAndCombine(target, prevPreds, currPreds)
+	}
+
+	// Verify that NO expert has starved to 0.0 (anti-overfitting weight floor)
+	minW := 0.05 / 7.0 // uniformMixAlpha / K ≈ 0.00714
+	for k := 0; k < 7; k++ {
+		if ens.Weights[k] < minW*0.95 {
+			t.Errorf("expert %d starved to %v, expected floor >= %v", k, ens.Weights[k], minW)
+		}
+	}
+
+	// Phase 2: Regime flip! Expert 1 suddenly becomes perfect, expert 0 fails
+	for step := 0; step < 20; step++ {
+		target := -2.0
+		prevPreds := [MaxEnsembleExperts]float64{
+			10.0, // expert 0: now failing
+			-2.0, // expert 1: now perfect
+			10.0, 10.0, 10.0, 10.0, 10.0,
+		}
+		currPreds := prevPreds
+		ens.UpdateAndCombine(target, prevPreds, currPreds)
+	}
+
+	// Because of anti-overfitting floor, expert 1 should rapidly recover weight without getting stuck
+	if ens.Weights[1] <= ens.Weights[0] {
+		t.Errorf("expected expert 1 to overtake failing expert 0 after regime flip, got w1=%v w0=%v", ens.Weights[1], ens.Weights[0])
+	}
+}
+
 func BenchmarkRoughSignatureOFIModelPredict(b *testing.B) {
 	samples := make([]Sample, 100)
 	for i := 0; i < 100; i++ {
