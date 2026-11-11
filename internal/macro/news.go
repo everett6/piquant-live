@@ -3,7 +3,9 @@ package macro
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -169,6 +171,11 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 	hasBTC := strings.Contains(text, "btc") || strings.Contains(text, "bitcoin") || strings.Contains(text, "satoshi")
 	hasETH := strings.Contains(text, "eth") || strings.Contains(text, "ethereum") || strings.Contains(text, "vitalik") || strings.Contains(text, "erc20")
 	hasSOL := strings.Contains(text, "sol") || strings.Contains(text, "solana")
+	hasBNB := strings.Contains(text, "bnb") || strings.Contains(text, "binance coin") || strings.Contains(text, " cz ")
+	hasXRP := strings.Contains(text, "xrp") || strings.Contains(text, "ripple")
+	hasDOGE := strings.Contains(text, "doge") || strings.Contains(text, "dogecoin")
+	hasADA := strings.Contains(text, "ada") || strings.Contains(text, "cardano")
+	hasAVAX := strings.Contains(text, "avax") || strings.Contains(text, "avalanche")
 
 	if hasBTC {
 		affectedSymbols = append(affectedSymbols, "BTCUSDT", "BTCUSDC")
@@ -179,12 +186,32 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 	if hasSOL {
 		affectedSymbols = append(affectedSymbols, "SOLUSDT")
 	}
+	if hasBNB {
+		affectedSymbols = append(affectedSymbols, "BNBUSDT")
+	}
+	if hasXRP {
+		affectedSymbols = append(affectedSymbols, "XRPUSDT")
+	}
+	if hasDOGE {
+		affectedSymbols = append(affectedSymbols, "DOGEUSDT")
+	}
+	if hasADA {
+		affectedSymbols = append(affectedSymbols, "ADAUSDT")
+	}
+	if hasAVAX {
+		affectedSymbols = append(affectedSymbols, "AVAXUSDT")
+	}
 
 	// 2. Keyword Classification: Micro vs Macro & Taxonomy
+	isStableDepeg := (strings.Contains(text, "depeg") || strings.Contains(text, "lost peg") || strings.Contains(text, "below $1") || strings.Contains(text, "below 1$") || strings.Contains(text, "breaks peg")) &&
+		(strings.Contains(text, "usdt") || strings.Contains(text, "usdc") || strings.Contains(text, "dai") || strings.Contains(text, "stablecoin"))
+
 	isMicroHack := strings.Contains(text, "hack") || strings.Contains(text, "exploit") ||
 		strings.Contains(text, "drained") || strings.Contains(text, "stolen") ||
-		strings.Contains(text, "vulnerability") || strings.Contains(text, "rugpull") ||
-		strings.Contains(text, "bridge attack") || strings.Contains(text, "flash loan attack")
+		strings.Contains(text, "theft") || strings.Contains(text, "vulnerability") ||
+		strings.Contains(text, "rugpull") || strings.Contains(text, "bridge attack") ||
+		strings.Contains(text, "flash loan attack") || strings.Contains(text, "private key compromise") ||
+		strings.Contains(text, "oracle manipulation") || strings.Contains(text, "sandwich attack")
 
 	isMicroUpgrade := strings.Contains(text, "halving") || strings.Contains(text, "upgrade") ||
 		strings.Contains(text, "hard fork") || strings.Contains(text, "pectra") ||
@@ -213,7 +240,16 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 		strings.Contains(text, "treasury")
 
 	// 3. Scope & Category Routing
-	if isMicroHack {
+	if isStableDepeg {
+		scope = ScopeMacro
+		category = CatExploitHack
+		impact = ImpactUrgentCritical
+		isExploit = true
+		urgency = 0.99
+		confidence = 0.95
+		sentiment = -0.95
+		affectedSymbols = []string{"BTCUSDT", "BTCUSDC", "ETHUSDT", "SOLUSDT"}
+	} else if isMicroHack {
 		scope = ScopeMicro
 		category = CatExploitHack
 		impact = ImpactUrgentCritical
@@ -435,6 +471,18 @@ func (p *NewsPipeline) Evaluate(now time.Time) NewsSentimentReport {
 		}
 	}
 
+	// Cross-Asset Liquidity Contagion:
+	// If any asset suffers a critical exploit (bid kill active), widen correlated asset spreads by 1.35x
+	// to prevent absorbing cascading panic selling spillover.
+	if len(rep.SymbolBidKills) > 0 {
+		commonSymbols := []string{"BTCUSDT", "BTCUSDC", "ETHUSDT", "SOLUSDT"}
+		for _, sym := range commonSymbols {
+			if !rep.SymbolBidKills[sym] {
+				rep.SpreadMultipliers[sym] = math.Max(rep.SpreadMultipliers[sym], 1.35)
+			}
+		}
+	}
+
 	return rep
 }
 
@@ -456,6 +504,8 @@ func (p *NewsPipeline) Start(ctx context.Context) {
 	ticker := time.NewTicker(3 * time.Minute)
 	go func() {
 		defer ticker.Stop()
+		// Initial sync on startup to ingest latest live headlines
+		p.Sync(ctx)
 		for {
 			select {
 			case <-ctx.Done():
@@ -478,17 +528,52 @@ func (p *NewsPipeline) Stop() {
 	}
 }
 
-// Sync performs a lightweight HTTP fetch if a custom syncURL is configured.
+type rssItem struct {
+	Title       string `xml:"title"`
+	Description string `xml:"description"`
+	Link        string `xml:"link"`
+	PubDate     string `xml:"pubDate"`
+}
+
+type rssChannel struct {
+	Title string    `xml:"title"`
+	Items []rssItem `xml:"item"`
+}
+
+type rssDocument struct {
+	XMLName xml.Name   `xml:"rss"`
+	Channel rssChannel `xml:"channel"`
+}
+
+// Sync performs an autonomous feed fetch from custom syncURL or free public crypto RSS feeds.
 func (p *NewsPipeline) Sync(ctx context.Context) {
-	if p.syncURL == "" || strings.HasPrefix(p.syncURL, "http://invalid") {
-		return
+	urls := []string{}
+	if p.syncURL != "" {
+		if strings.HasPrefix(p.syncURL, "http://invalid") {
+			return
+		}
+		urls = append(urls, p.syncURL)
+	} else {
+		// Autonomous public feeds (free, live, no API key required)
+		urls = append(urls, "https://cointelegraph.com/rss")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.syncURL, nil)
+	for _, targetURL := range urls {
+		p.fetchAndIngestFeed(ctx, targetURL)
+	}
+
+	p.mu.Lock()
+	p.lastSync = time.Now().UTC()
+	p.mu.Unlock()
+}
+
+func (p *NewsPipeline) fetchAndIngestFeed(ctx context.Context, targetURL string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return
 	}
-	req.Header.Set("User-Agent", "PiQuant-NewsOracle/1.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; PiQuant-NewsOracle/1.0)")
+	req.Header.Set("Accept", "application/xml, text/xml, application/json, */*")
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
@@ -500,28 +585,87 @@ func (p *NewsPipeline) Sync(ctx context.Context) {
 		return
 	}
 
-	var rawItems []struct {
-		Title     string `json:"title"`
-		Summary   string `json:"summary"`
-		Source    string `json:"source"`
-		URL       string `json:"url"`
-		Timestamp string `json:"timestamp"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&rawItems); err != nil {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024)) // 1MB safety cap
+	if err != nil || len(body) == 0 {
 		return
 	}
 
-	for _, raw := range rawItems {
-		t, err := time.Parse(time.RFC3339, raw.Timestamp)
-		if err != nil {
-			t = time.Now().UTC()
+	trimmed := strings.TrimSpace(string(body))
+	if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
+		// JSON feed
+		var rawItems []struct {
+			Title     string `json:"title"`
+			Summary   string `json:"summary"`
+			Source    string `json:"source"`
+			URL       string `json:"url"`
+			Timestamp string `json:"timestamp"`
 		}
-		p.IngestRawHeadline(raw.Title, raw.Summary, raw.Source, raw.URL, t)
+		if err := json.Unmarshal(body, &rawItems); err == nil {
+			for _, raw := range rawItems {
+				t, err := time.Parse(time.RFC3339, raw.Timestamp)
+				if err != nil {
+					t = time.Now().UTC()
+				}
+				p.IngestRawHeadline(raw.Title, raw.Summary, raw.Source, raw.URL, t)
+			}
+		}
+		return
 	}
 
-	p.mu.Lock()
-	p.lastSync = time.Now().UTC()
-	p.mu.Unlock()
+	// RSS/XML feed
+	var doc rssDocument
+	if err := xml.Unmarshal(body, &doc); err == nil && len(doc.Channel.Items) > 0 {
+		sourceName := doc.Channel.Title
+		if sourceName == "" {
+			sourceName = "CoinTelegraph RSS"
+		}
+		for _, it := range doc.Channel.Items {
+			cleanSummary := stripHTMLTags(it.Description)
+			pubT := parsePubDate(it.PubDate)
+			p.IngestRawHeadline(it.Title, cleanSummary, sourceName, it.Link, pubT)
+		}
+	}
+}
+
+func parsePubDate(s string) time.Time {
+	s = strings.TrimSpace(s)
+	formats := []string{
+		time.RFC1123Z,
+		time.RFC1123,
+		time.RFC3339,
+		"Mon, 02 Jan 2006 15:04:05 -0700",
+		"Mon, 2 Jan 2006 15:04:05 -0700",
+		"02 Jan 2006 15:04:05 GMT",
+	}
+	for _, f := range formats {
+		if t, err := time.Parse(f, s); err == nil {
+			return t
+		}
+	}
+	return time.Now().UTC()
+}
+
+func stripHTMLTags(s string) string {
+	var sb strings.Builder
+	inTag := false
+	for _, ch := range s {
+		if ch == '<' {
+			inTag = true
+			continue
+		} else if ch == '>' {
+			inTag = false
+			continue
+		}
+		if !inTag {
+			sb.WriteRune(ch)
+		}
+	}
+	clean := strings.ReplaceAll(sb.String(), "&amp;", "&")
+	clean = strings.ReplaceAll(clean, "&quot;", "\"")
+	clean = strings.ReplaceAll(clean, "&#39;", "'")
+	clean = strings.ReplaceAll(clean, "&lt;", "<")
+	clean = strings.ReplaceAll(clean, "&gt;", ">")
+	return strings.TrimSpace(clean)
 }
 
 func (p *NewsPipeline) saveCacheLocked() error {

@@ -646,6 +646,57 @@ const indexHTML = `<!doctype html>
         </div>
       </section>
 
+      <!-- Macro & Micro News Intelligence Oracle (Exploit Defense Shield) -->
+      <section class="card span12" id="newsOracleCard">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+          <div>
+            <h2 style="margin:0">Macro &amp; Micro News Intelligence Oracle</h2>
+            <div class="meta" style="margin-top:2px">Real-time NLP sentiment extraction, dual-horizon exponential time-decay &amp; instant exploit bid-kill shield</div>
+          </div>
+          <div class="pills">
+            <span class="pill ok" id="newsOracleMacroPill">Macro Bias: Neutral (+0.00)</span>
+            <span class="pill ok" id="newsOracleExploitPill">Exploit Shield: Clear</span>
+            <span class="pill info" id="newsOracleFeedPill">Feed: CoinTelegraph RSS + Webhooks</span>
+          </div>
+        </div>
+
+        <!-- Exploit Alert Banner (hidden when no kills active) -->
+        <div id="newsExploitBanner" style="display:none;background:rgba(239,68,68,0.15);border:1px solid #ef4444;border-radius:8px;padding:10px 16px;margin-bottom:12px;color:#fca5a5;font-weight:600;align-items:center;justify-content:space-between">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:18px">&#9888;</span>
+            <span id="newsExploitBannerText">EXPLOIT BID-KILL ACTIVE: Resting buy orders canceled to block toxic knife-catching!</span>
+          </div>
+          <span class="pill bad" style="font-weight:700">PROTECTION ENGAGED</span>
+        </div>
+
+        <div class="stats" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">
+          <div class="stat"><div class="k">Systemic Macro Sentiment</div><div class="v" id="newsStatMacro" style="font-size:18px">+0.00</div><div class="s" id="newsStatMacroLabel">Neutral Bias</div></div>
+          <div class="stat"><div class="k">BTC News Score</div><div class="v" id="newsStatBTC" style="font-size:18px">+0.00</div><div class="s" id="newsStatBTCSpread">Spread: 1.00x</div></div>
+          <div class="stat"><div class="k">ETH News Score</div><div class="v" id="newsStatETH" style="font-size:18px">+0.00</div><div class="s" id="newsStatETHSpread">Spread: 1.00x</div></div>
+          <div class="stat"><div class="k">SOL News Score</div><div class="v" id="newsStatSOL" style="font-size:18px">+0.00</div><div class="s" id="newsStatSOLSpread">Spread: 1.00x</div></div>
+        </div>
+
+        <!-- Recent News Feed Table -->
+        <div style="margin-bottom:12px">
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600;margin-bottom:6px">Recent Breaking News &amp; Macro Alerts</div>
+          <div style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
+            <table class="table" style="font-size:12px;margin:0">
+              <thead><tr><th>Time</th><th>Scope</th><th>Impact</th><th>Sentiment</th><th>Assets</th><th>Headline</th></tr></thead>
+              <tbody id="newsFeedTableBody">
+                <tr><td colspan="6" style="text-align:center;color:var(--muted)">Loading news oracle intelligence...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Interactive News Webhook / Headline Simulator -->
+        <div style="background:rgba(255,255,255,0.02);border:1px dashed var(--border);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-size:12px;font-weight:600;color:var(--text);white-space:nowrap">&#9889; Test Exploit Shield:</span>
+          <input id="newsSimInput" type="text" placeholder="e.g. Major Solana Cross-Chain Bridge Exploit: $120M Drained by Hacker" style="flex:1;min-width:260px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px">
+          <button class="btn btn-primary" onclick="injectHeadlineSim()" style="padding:6px 14px;font-size:12px;white-space:nowrap">Inject &amp; Evaluate Defense &rarr;</button>
+        </div>
+      </section>
+
       <!-- GLFT Passive Market-Making, BOCPD Regime & Cross-Asset Lead-Lag Blotter -->
       <section class="card span12">
         <!-- 2-Week Autonomous Paper Money Dry Run Banner -->
@@ -2419,8 +2470,131 @@ const indexHTML = `<!doctype html>
           .then(function(r){ return r.json(); })
           .then(function(res){
             updateDryRunUI(res);
+            if (res && res.state && res.state.news_sentiment) {
+              updateNewsUI(res.state.news_sentiment);
+            }
+            refreshNewsFeed();
           }).catch(function(){});
       }).catch(function(){});
+  }
+
+  // News Intelligence Oracle UI & Ingestion Simulator
+  function updateNewsUI(rep) {
+    if (!rep) return;
+    var macroScore = rep.macro_sentiment || 0;
+    var mSign = macroScore >= 0 ? "+" : "";
+    var mDesc = "Neutral Bias";
+    if (macroScore >= 0.30) mDesc = "Bullish / Dovish Bias";
+    else if (macroScore <= -0.30) mDesc = "Bearish / Hawkish Bias";
+
+    if ($("newsOracleMacroPill")) {
+      $("newsOracleMacroPill").textContent = "Macro Bias: " + mSign + num(macroScore, 2);
+      $("newsOracleMacroPill").className = "pill " + (macroScore >= 0.25 ? "ok" : (macroScore <= -0.25 ? "warn" : "info"));
+    }
+    if ($("newsStatMacro")) {
+      $("newsStatMacro").textContent = mSign + num(macroScore, 2);
+      $("newsStatMacro").style.color = macroScore > 0 ? "var(--accent)" : (macroScore < 0 ? "var(--bad)" : "var(--text)");
+    }
+    if ($("newsStatMacroLabel")) $("newsStatMacroLabel").textContent = mDesc;
+
+    var syms = rep.symbol_sentiments || {};
+    var btcScore = syms["BTCUSDT"] || syms["BTCUSDC"] || 0;
+    var ethScore = syms["ETHUSDT"] || 0;
+    var solScore = syms["SOLUSDT"] || 0;
+
+    var spreads = rep.spread_multipliers || {};
+    var btcMult = spreads["BTCUSDT"] || spreads["BTCUSDC"] || 1.0;
+    var ethMult = spreads["ETHUSDT"] || 1.0;
+    var solMult = spreads["SOLUSDT"] || 1.0;
+
+    var kills = rep.symbol_bid_kills || {};
+    var activeKills = [];
+    for (var k in kills) {
+      if (kills[k]) activeKills.push(k);
+    }
+
+    if ($("newsStatBTC")) {
+      $("newsStatBTC").textContent = (btcScore >= 0 ? "+" : "") + num(btcScore, 2);
+      $("newsStatBTC").style.color = kills["BTCUSDT"] ? "var(--bad)" : (btcScore >= 0 ? "var(--accent)" : "var(--bad)");
+    }
+    if ($("newsStatBTCSpread")) $("newsStatBTCSpread").textContent = kills["BTCUSDT"] ? "BID KILL ENGAGED" : "Spread: " + num(btcMult, 2) + "x";
+
+    if ($("newsStatETH")) {
+      $("newsStatETH").textContent = (ethScore >= 0 ? "+" : "") + num(ethScore, 2);
+      $("newsStatETH").style.color = kills["ETHUSDT"] ? "var(--bad)" : (ethScore >= 0 ? "var(--accent)" : "var(--bad)");
+    }
+    if ($("newsStatETHSpread")) $("newsStatETHSpread").textContent = kills["ETHUSDT"] ? "BID KILL ENGAGED" : "Spread: " + num(ethMult, 2) + "x";
+
+    if ($("newsStatSOL")) {
+      $("newsStatSOL").textContent = (solScore >= 0 ? "+" : "") + num(solScore, 2);
+      $("newsStatSOL").style.color = kills["SOLUSDT"] ? "var(--bad)" : (solScore >= 0 ? "var(--accent)" : "var(--bad)");
+    }
+    if ($("newsStatSOLSpread")) $("newsStatSOLSpread").textContent = kills["SOLUSDT"] ? "BID KILL ENGAGED" : "Spread: " + num(solMult, 2) + "x";
+
+    if ($("newsExploitBanner") && $("newsExploitBannerText")) {
+      if (activeKills.length > 0) {
+        $("newsExploitBanner").style.display = "flex";
+        $("newsExploitBannerText").textContent = "EXPLOIT BID-KILL ACTIVE ON: " + activeKills.join(", ") + " \u2014 Resting buy quotes pulled to block toxic fills!";
+        if ($("newsOracleExploitPill")) {
+          $("newsOracleExploitPill").textContent = "Exploit Shield: ACTIVE (" + activeKills.join(",") + ")";
+          $("newsOracleExploitPill").className = "pill bad";
+        }
+      } else {
+        $("newsExploitBanner").style.display = "none";
+        if ($("newsOracleExploitPill")) {
+          $("newsOracleExploitPill").textContent = "Exploit Shield: Clear";
+          $("newsOracleExploitPill").className = "pill ok";
+        }
+      }
+    }
+  }
+
+  var newsFeedLoaded = false;
+  function refreshNewsFeed() {
+    fetch("/api/news?limit=6")
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (!d || !d.news || !$("newsFeedTableBody")) return;
+        newsFeedLoaded = true;
+        if (d.news.length === 0) {
+          $("newsFeedTableBody").innerHTML = "<tr><td colspan='6' style='text-align:center;color:var(--muted)'>No breaking news active in current decay window</td></tr>";
+          return;
+        }
+        $("newsFeedTableBody").innerHTML = d.news.map(function(item){
+          var tStr = item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : "-";
+          var scopePill = item.scope === "MACRO" ? "<span class='pill info'>MACRO</span>" : "<span class='pill warn'>MICRO</span>";
+          var impClass = item.impact === "CRITICAL" ? "pill bad" : (item.impact === "HIGH" ? "pill warn" : "pill");
+          var impPill = "<span class='" + impClass + "'>" + esc(item.impact) + "</span>";
+          var sColor = item.sentiment_score > 0 ? "var(--accent)" : (item.sentiment_score < 0 ? "var(--bad)" : "var(--muted)");
+          var sentStr = "<span style='color:" + sColor + ";font-weight:600'>" + (item.sentiment_score >= 0 ? "+" : "") + num(item.sentiment_score, 2) + "</span>";
+          var syms = item.affected_symbols && item.affected_symbols.length ? esc(item.affected_symbols.join(",")) : "ALL";
+          return "<tr><td>" + esc(tStr) + "</td><td>" + scopePill + "</td><td>" + impPill + "</td><td>" + sentStr + "</td><td><b>" + syms + "</b></td><td>" + esc(item.title) + "</td></tr>";
+        }).join("");
+      }).catch(function(){});
+  }
+
+  function injectHeadlineSim() {
+    var inp = $("newsSimInput");
+    if (!inp || !inp.value.trim()) return;
+    var title = inp.value.trim();
+    fetch("/api/news/ingest", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        title: title,
+        source: "Dashboard Webhook Simulator"
+      })
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(res){
+      if (res && res.report) {
+        updateNewsUI(res.report);
+        refreshNewsFeed();
+        inp.value = "";
+      }
+    }).catch(function(err){
+      alert("Error injecting news: " + err);
+    });
   }
 
   // 10-15 Year Historical Simulation Data Loader

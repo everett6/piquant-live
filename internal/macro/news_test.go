@@ -278,3 +278,74 @@ func TestNewsPipeline_ConcurrentRace(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestNewsPipeline_StablecoinDepeg(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "news_depeg_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	pipeline := NewNewsPipeline(tmpDir, "")
+	now := time.Now().UTC()
+
+	item := pipeline.Analyze(
+		"Market Shock: USDT Breaks Peg to $0.94 Amid Heavy Redemptions",
+		"Tether reserves questioned as stablecoin liquidity pool experiences massive imbalance.",
+		"Wire",
+		"https://example.com/depeg",
+		now,
+	)
+
+	if item.Scope != ScopeMacro {
+		t.Errorf("expected ScopeMacro for stablecoin depeg, got %s", item.Scope)
+	}
+	if item.Impact != ImpactUrgentCritical {
+		t.Errorf("expected ImpactUrgentCritical, got %s", item.Impact)
+	}
+	if !item.IsAdverseExploit {
+		t.Errorf("expected IsAdverseExploit == true")
+	}
+	if item.SentimentScore > -0.80 {
+		t.Errorf("expected deeply negative sentiment, got %.2f", item.SentimentScore)
+	}
+	if len(item.AffectedSymbols) == 0 {
+		t.Errorf("expected all major symbols affected by stablecoin depeg")
+	}
+}
+
+func TestNewsPipeline_ContagionWidening(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "news_contagion_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	pipeline := NewNewsPipeline(tmpDir, "")
+	now := time.Now().UTC()
+
+	// Exploit only on SOL
+	pipeline.Ingest(NewsItem{
+		ID:               "sol_hack_only",
+		Timestamp:        now.Add(-2 * time.Minute),
+		Scope:            ScopeMicro,
+		Category:         CatExploitHack,
+		Impact:           ImpactUrgentCritical,
+		Title:            "Solana Core Protocol Flash Loan Hack: $75M Drained",
+		AffectedSymbols:  []string{"SOLUSDT"},
+		SentimentScore:   -0.95,
+		UrgencyScore:     0.95,
+		ConfidenceScore:  0.95,
+		IsAdverseExploit: true,
+	})
+
+	rep := pipeline.Evaluate(now)
+	if !rep.SymbolBidKills["SOLUSDT"] {
+		t.Errorf("expected SymbolBidKills['SOLUSDT'] == true")
+	}
+	// BTCUSDT is not hacked, but should receive contagion spread widening (>= 1.35x)
+	btcMult, ok := rep.SpreadMultipliers["BTCUSDT"]
+	if !ok || btcMult < 1.35 {
+		t.Errorf("expected contagion spread multiplier >= 1.35 on BTCUSDT during exploit, got %.2f", btcMult)
+	}
+}

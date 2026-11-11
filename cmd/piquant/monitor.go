@@ -563,6 +563,46 @@ func renderTerminalFrame(w io.Writer, st *paper.DryRunState, trades []paper.Trad
 	)
 	fmt.Println()
 
+	// 4c. MACRO & MICRO NEWS INTELLIGENCE ORACLE
+	if st.NewsSentiment != nil {
+		newsRep := st.NewsSentiment
+		newsBias := fmt.Sprintf("%+.2f", newsRep.MacroSentiment)
+		biasColor := ansiBrightWhite
+		if newsRep.MacroSentiment >= 0.25 {
+			biasColor = ansiBrightGreen
+		} else if newsRep.MacroSentiment <= -0.25 {
+			biasColor = ansiBrightRed
+		}
+
+		exploitText := ansiBrightGreen + ansiBold + "NORMAL (Order Books Clear)" + ansiReset
+		var activeKills []string
+		for sym, k := range newsRep.SymbolBidKills {
+			if k {
+				activeKills = append(activeKills, sym)
+			}
+		}
+		if len(activeKills) > 0 {
+			exploitText = ansiBrightRed + ansiBold + fmt.Sprintf("EXPLOIT BID KILL ACTIVE: %s", strings.Join(activeKills, ",")) + ansiReset
+		}
+
+		headline := "Calibrated baseline"
+		if len(newsRep.ActiveAlerts) > 0 {
+			al := newsRep.ActiveAlerts[0]
+			headline = fmt.Sprintf("[%s] %s (%+.2f)", al.Impact, al.Title, al.SentimentScore)
+			if len(headline) > width-45 && width > 48 {
+				headline = headline[:width-48] + "..."
+			}
+		}
+
+		fmt.Fprintf(w, "%s[NEWS ORACLE SHIELD]%s   Macro: %s%s%s │ Shield: %s │ Latest: %s\n",
+			ansiCyan, ansiReset,
+			biasColor, newsBias, ansiReset,
+			exploitText,
+			headline,
+		)
+		fmt.Println()
+	}
+
 	// 5. OPEN POSITIONS TABLE
 	fmt.Fprintf(w, "%s┌─ ACTIVE PORTFOLIO INVENTORY %s┐%s\n", ansiYellow, strings.Repeat("─", width-32), ansiReset)
 	fmt.Fprintf(w, "%s  %-10s %-8s %-12s %-14s %-14s %-16s %-8s %-10s%s\n",
