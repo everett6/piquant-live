@@ -86,11 +86,12 @@ func DefaultStreamConfig() StreamConfig {
 // parses depth20 and trades, maintains sequenced L2 order books, and pushes MarketEvents
 // to an engine.SPSCRing with zero heap allocations on the hot path.
 type MarketStreamIngestor struct {
-	cfg       StreamConfig
-	ring      *engine.SPSCRing
-	booksMu   sync.RWMutex
-	books     map[string]*marketdata.L2OrderBook
-	symbolIDs map[string]uint16
+	cfg        StreamConfig
+	ring       *engine.SPSCRing
+	booksMu    sync.RWMutex
+	books      map[string]*marketdata.L2OrderBook
+	symbolIDs  map[string]uint16
+	symbolByID map[uint16]string // reverse of symbolIDs, for O(1) SymbolForID
 
 	connected atomic.Bool
 	fallback  atomic.Bool
@@ -129,17 +130,20 @@ func NewMarketStreamIngestor(cfg StreamConfig, ring *engine.SPSCRing) *MarketStr
 
 	books := make(map[string]*marketdata.L2OrderBook, len(cfg.Symbols))
 	symIDs := make(map[string]uint16, len(cfg.Symbols))
+	byID := make(map[uint16]string, len(cfg.Symbols))
 	for idx, s := range cfg.Symbols {
 		upper := strings.ToUpper(s)
 		books[upper] = marketdata.NewL2OrderBook(upper)
 		symIDs[upper] = uint16(idx)
+		byID[uint16(idx)] = upper
 	}
 
 	return &MarketStreamIngestor{
-		cfg:       cfg,
-		ring:      ring,
-		books:     books,
-		symbolIDs: symIDs,
+		cfg:        cfg,
+		ring:       ring,
+		books:      books,
+		symbolIDs:  symIDs,
+		symbolByID: byID,
 	}
 }
 
@@ -191,12 +195,7 @@ func (m *MarketStreamIngestor) Stats() (total, depths, trades, gaps, reconnects,
 func (m *MarketStreamIngestor) SymbolForID(id uint16) string {
 	m.booksMu.RLock()
 	defer m.booksMu.RUnlock()
-	for sym, sid := range m.symbolIDs {
-		if sid == id {
-			return sym
-		}
-	}
-	return ""
+	return m.symbolByID[id]
 }
 
 func (m *MarketStreamIngestor) GetL2Book(symbol string) (*marketdata.L2OrderBook, bool) {
@@ -502,6 +501,7 @@ func (m *MarketStreamIngestor) handleDepthUpdate(payload []byte, nowNs int64) {
 		book = marketdata.NewL2OrderBook(symbol)
 		m.books[symbol] = book
 		m.symbolIDs[symbol] = uint16(len(m.symbolIDs))
+		m.symbolByID[m.symbolIDs[symbol]] = symbol
 	}
 
 	// Set fresh snapshot or update in-place with zero allocations
@@ -569,6 +569,7 @@ func (m *MarketStreamIngestor) handleTradeUpdate(payload []byte, nowNs int64) {
 		} else {
 			symID = uint16(len(m.symbolIDs))
 			m.symbolIDs[symbol] = symID
+			m.symbolByID[symID] = symbol
 		}
 		m.booksMu.Unlock()
 	}
