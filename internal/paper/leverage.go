@@ -51,22 +51,22 @@ type DynamicLeverageController struct {
 
 // NewDynamicLeverageController constructs an automated leverage controller.
 func NewDynamicLeverageController(cfg DynamicLeverageConfig) *DynamicLeverageController {
-	if cfg.MinLeverage <= 0 {
+	if math.IsNaN(cfg.MinLeverage) || math.IsInf(cfg.MinLeverage, 0) || cfg.MinLeverage <= 0 {
 		cfg.MinLeverage = 0.5
 	}
-	if cfg.MaxLeverage <= 0 {
+	if math.IsNaN(cfg.MaxLeverage) || math.IsInf(cfg.MaxLeverage, 0) || cfg.MaxLeverage <= 0 {
 		cfg.MaxLeverage = 5.0
 	}
-	if cfg.BaseLeverage <= 0 {
+	if math.IsNaN(cfg.BaseLeverage) || math.IsInf(cfg.BaseLeverage, 0) || cfg.BaseLeverage <= 0 {
 		cfg.BaseLeverage = 2.5
 	}
-	if cfg.TargetVolBps <= 0 {
+	if math.IsNaN(cfg.TargetVolBps) || math.IsInf(cfg.TargetVolBps, 0) || cfg.TargetVolBps <= 0 {
 		cfg.TargetVolBps = 15.0
 	}
-	if cfg.MaxDrawdownPct <= 0 {
+	if math.IsNaN(cfg.MaxDrawdownPct) || math.IsInf(cfg.MaxDrawdownPct, 0) || cfg.MaxDrawdownPct <= 0 {
 		cfg.MaxDrawdownPct = 2.0
 	}
-	if cfg.ClipFraction <= 0 || cfg.ClipFraction > 1.0 {
+	if math.IsNaN(cfg.ClipFraction) || math.IsInf(cfg.ClipFraction, 0) || cfg.ClipFraction <= 0 || cfg.ClipFraction > 1.0 {
 		cfg.ClipFraction = 0.20
 	}
 	return &DynamicLeverageController{cfg: cfg}
@@ -267,7 +267,7 @@ func (c *DynamicLeverageController) ComputeOrderSizeForSymbol(symbol string, equ
 // ComputeClipSizeForSymbol returns both the individual passive quote clip size (20% of max symbol allocation,
 // floored above Binance's $5.00 USDT minimum notional) and the maximum inventory limit for that symbol.
 func (c *DynamicLeverageController) ComputeClipSizeForSymbol(symbol string, equity float64, effectiveLev float64, price float64, numSymbols int) (clipQty float64, maxInvQty float64) {
-	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 ||
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity < 5.0 ||
 		math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 ||
 		math.IsNaN(effectiveLev) || math.IsInf(effectiveLev, 0) || effectiveLev <= 0 {
 		return 0, 0
@@ -320,7 +320,7 @@ func (c *DynamicLeverageController) ComputeClipSizeForSymbol(symbol string, equi
 // Sizes the order so portfolio risk is strictly bounded to a fractional risk budget (1.5% of equity)
 // over the structural stop-loss distance, modulated inversely by realized ATR volatility.
 func (c *DynamicLeverageController) ComputeVolatilityKellySize(symbol string, equity float64, price float64, atrBps float64, stopLossBps float64, numSymbols int) (clipQty float64, maxInvQty float64) {
-	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 ||
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity < 5.0 ||
 		math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 {
 		return 0, 0
 	}

@@ -246,3 +246,75 @@ func BenchmarkRidgePredict(b *testing.B) {
 		b.Fatal("unexpected NaN")
 	}
 }
+
+// TestHoles47Through59 validates fixes for Holes 47, 48, 49, 59.
+func TestHoles47Through59(t *testing.T) {
+	// Hole 47: VPINCalculator Infinite Trade Size & NaN
+	vpin := NewVPINCalculator(math.NaN(), -1)
+	if vpin.BucketVol != 5.0 || vpin.NumBuckets != DefaultVPINBuckets {
+		t.Fatalf("Hole 47 failed: NewVPINCalculator with NaN did not set defaults: %+v", vpin)
+	}
+	// Passing +Inf or NaN should not hang or crash
+	vpin.UpdateTrade(60000.0, math.Inf(1), false)
+	vpin.UpdateTrade(60000.0, math.NaN(), false)
+	vpin.UpdateTradeTick(60000.0, math.Inf(1))
+	vpin.UpdateTradeBVC(60000.0, math.Inf(1), 10.0)
+	score := vpin.VPIN()
+	if math.IsNaN(score) || math.IsInf(score, 0) {
+		t.Fatalf("Hole 47 failed: VPIN() returned invalid score: %v", score)
+	}
+
+	// Hole 47 & 48: HawkesIntensity Clock Rewind and NaN
+	hi := NewHawkesIntensity(math.NaN())
+	if hi.Beta != 2.0 {
+		t.Fatalf("Hole 48 failed: NewHawkesIntensity did not set default beta")
+	}
+	// Normal update at t=1000
+	hi.Update(1000, true, 1.0)
+	// Out of order update at t=500 should not rewind clock
+	hi.Update(500, true, 1.0)
+	// Passing NaN qty should not poison intensities
+	hi.Update(2000, false, math.NaN())
+	hi.Update(3000, true, math.Inf(1))
+	imb := hi.Imbalance(4000)
+	if math.IsNaN(imb) || math.IsInf(imb, 0) || imb < -1.0 || imb > 1.0 {
+		t.Fatalf("Hole 48 failed: HawkesIntensity imbalance is invalid: %v", imb)
+	}
+
+	vt := NewVPINTracker(math.NaN(), -1)
+	vt.AddTrade(true, math.Inf(1))
+	vt.AddTrade(false, math.NaN())
+	tox := vt.Toxicity()
+	if math.IsNaN(tox) || math.IsInf(tox, 0) {
+		t.Fatalf("Hole 47 failed: VPINTracker toxicity returned invalid: %v", tox)
+	}
+
+	// Hole 49: SmartOrderRouter NaN inputs
+	sor := SmartOrderRouter{
+		HorizonSec: 5.0,
+		QueueModel: NewQueueReactiveModel(),
+	}
+	dec := sor.Route(math.NaN(), math.NaN(), math.NaN(), math.NaN(), math.NaN())
+	if math.IsNaN(dec.MakerFraction) || math.IsNaN(dec.TakerFraction) ||
+		math.IsNaN(dec.SpotAllocation) || math.IsNaN(dec.PerpAllocation) ||
+		math.IsNaN(dec.ExpectedEdgeBps) || math.IsNaN(dec.ExpectedSlippageBps) {
+		t.Fatalf("Hole 49 failed: SmartOrderRouter.Route with NaN returned NaN decision: %+v", dec)
+	}
+
+	// Hole 59: TriangularArb NaN Handling
+	tri := NewTriangularArbModel(0.01, math.NaN(), math.NaN(), math.NaN(), math.NaN())
+	if tri.FeeA != 2.0 || tri.ThresholdBps != 0.5 {
+		t.Fatalf("Hole 59 failed: NewTriangularArbModel did not set fallback fees")
+	}
+	triDec := tri.UpdatePrices(math.NaN(), 2000.0, 0.03)
+	if triDec.ArbOpportunity || math.IsNaN(triDec.NetEdgeBps) || math.IsNaN(triDec.DivergenceBps) {
+		t.Fatalf("Hole 59 failed: TriangularArb UpdatePrices with NaN PriceA returned: %+v", triDec)
+	}
+
+	var xFeat [FeatureCount]float64
+	xFeat[4] = math.NaN()
+	pred := tri.Predict(&xFeat)
+	if math.IsNaN(pred) || math.IsInf(pred, 0) {
+		t.Fatalf("Hole 59 failed: TriangularArb Predict with NaN spread returned: %v", pred)
+	}
+}

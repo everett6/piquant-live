@@ -20,7 +20,7 @@ type HawkesIntensity struct {
 
 // NewHawkesIntensity initializes an online Hawkes intensity tracker.
 func NewHawkesIntensity(beta float64) *HawkesIntensity {
-	if beta <= 0 {
+	if math.IsNaN(beta) || math.IsInf(beta, 0) || beta <= 0 {
 		beta = 2.0 // default 0.5s half-life
 	}
 	return &HawkesIntensity{
@@ -38,10 +38,19 @@ func (h *HawkesIntensity) Update(tNs int64, isBuy bool, qty float64) {
 		decay := math.Exp(-h.Beta * dtSec)
 		h.intensityBuy = h.Mu + (h.intensityBuy-h.Mu)*decay
 		h.intensitySell = h.Mu + (h.intensitySell-h.Mu)*decay
+		h.lastTimeNs = tNs
+	} else if h.lastTimeNs == 0 {
+		h.lastTimeNs = tNs
 	}
-	h.lastTimeNs = tNs
+	// Note: if tNs <= h.lastTimeNs, we do NOT rewind clock cursor h.lastTimeNs
 
-	jump := math.Log(1.0 + math.Max(0.0, qty))
+	if math.IsNaN(qty) || math.IsInf(qty, 0) || qty < 0 {
+		qty = 0
+	}
+	jump := math.Log(1.0 + qty)
+	if math.IsNaN(jump) || math.IsInf(jump, 0) || jump < 0 {
+		jump = 0
+	}
 	if isBuy {
 		h.intensityBuy += h.AlphaSelf * jump
 		h.intensitySell += h.AlphaCross * jump
@@ -62,15 +71,28 @@ func (h *HawkesIntensity) Imbalance(tNs int64) float64 {
 		h.lastTimeNs = tNs
 	}
 	denom := h.intensityBuy + h.intensitySell
-	if denom < 1e-9 {
+	if math.IsNaN(denom) || math.IsInf(denom, 0) || denom < 1e-9 {
 		return 0
 	}
-	return (h.intensityBuy - h.intensitySell) / denom
+	imb := (h.intensityBuy - h.intensitySell) / denom
+	if math.IsNaN(imb) || math.IsInf(imb, 0) {
+		return 0
+	}
+	if imb > 1.0 {
+		return 1.0
+	} else if imb < -1.0 {
+		return -1.0
+	}
+	return imb
 }
 
 // TotalIntensity returns current total trade arrival rate.
 func (h *HawkesIntensity) TotalIntensity() float64 {
-	return h.intensityBuy + h.intensitySell
+	tot := h.intensityBuy + h.intensitySell
+	if math.IsNaN(tot) || math.IsInf(tot, 0) || tot < 0 {
+		return 0
+	}
+	return tot
 }
 
 // VPINTracker measures Volume-Synchronized Probability of Toxicity across M volume buckets.
@@ -86,7 +108,7 @@ type VPINTracker struct {
 
 // NewVPINTracker initializes a volume-synchronized toxicity tracker.
 func NewVPINTracker(bucketVol float64, nBuckets int) *VPINTracker {
-	if bucketVol <= 0 {
+	if math.IsNaN(bucketVol) || math.IsInf(bucketVol, 0) || bucketVol <= 0 {
 		bucketVol = 1.0 // 1 unit (e.g. 1 BTC)
 	}
 	if nBuckets <= 0 {
@@ -101,11 +123,34 @@ func NewVPINTracker(bucketVol float64, nBuckets int) *VPINTracker {
 
 // AddTrade feeds a trade into the volume-clock tracker.
 func (v *VPINTracker) AddTrade(isBuy bool, qty float64) {
+	if math.IsNaN(qty) || math.IsInf(qty, 0) || qty <= 0 {
+		return
+	}
 	rem := qty
 	for rem > 0 {
 		currTotal := v.currBuyVol + v.currSellVol
+		if math.IsNaN(currTotal) || currTotal < 0 {
+			v.currBuyVol = 0
+			v.currSellVol = 0
+			currTotal = 0
+		}
 		needed := v.BucketVol - currTotal
+		if needed <= 0 {
+			// Bucket completed
+			diff := math.Abs(v.currBuyVol - v.currSellVol)
+			v.bucketDiffs[v.bucketIdx] = diff
+			v.bucketIdx = (v.bucketIdx + 1) % v.NBuckets
+			if v.filledBuckets < v.NBuckets {
+				v.filledBuckets++
+			}
+			v.currBuyVol = 0
+			v.currSellVol = 0
+			continue
+		}
 		take := math.Min(rem, needed)
+		if take <= 0 {
+			break
+		}
 		if isBuy {
 			v.currBuyVol += take
 		} else {

@@ -159,3 +159,37 @@ func TestMomentumTracker_15MinuteATRWindowBound(t *testing.T) {
 	}
 }
 
+// TestHoles47And56_AlphaPackage verifies infinite size protection in FastVPINCalculator and NaN variance handling in MultiFactorModel.
+func TestHoles47And56_AlphaPackage(t *testing.T) {
+	// Hole 47: FastVPINCalculator +Inf and NaN size
+	vpin := NewFastVPINCalculator(math.NaN(), -1)
+	if vpin.BucketVolume != 2.0 || vpin.NumBuckets != 50 {
+		t.Fatalf("Hole 47 failed: NewFastVPINCalculator with NaN did not set defaults: %+v", vpin)
+	}
+	// Passing +Inf or NaN should not hang
+	vpin.AddTrade(60000.0, math.Inf(1), false)
+	vpin.AddTrade(60000.0, math.NaN(), false)
+	vpin.AddTrade(math.NaN(), 1.0, true)
+	score := vpin.VPIN()
+	if math.IsNaN(score) || math.IsInf(score, 0) || score < 0 || score > 1.0 {
+		t.Fatalf("Hole 47 failed: FastVPINCalculator returned invalid score: %v", score)
+	}
+
+	// ComputeBookDelta NaN protection
+	l1Delta, microDev := ComputeBookDelta(math.NaN(), math.NaN(), math.NaN(), math.NaN())
+	if math.IsNaN(l1Delta) || math.IsNaN(microDev) {
+		t.Fatalf("Hole 47 failed: ComputeBookDelta with NaN produced NaN: %v, %v", l1Delta, microDev)
+	}
+
+	// Hole 56: MultiFactorModel variance NaN corruption test
+	mf := NewMultiFactorModel(100)
+	now := time.Now()
+	// Deliberately corrupt internal accumulators with NaN
+	mf.varAcc = math.NaN()
+	mf.meanAcc = math.NaN()
+	scoreMF := mf.Update(60000.0, 1.0, 0.20, 1.0, now)
+	if math.IsNaN(scoreMF.CompositeScore) || math.IsNaN(scoreMF.Conviction) || math.IsNaN(scoreMF.ValueFactor) {
+		t.Fatalf("Hole 56 failed: MultiFactorModel did not recover from NaN variance accumulator: %+v", scoreMF)
+	}
+}
+

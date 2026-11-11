@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -536,6 +537,97 @@ func TestHoles36_41_42_45_AdversarialAudit(t *testing.T) {
 		math.IsNaN(ts.MaxDrawdownPct) || math.IsNaN(ts.SharpeRatio) || math.IsNaN(ts.SortinoRatio) ||
 		math.IsNaN(ts.CalmarRatio) {
 		t.Fatalf("Hole 45 failed: ComputeDryRunTearSheet produced NaNs: %+v", ts)
+	}
+}
+
+// TestHoles46Through58 validates fixes for Holes 46, 53, 54, 55, 57, 58 under adversarial conditions.
+func TestHoles46Through58(t *testing.T) {
+	now := time.Now()
+
+	// Hole 46: Coinbase Signal Oracle & Fast Parser NaN Protection
+	oracle := NewCoinbaseSignalOracle([]string{"BTCUSDT"})
+	oracle.UpdateTick("BTCUSDT", math.NaN(), math.NaN(), math.NaN(), math.NaN(), true, now)
+	oracle.UpdateTick("BTCUSDT", math.Inf(1), 60000.0, 60001.0, 1.0, true, now)
+	oracle.UpdateTick("BTCUSDT", -100.0, -50.0, -40.0, -1.0, true, now)
+	sig := oracle.EvaluateAgainstBinance("BTCUSDT", math.NaN(), now)
+	if math.IsNaN(sig.BasisBps) || math.IsNaN(sig.Velocity1sBps) || math.IsNaN(sig.LeadLagSkewBps) {
+		t.Fatalf("Hole 46 failed: EvaluateAgainstBinance(NaN) returned NaN fields: %+v", sig)
+	}
+
+	_, p, b, a, sz, _, ok := FastParseCoinbaseTicker([]byte(`{"type":"ticker","product_id":"BTC-USD","price":"NaN","best_bid":"10.0"}`))
+	if ok || p != 0 {
+		t.Fatalf("Hole 46 failed: FastParseCoinbaseTicker accepted NaN price: ok=%v, p=%v", ok, p)
+	}
+	_ = b
+	_ = a
+	_ = sz
+
+	// Hole 53: TCAMarkoutTracker NaN Protection
+	tca := NewTCAMarkoutTracker()
+	tca.RecordFill(1, "BTCUSDT", 1, math.NaN(), 60000.0, now.UnixNano())
+	tca.RecordFill(2, "BTCUSDT", 1, 60000.0, math.NaN(), now.UnixNano())
+	tca.RecordFill(3, "BTCUSDT", 1, math.Inf(1), 60000.0, now.UnixNano())
+	tca.OnTick("BTCUSDT", math.NaN(), now.UnixNano()+1000000000)
+	tcaSnap := tca.Snapshot()
+	if math.IsNaN(tcaSnap.MeanSpreadCaptureBps) || math.IsNaN(tcaSnap.MeanMarkout1sBps) ||
+		math.IsNaN(tcaSnap.MeanMarkout5sBps) || math.IsNaN(tcaSnap.MeanMarkout10sBps) ||
+		math.IsNaN(tcaSnap.MeanMarkout60sBps) || math.IsNaN(tcaSnap.AdverseSelectionBps) ||
+		math.IsNaN(tcaSnap.ToxicFillRatio) {
+		t.Fatalf("Hole 53 failed: TCAMarkoutTracker snapshot returned NaN fields: %+v", tcaSnap)
+	}
+
+	// Hole 54 & Hole 55: Leverage Controller $5.00 min equity / notional enforcement
+	levCtrl := NewDynamicLeverageController(DefaultDynamicLeverageConfig())
+	cQty, mInv := levCtrl.ComputeClipSizeForSymbol("BTCUSDT", 2.50, 1.0, 60000.0, 1)
+	if cQty != 0 || mInv != 0 {
+		t.Fatalf("Hole 55 failed: ComputeClipSizeForSymbol for sub-$5 equity ($2.50) expected 0, got clip=%v, maxInv=%v", cQty, mInv)
+	}
+	vClip, vInv := levCtrl.ComputeVolatilityKellySize("BTCUSDT", 2.50, 60000.0, 35.0, 60.0, 1)
+	if vClip != 0 || vInv != 0 {
+		t.Fatalf("Hole 55 failed: ComputeVolatilityKellySize for sub-$5 equity ($2.50) expected 0, got clip=%v, maxInv=%v", vClip, vInv)
+	}
+
+	// Hole 57: Circuit Breaker & Leverage Controller NaN constructor protection
+	cbCfg := CircuitBreakerConfig{
+		WarningDrawdownPct: math.NaN(),
+		TrippedDrawdownPct: math.NaN(),
+		MaxInventory:       math.NaN(),
+		MaxSpreadBps:       math.NaN(),
+		VPINThreshold:      math.NaN(),
+	}
+	cb := NewCircuitBreaker(cbCfg)
+	if cb.cfg.WarningDrawdownPct != 2.5 || cb.cfg.TrippedDrawdownPct != 3.5 ||
+		cb.cfg.MaxInventory != 2.0 || cb.cfg.MaxSpreadBps != 50.0 || cb.cfg.VPINThreshold != 0.70 {
+		t.Fatalf("Hole 57 failed: NewCircuitBreaker with NaN did not apply institutional fallbacks: %+v", cb.cfg)
+	}
+
+	dynCfg := DynamicLeverageConfig{
+		MinLeverage:    math.NaN(),
+		MaxLeverage:    math.NaN(),
+		BaseLeverage:   math.NaN(),
+		TargetVolBps:   math.NaN(),
+		MaxDrawdownPct: math.NaN(),
+		ClipFraction:   math.NaN(),
+	}
+	dlc := NewDynamicLeverageController(dynCfg)
+	if dlc.cfg.MinLeverage != 0.5 || dlc.cfg.MaxLeverage != 5.0 || dlc.cfg.BaseLeverage != 2.5 ||
+		dlc.cfg.TargetVolBps != 15.0 || dlc.cfg.MaxDrawdownPct != 2.0 || dlc.cfg.ClipFraction != 0.20 {
+		t.Fatalf("Hole 57 failed: NewDynamicLeverageController with NaN did not apply default fallbacks: %+v", dlc.cfg)
+	}
+
+	// Hole 58: DailyReporter NaN Protection
+	repState := DryRunState{
+		InitialCapital: math.NaN(),
+		Equity:         math.NaN(),
+		TotalReturnPct: math.NaN(),
+		PeakEquity:     math.NaN(),
+		MaxDrawdownPct: math.NaN(),
+		WinRate:        math.NaN(),
+	}
+	reporter := NewDailyReportGenerator()
+	reportStr := reporter.GenerateReport(repState, now)
+	if strings.Contains(reportStr, "NaN") || strings.Contains(reportStr, "BREACHED") {
+		t.Fatalf("Hole 58 failed: GenerateReport with NaN produced invalid text: %s", reportStr)
 	}
 }
 

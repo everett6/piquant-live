@@ -32,23 +32,33 @@ func (g *DailyReportGenerator) GenerateReport(state DryRunState, date time.Time)
 	}
 
 	initCap := state.InitialCapital
-	if initCap <= 0 {
+	if math.IsNaN(initCap) || math.IsInf(initCap, 0) || initCap <= 0 {
 		initCap = 1000.0
 	}
 
 	equity := state.Equity
-	if equity <= 0 {
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 {
 		equity = initCap + state.RealizedPnL + state.UnrealizedPnL
+	}
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 {
+		equity = initCap
 	}
 
 	netPnL := state.RealizedPnL + state.UnrealizedPnL
+	if math.IsNaN(netPnL) || math.IsInf(netPnL, 0) {
+		netPnL = 0.0
+	}
+
 	returnPct := state.TotalReturnPct
-	if returnPct == 0 && equity != initCap {
+	if math.IsNaN(returnPct) || math.IsInf(returnPct, 0) || (returnPct == 0 && equity != initCap) {
 		returnPct = ((equity - initCap) / initCap) * 100.0
+	}
+	if math.IsNaN(returnPct) || math.IsInf(returnPct, 0) {
+		returnPct = 0.0
 	}
 
 	peakEq := state.PeakEquity
-	if peakEq < equity {
+	if math.IsNaN(peakEq) || math.IsInf(peakEq, 0) || peakEq < equity {
 		peakEq = equity
 	}
 	if peakEq < initCap {
@@ -56,6 +66,15 @@ func (g *DailyReportGenerator) GenerateReport(state DryRunState, date time.Time)
 	}
 
 	maxDD := state.MaxDrawdownPct
+	if math.IsNaN(maxDD) || math.IsInf(maxDD, 0) || maxDD < 0 {
+		maxDD = 0.0
+		if peakEq > 0 {
+			maxDD = (peakEq - equity) / peakEq * 100.0
+		}
+	}
+	if math.IsNaN(maxDD) || math.IsInf(maxDD, 0) {
+		maxDD = 0.0
+	}
 
 	// Aggregate trades & maker/taker ratio
 	var makerTrades, takerTrades int64
@@ -83,6 +102,9 @@ func (g *DailyReportGenerator) GenerateReport(state DryRunState, date time.Time)
 		winRatePct = float64(state.WinningTrades) / float64(totalTrades) * 100.0
 	} else if totalTrades == 0 {
 		winRatePct = 60.0
+	}
+	if math.IsNaN(winRatePct) || math.IsInf(winRatePct, 0) {
+		winRatePct = 50.0
 	}
 
 	// Conformal Gate Pass Rate

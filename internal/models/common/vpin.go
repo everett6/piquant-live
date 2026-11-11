@@ -40,7 +40,7 @@ type VPINCalculator struct {
 // NewVPINCalculator initializes a VPINCalculator with bucket volume V and capacity N.
 // If n <= 0 or n > DefaultVPINBuckets, DefaultVPINBuckets (50) is used.
 func NewVPINCalculator(bucketVol float64, n int) *VPINCalculator {
-	if bucketVol <= 0 {
+	if math.IsNaN(bucketVol) || math.IsInf(bucketVol, 0) || bucketVol <= 0 {
 		bucketVol = 5.0
 	}
 	if n <= 0 || n > DefaultVPINBuckets {
@@ -61,7 +61,10 @@ func NewVPINCalculator(bucketVol float64, n int) *VPINCalculator {
 // Slices volume across bucket boundaries when tradeSize exceeds remaining bucket capacity.
 // Operates on the hot path in 0 B/op, 0 allocs/op.
 func (v *VPINCalculator) UpdateTrade(tradePrice, tradeSize float64, isBuyerMaker bool) {
-	if tradeSize <= 0 {
+	if math.IsNaN(tradeSize) || math.IsInf(tradeSize, 0) || tradeSize <= 0 {
+		return
+	}
+	if math.IsNaN(tradePrice) || math.IsInf(tradePrice, 0) || tradePrice <= 0 {
 		return
 	}
 	v.LastPrice = tradePrice
@@ -79,19 +82,16 @@ func (v *VPINCalculator) Update(tradePrice, tradeSize float64, isBuyerMaker bool
 // upticks are classified as buys, downticks as sells, and zero-ticks inherit the prior direction.
 // Operates on the hot path in 0 B/op, 0 allocs/op.
 func (v *VPINCalculator) UpdateTradeTick(tradePrice, tradeSize float64) {
-	if tradePrice <= 0 {
+	if math.IsNaN(tradePrice) || math.IsInf(tradePrice, 0) || tradePrice <= 0 {
+		return
+	}
+	if math.IsNaN(tradeSize) || math.IsInf(tradeSize, 0) || tradeSize <= 0 {
+		v.LastPrice = tradePrice
 		return
 	}
 	if v.LastPrice <= 0 {
 		v.LastPrice = tradePrice
 		v.LastTickBuy = true
-		if tradeSize <= 0 {
-			return
-		}
-	}
-	if tradeSize <= 0 {
-		v.LastPrice = tradePrice
-		return
 	}
 	isBuy := v.LastTickBuy
 	if tradePrice > v.LastPrice {
@@ -109,20 +109,17 @@ func (v *VPINCalculator) UpdateTradeTick(tradePrice, tradeSize float64) {
 // V_tau^B = tradeSize * Phi(Delta P / sigma), V_tau^S = tradeSize * (1 - Phi(Delta P / sigma)).
 // Operates on the hot path in 0 B/op, 0 allocs/op.
 func (v *VPINCalculator) UpdateTradeBVC(tradePrice, tradeSize, sigmaPrice float64) {
-	if tradePrice <= 0 {
+	if math.IsNaN(tradePrice) || math.IsInf(tradePrice, 0) || tradePrice <= 0 {
+		return
+	}
+	if math.IsNaN(tradeSize) || math.IsInf(tradeSize, 0) || tradeSize <= 0 {
+		v.LastPrice = tradePrice
 		return
 	}
 	if v.LastPrice <= 0 {
 		v.LastPrice = tradePrice
-		if tradeSize <= 0 {
-			return
-		}
 	}
-	if tradeSize <= 0 {
-		v.LastPrice = tradePrice
-		return
-	}
-	if sigmaPrice <= 1e-9 {
+	if math.IsNaN(sigmaPrice) || math.IsInf(sigmaPrice, 0) || sigmaPrice <= 1e-9 {
 		sigmaPrice = 1.0
 	}
 	deltaP := tradePrice - v.LastPrice
@@ -131,7 +128,7 @@ func (v *VPINCalculator) UpdateTradeBVC(tradePrice, tradeSize, sigmaPrice float6
 	// Standard normal CDF: Phi(z) = 0.5 * (1 + erf(z / sqrt(2)))
 	z := deltaP / (sigmaPrice * math.Sqrt2)
 	buyFrac := 0.5 * (1.0 + math.Erf(z))
-	if buyFrac < 0.0 {
+	if math.IsNaN(buyFrac) || buyFrac < 0.0 {
 		buyFrac = 0.0
 	} else if buyFrac > 1.0 {
 		buyFrac = 1.0
@@ -143,8 +140,11 @@ func (v *VPINCalculator) UpdateTradeBVC(tradePrice, tradeSize, sigmaPrice float6
 
 // accumulateSingle accumulates trade volume where all volume belongs to a single side.
 func (v *VPINCalculator) accumulateSingle(tradeSize float64, isBuy bool) {
+	if math.IsNaN(tradeSize) || math.IsInf(tradeSize, 0) || tradeSize <= 0 {
+		return
+	}
 	bVol := v.BucketVol
-	if bVol <= 0 {
+	if math.IsNaN(bVol) || math.IsInf(bVol, 0) || bVol <= 0 {
 		bVol = 5.0
 		v.BucketVol = bVol
 	}
@@ -157,10 +157,30 @@ func (v *VPINCalculator) accumulateSingle(tradeSize float64, isBuy bool) {
 	rem := tradeSize
 	for rem > 0 {
 		currTot := v.CurrBuy + v.CurrSell
+		if math.IsNaN(currTot) || currTot < 0 {
+			v.CurrBuy = 0
+			v.CurrSell = 0
+			currTot = 0
+		}
 		space := bVol - currTot
+		if space <= 0 {
+			diff := math.Abs(v.CurrBuy - v.CurrSell)
+			v.Diffs[v.HeadIdx] = diff
+			v.HeadIdx = (v.HeadIdx + 1) % n
+			if v.Filled < n {
+				v.Filled++
+			}
+			v.CurrBuy = 0
+			v.CurrSell = 0
+			v.recordBucketVPIN()
+			continue
+		}
 		take := rem
 		if take > space {
 			take = space
+		}
+		if take <= 0 {
+			break
 		}
 
 		if isBuy {
@@ -172,10 +192,7 @@ func (v *VPINCalculator) accumulateSingle(tradeSize float64, isBuy bool) {
 
 		// Bucket completion check
 		if v.CurrBuy+v.CurrSell >= bVol {
-			diff := v.CurrBuy - v.CurrSell
-			if diff < 0 {
-				diff = -diff
-			}
+			diff := math.Abs(v.CurrBuy - v.CurrSell)
 			v.Diffs[v.HeadIdx] = diff
 			v.HeadIdx = (v.HeadIdx + 1) % n
 			if v.Filled < n {
@@ -190,12 +207,18 @@ func (v *VPINCalculator) accumulateSingle(tradeSize float64, isBuy bool) {
 
 // accumulateSplit accumulates trade volume partitioned across buy and sell.
 func (v *VPINCalculator) accumulateSplit(buyVol, sellVol float64) {
+	if math.IsNaN(buyVol) || math.IsInf(buyVol, 0) || buyVol < 0 {
+		buyVol = 0
+	}
+	if math.IsNaN(sellVol) || math.IsInf(sellVol, 0) || sellVol < 0 {
+		sellVol = 0
+	}
 	tot := buyVol + sellVol
-	if tot <= 0 {
+	if math.IsNaN(tot) || math.IsInf(tot, 0) || tot <= 0 {
 		return
 	}
 	bVol := v.BucketVol
-	if bVol <= 0 {
+	if math.IsNaN(bVol) || math.IsInf(bVol, 0) || bVol <= 0 {
 		bVol = 5.0
 		v.BucketVol = bVol
 	}
@@ -211,10 +234,30 @@ func (v *VPINCalculator) accumulateSplit(buyVol, sellVol float64) {
 
 	for rem > 0 {
 		currTot := v.CurrBuy + v.CurrSell
+		if math.IsNaN(currTot) || currTot < 0 {
+			v.CurrBuy = 0
+			v.CurrSell = 0
+			currTot = 0
+		}
 		space := bVol - currTot
+		if space <= 0 {
+			diff := math.Abs(v.CurrBuy - v.CurrSell)
+			v.Diffs[v.HeadIdx] = diff
+			v.HeadIdx = (v.HeadIdx + 1) % n
+			if v.Filled < n {
+				v.Filled++
+			}
+			v.CurrBuy = 0
+			v.CurrSell = 0
+			v.recordBucketVPIN()
+			continue
+		}
 		take := rem
 		if take > space {
 			take = space
+		}
+		if take <= 0 {
+			break
 		}
 
 		v.CurrBuy += take * buyRatio
@@ -223,10 +266,7 @@ func (v *VPINCalculator) accumulateSplit(buyVol, sellVol float64) {
 
 		// Bucket completion check
 		if v.CurrBuy+v.CurrSell >= bVol {
-			diff := v.CurrBuy - v.CurrSell
-			if diff < 0 {
-				diff = -diff
-			}
+			diff := math.Abs(v.CurrBuy - v.CurrSell)
 			v.Diffs[v.HeadIdx] = diff
 			v.HeadIdx = (v.HeadIdx + 1) % n
 			if v.Filled < n {

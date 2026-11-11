@@ -93,16 +93,16 @@ type PreTradeGuard struct {
 
 // NewPreTradeGuard creates a thread-safe institutional pre-trade guard.
 func NewPreTradeGuard(cfg GuardrailConfig) *PreTradeGuard {
-	if cfg.MaxDailyDrawdownPct <= 0 {
+	if math.IsNaN(cfg.MaxDailyDrawdownPct) || math.IsInf(cfg.MaxDailyDrawdownPct, 0) || cfg.MaxDailyDrawdownPct <= 0 {
 		cfg.MaxDailyDrawdownPct = 2.0
 	}
-	if cfg.FatFingerMaxDeviation <= 0 {
+	if math.IsNaN(cfg.FatFingerMaxDeviation) || math.IsInf(cfg.FatFingerMaxDeviation, 0) || cfg.FatFingerMaxDeviation <= 0 {
 		cfg.FatFingerMaxDeviation = 0.015
 	}
-	if cfg.RateLimitRate <= 0 {
+	if math.IsNaN(cfg.RateLimitRate) || math.IsInf(cfg.RateLimitRate, 0) || cfg.RateLimitRate <= 0 {
 		cfg.RateLimitRate = 10.0
 	}
-	if cfg.RateLimitCapacity <= 0 {
+	if math.IsNaN(cfg.RateLimitCapacity) || math.IsInf(cfg.RateLimitCapacity, 0) || cfg.RateLimitCapacity <= 0 {
 		cfg.RateLimitCapacity = 20.0
 	}
 

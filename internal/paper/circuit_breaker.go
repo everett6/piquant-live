@@ -122,22 +122,22 @@ type CircuitBreaker struct {
 
 // NewCircuitBreaker initializes the risk circuit breaker engine.
 func NewCircuitBreaker(cfg CircuitBreakerConfig) *CircuitBreaker {
-	if cfg.WarningDrawdownPct <= 0 {
+	if math.IsNaN(cfg.WarningDrawdownPct) || math.IsInf(cfg.WarningDrawdownPct, 0) || cfg.WarningDrawdownPct <= 0 {
 		cfg.WarningDrawdownPct = 2.5
 	}
-	if cfg.TrippedDrawdownPct <= 0 {
+	if math.IsNaN(cfg.TrippedDrawdownPct) || math.IsInf(cfg.TrippedDrawdownPct, 0) || cfg.TrippedDrawdownPct <= 0 {
 		cfg.TrippedDrawdownPct = 3.5
 	}
-	if cfg.MaxInventory <= 0 {
+	if math.IsNaN(cfg.MaxInventory) || math.IsInf(cfg.MaxInventory, 0) || cfg.MaxInventory <= 0 {
 		cfg.MaxInventory = 2.0
 	}
 	if cfg.WarningConsecutiveLosses <= 0 {
 		cfg.WarningConsecutiveLosses = 5
 	}
-	if cfg.MaxSpreadBps <= 0 {
+	if math.IsNaN(cfg.MaxSpreadBps) || math.IsInf(cfg.MaxSpreadBps, 0) || cfg.MaxSpreadBps <= 0 {
 		cfg.MaxSpreadBps = 50.0
 	}
-	if cfg.VPINThreshold <= 0 {
+	if math.IsNaN(cfg.VPINThreshold) || math.IsInf(cfg.VPINThreshold, 0) || cfg.VPINThreshold <= 0 {
 		cfg.VPINThreshold = 0.70
 	}
 	if cfg.CooldownDuration <= 0 {

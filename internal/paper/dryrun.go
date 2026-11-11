@@ -498,7 +498,7 @@ func sanitizeJournalTail(path string) error {
 
 // NewDryRunEngine constructs and recovers or initializes the paper trading engine.
 func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStreamIngestor) (*DryRunEngine, error) {
-	if cfg.InitialCapital <= 0 {
+	if math.IsNaN(cfg.InitialCapital) || math.IsInf(cfg.InitialCapital, 0) || cfg.InitialCapital <= 0 {
 		cfg.InitialCapital = 1000.00
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.WindowPreset)) {
@@ -525,13 +525,13 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 			}
 		}
 	}
-	if cfg.MaxDrawdownPct <= 0 {
+	if math.IsNaN(cfg.MaxDrawdownPct) || math.IsInf(cfg.MaxDrawdownPct, 0) || cfg.MaxDrawdownPct <= 0 {
 		cfg.MaxDrawdownPct = 2.0
 	}
 	if len(cfg.Symbols) == 0 {
 		cfg.Symbols = []string{"BTCUSDT", "ETHUSDT"}
 	}
-	if cfg.KylesLambda <= 0 {
+	if math.IsNaN(cfg.KylesLambda) || math.IsInf(cfg.KylesLambda, 0) || cfg.KylesLambda <= 0 {
 		cfg.KylesLambda = 0.25
 	}
 	if cfg.CheckpointFreq <= 0 {
@@ -541,25 +541,25 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	if cfg.OrderLatency <= 0 {
 		cfg.OrderLatency = 50 * time.Millisecond
 	}
-	if cfg.TargetProfitBps <= 0 {
+	if math.IsNaN(cfg.TargetProfitBps) || math.IsInf(cfg.TargetProfitBps, 0) || cfg.TargetProfitBps <= 0 {
 		cfg.TargetProfitBps = 50.0
 	}
-	if cfg.EntryOffsetBps <= 0 {
+	if math.IsNaN(cfg.EntryOffsetBps) || math.IsInf(cfg.EntryOffsetBps, 0) || cfg.EntryOffsetBps <= 0 {
 		cfg.EntryOffsetBps = 2.5
 	}
-	if cfg.StopLossBps <= 0 {
+	if math.IsNaN(cfg.StopLossBps) || math.IsInf(cfg.StopLossBps, 0) || cfg.StopLossBps <= 0 {
 		cfg.StopLossBps = 60.0
 	}
-	if cfg.MonthlyGainCapPct <= 0 {
+	if math.IsNaN(cfg.MonthlyGainCapPct) || math.IsInf(cfg.MonthlyGainCapPct, 0) || cfg.MonthlyGainCapPct <= 0 {
 		cfg.MonthlyGainCapPct = 15.0
 	}
-	if cfg.ClipFraction <= 0 {
+	if math.IsNaN(cfg.ClipFraction) || math.IsInf(cfg.ClipFraction, 0) || cfg.ClipFraction <= 0 {
 		cfg.ClipFraction = 0.45
 	}
-	if cfg.BuyThreshold <= 0 {
+	if math.IsNaN(cfg.BuyThreshold) || math.IsInf(cfg.BuyThreshold, 0) || cfg.BuyThreshold <= 0 {
 		cfg.BuyThreshold = 0.65
 	}
-	if cfg.SellThreshold <= 0 {
+	if math.IsNaN(cfg.SellThreshold) || math.IsInf(cfg.SellThreshold, 0) || cfg.SellThreshold <= 0 {
 		cfg.SellThreshold = 0.35
 	}
 
@@ -2318,7 +2318,10 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		clipQty *= macroSt.LeverageMultiplier
 		maxInvQty *= macroSt.LeverageMultiplier
 	}
-	if clipQty <= 0 {
+	if currEq < 5.0 {
+		clipQty = 0
+		maxInvQty = 0
+	} else if clipQty <= 0 {
 		clipQty = 0.001
 		maxInvQty = 0.005
 	}
@@ -2790,6 +2793,12 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	targetBid = quantizePrice(targetBid, tick, false)
 	targetAsk = quantizePrice(targetAsk, tick, true)
 
+	// Strict crossed-touch and self-cross prevention:
+	// A resting maker bid must strictly sit below the resting maker ask by at least 1 tick.
+	if targetBid >= targetAsk {
+		targetBid = targetAsk - tick
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -2944,10 +2953,17 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
 			allowBuy = false // Extreme leakage circuit: halt opening new long positions until recalibrated!
 		}
+		// Binance minimum notional ($5.00 USDT) enforcement for opening long positions
+		if buySize*targetBid < 5.0 {
+			allowBuy = false
+		}
 		// Spot-only cash account: buying requires having sufficient unencumbered cash!
 		if e.cfg.SpotOnly && e.state.Cash < buySize*targetBid {
 			allowBuy = false
 		}
+	}
+	if targetBid <= 0 || targetBid >= targetAsk || buySize <= 0 {
+		allowBuy = false
 	}
 	if allowBuy {
 		queueEst := bidSize
@@ -3003,6 +3019,10 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			// Spot-only cash account: naked shorting is strictly prohibited! Cannot sell if flat or short.
 			allowSell = false
 		} else {
+			// Binance minimum notional ($5.00 USDT) enforcement for opening short positions
+			if sellSize*targetAsk < 5.0 {
+				allowSell = false
+			}
 			if currentInv-clipQty < -maxInvQty || blendedSkewBps >= 3.5 || currentInv <= -2.0*clipQty {
 				allowSell = false
 			}
@@ -3025,6 +3045,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				allowSell = false // Extreme leakage circuit: halt opening new short positions until recalibrated!
 			}
 		}
+	}
+	if targetAsk <= 0 || targetBid >= targetAsk || sellSize <= 0 {
+		allowSell = false
 	}
 	if allowSell {
 		queueEst := askSize

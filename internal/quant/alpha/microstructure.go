@@ -40,6 +40,12 @@ func ComputeVOI(prevBidPrice, prevBidSize, prevAskPrice, prevAskSize float64,
 
 // ComputeBookDelta extracts order book depth delta and microprice deviation.
 func ComputeBookDelta(bestBid, bidSize, bestAsk, askSize float64) (l1Delta float64, microDevBps float64) {
+	if math.IsNaN(bestBid) || math.IsInf(bestBid, 0) || bestBid <= 0 ||
+		math.IsNaN(bestAsk) || math.IsInf(bestAsk, 0) || bestAsk <= 0 ||
+		math.IsNaN(bidSize) || math.IsInf(bidSize, 0) || bidSize < 0 ||
+		math.IsNaN(askSize) || math.IsInf(askSize, 0) || askSize < 0 {
+		return 0, 0
+	}
 	tot := bidSize + askSize
 	if tot <= 0 {
 		return 0, 0
@@ -51,6 +57,9 @@ func ComputeBookDelta(bestBid, bidSize, bestAsk, askSize float64) (l1Delta float
 	}
 	microPrice := (bestBid*askSize + bestAsk*bidSize) / tot
 	microDevBps = (microPrice - mid) / mid * 1e4
+	if math.IsNaN(microDevBps) || math.IsInf(microDevBps, 0) {
+		microDevBps = 0
+	}
 	return l1Delta, microDevBps
 }
 
@@ -70,7 +79,7 @@ type FastVPINCalculator struct {
 
 // NewFastVPINCalculator creates a VPIN calculator.
 func NewFastVPINCalculator(bucketVolume float64, numBuckets int) *FastVPINCalculator {
-	if bucketVolume <= 0 {
+	if math.IsNaN(bucketVolume) || math.IsInf(bucketVolume, 0) || bucketVolume <= 0 {
 		bucketVolume = 2.0 // BTC units per bucket
 	}
 	if numBuckets <= 0 {
@@ -85,7 +94,10 @@ func NewFastVPINCalculator(bucketVolume float64, numBuckets int) *FastVPINCalcul
 
 // AddTrade processes a trade tick and returns the updated VPIN.
 func (vc *FastVPINCalculator) AddTrade(price, size float64, isBuyerMaker bool) float64 {
-	if size <= 0 {
+	if math.IsNaN(size) || math.IsInf(size, 0) || size <= 0 {
+		return vc.VPIN()
+	}
+	if math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 {
 		return vc.VPIN()
 	}
 
@@ -101,7 +113,22 @@ func (vc *FastVPINCalculator) AddTrade(price, size float64, isBuyerMaker bool) f
 	remSize := size
 	for remSize > 0 {
 		space := vc.BucketVolume - vc.CurrentBucketVol
+		if space <= 0 {
+			imb := math.Abs(vc.CurrentBucketBuy - vc.CurrentBucketSell)
+			vc.BucketImbalances[vc.Head] = imb
+			vc.Head = (vc.Head + 1) % vc.NumBuckets
+			if vc.Count < vc.NumBuckets {
+				vc.Count++
+			}
+			vc.CurrentBucketBuy = 0
+			vc.CurrentBucketSell = 0
+			vc.CurrentBucketVol = 0
+			continue
+		}
 		alloc := math.Min(remSize, space)
+		if alloc <= 0 {
+			break
+		}
 
 		if size > 0 {
 			vc.CurrentBucketBuy += takerBuy * (alloc / size)

@@ -69,25 +69,39 @@ func NewSmartOrderRouter() SmartOrderRouter {
 //
 // Guaranteed 0 B/op and 0 allocs/op.
 func (s SmartOrderRouter) Route(alphaBps, orderSize, queueAhead, volatility, perpBasisBps float64) RoutingDecision {
-	absAlpha := math.Abs(alphaBps)
-	if orderSize <= 0 {
+	if math.IsNaN(alphaBps) || math.IsInf(alphaBps, 0) {
+		alphaBps = 0
+	}
+	if math.IsNaN(orderSize) || math.IsInf(orderSize, 0) || orderSize <= 0 {
 		orderSize = 0.01
 	}
-	if queueAhead < 0 {
+	if math.IsNaN(queueAhead) || math.IsInf(queueAhead, 0) || queueAhead < 0 {
 		queueAhead = 0
 	}
-	if volatility <= 0 {
+	if math.IsNaN(volatility) || math.IsInf(volatility, 0) || volatility <= 0 {
 		volatility = 1.0
 	}
+	if math.IsNaN(perpBasisBps) || math.IsInf(perpBasisBps, 0) {
+		perpBasisBps = 0
+	}
+
+	absAlpha := math.Abs(alphaBps)
 
 	horizon := s.HorizonSec
-	if horizon <= 0 {
+	if math.IsNaN(horizon) || math.IsInf(horizon, 0) || horizon <= 0 {
 		horizon = 5.0
 	}
 
 	// 1. Huang-Lehalle-Rosenbaum queue-reactive intensity fill probability P(fill) within horizonSec.
 	effQueue := queueAhead + 0.5*orderSize
 	pFill := s.QueueModel.FillProbabilityFor(horizon, effQueue, 0.0)
+	if math.IsNaN(pFill) || math.IsInf(pFill, 0) {
+		pFill = 0.5
+	} else if pFill < 0 {
+		pFill = 0
+	} else if pFill > 1 {
+		pFill = 1
+	}
 
 	// 2. Venue Selection (Spot vs. Perpetual Futures) factoring in perp basis carry & fee structure.
 	// If buying (alphaBps >= 0), a negative perpBasisBps means Perp trades at a discount (positive carry).
@@ -102,7 +116,9 @@ func (s SmartOrderRouter) Route(alphaBps, orderSize, queueAhead, volatility, per
 
 	// Smooth logistical allocation between Perp and Spot in [0, 1]
 	perpAlloc := 1.0 / (1.0 + math.Exp(-1.2*netPerpPref))
-	if perpAlloc < 0.05 {
+	if math.IsNaN(perpAlloc) || math.IsInf(perpAlloc, 0) {
+		perpAlloc = 0.5
+	} else if perpAlloc < 0.05 {
 		perpAlloc = 0.0
 	} else if perpAlloc > 0.95 {
 		perpAlloc = 1.0
@@ -150,7 +166,9 @@ func (s SmartOrderRouter) Route(alphaBps, orderSize, queueAhead, volatility, per
 		theta = 0.90 + 0.10*pFill
 	}
 
-	if theta < 0 {
+	if math.IsNaN(theta) || math.IsInf(theta, 0) {
+		theta = 1.0
+	} else if theta < 0 {
 		theta = 0
 	} else if theta > 1 {
 		theta = 1
@@ -179,6 +197,12 @@ func (s SmartOrderRouter) Route(alphaBps, orderSize, queueAhead, volatility, per
 	takerFrac := 1.0 - theta
 	blendedEdgeBps := theta*expectedMakerEdge + takerFrac*expectedTakerEdge
 	blendedSlippageBps := takerFrac*takerDragBps + theta*math.Max(0, makerFeeBps+adverseBps-s.HalfSpreadBps)
+	if math.IsNaN(blendedEdgeBps) || math.IsInf(blendedEdgeBps, 0) {
+		blendedEdgeBps = 0
+	}
+	if math.IsNaN(blendedSlippageBps) || math.IsInf(blendedSlippageBps, 0) {
+		blendedSlippageBps = 0
+	}
 
 	return RoutingDecision{
 		Action:              action,

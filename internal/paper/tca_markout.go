@@ -1,6 +1,9 @@
 package paper
 
-import "sync"
+import (
+	"math"
+	"sync"
+)
 
 // TCAMarkoutRingCapacity is the fixed power-of-two ring capacity for tracking in-flight fills.
 const TCAMarkoutRingCapacity = 256
@@ -81,7 +84,8 @@ func NewTCAMarkoutTracker() *TCAMarkoutTracker {
 //
 // Hot path: 0 B/op, 0 allocs/op.
 func (t *TCAMarkoutTracker) RecordFill(fillID uint64, symbol string, side int8, fillPrice, midPrice float64, fillTimeNs int64) {
-	if fillPrice <= 0 || midPrice <= 0 {
+	if math.IsNaN(fillPrice) || math.IsInf(fillPrice, 0) || fillPrice <= 0 ||
+		math.IsNaN(midPrice) || math.IsInf(midPrice, 0) || midPrice <= 0 {
 		return
 	}
 
@@ -105,6 +109,9 @@ func (t *TCAMarkoutTracker) RecordFill(fillID uint64, symbol string, side int8, 
 	entry.FillTimeNs = fillTimeNs
 
 	spreadCapture := float64(side) * ((midPrice - fillPrice) / fillPrice) * 10000.0
+	if math.IsNaN(spreadCapture) || math.IsInf(spreadCapture, 0) {
+		spreadCapture = 0
+	}
 	entry.SpreadCaptureBps = spreadCapture
 	entry.Markout1sBps = 0
 	entry.Markout5sBps = 0
@@ -128,7 +135,7 @@ func (t *TCAMarkoutTracker) RecordFill(fillID uint64, symbol string, side int8, 
 //
 // Hot path: 0 B/op, 0 allocs/op.
 func (t *TCAMarkoutTracker) OnTick(symbol string, midPrice float64, tickTimeNs int64) {
-	if midPrice <= 0 {
+	if math.IsNaN(midPrice) || math.IsInf(midPrice, 0) || midPrice <= 0 {
 		return
 	}
 
@@ -216,6 +223,28 @@ func (t *TCAMarkoutTracker) Snapshot() TCAMarkoutSnapshot {
 	}
 	if t.Count60s > 0 {
 		snap.MeanMarkout60sBps = t.SumMarkout60sBps / float64(t.Count60s)
+	}
+
+	if math.IsNaN(snap.MeanSpreadCaptureBps) || math.IsInf(snap.MeanSpreadCaptureBps, 0) {
+		snap.MeanSpreadCaptureBps = 0
+	}
+	if math.IsNaN(snap.MeanMarkout1sBps) || math.IsInf(snap.MeanMarkout1sBps, 0) {
+		snap.MeanMarkout1sBps = 0
+	}
+	if math.IsNaN(snap.MeanMarkout5sBps) || math.IsInf(snap.MeanMarkout5sBps, 0) {
+		snap.MeanMarkout5sBps = 0
+	}
+	if math.IsNaN(snap.MeanMarkout10sBps) || math.IsInf(snap.MeanMarkout10sBps, 0) {
+		snap.MeanMarkout10sBps = 0
+	}
+	if math.IsNaN(snap.MeanMarkout60sBps) || math.IsInf(snap.MeanMarkout60sBps, 0) {
+		snap.MeanMarkout60sBps = 0
+	}
+	if math.IsNaN(snap.AdverseSelectionBps) || math.IsInf(snap.AdverseSelectionBps, 0) {
+		snap.AdverseSelectionBps = 0
+	}
+	if math.IsNaN(snap.ToxicFillRatio) || math.IsInf(snap.ToxicFillRatio, 0) {
+		snap.ToxicFillRatio = 0
 	}
 
 	return snap

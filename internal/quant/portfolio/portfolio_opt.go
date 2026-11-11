@@ -41,10 +41,10 @@ type BlackLittermanModel struct {
 
 // NewBlackLittermanModel creates a Black-Litterman portfolio optimizer.
 func NewBlackLittermanModel(tau, riskAversion float64) *BlackLittermanModel {
-	if tau <= 0 {
+	if math.IsNaN(tau) || math.IsInf(tau, 0) || tau <= 0 {
 		tau = 0.05
 	}
-	if riskAversion <= 0 {
+	if math.IsNaN(riskAversion) || math.IsInf(riskAversion, 0) || riskAversion <= 0 {
 		riskAversion = 2.5
 	}
 	return &BlackLittermanModel{
@@ -65,6 +65,9 @@ func (bl *BlackLittermanModel) Optimize2Asset(
 	viewExpectedReturn1, viewExpectedReturn2 float64,
 	viewConfidence1, viewConfidence2 float64,
 ) (w1, w2 float64, expectedRet1, expectedRet2 float64) {
+	if math.IsNaN(bl.RiskAversion) || math.IsInf(bl.RiskAversion, 0) || bl.RiskAversion <= 0 {
+		bl.RiskAversion = 2.5
+	}
 	if math.IsNaN(sigma1) || math.IsInf(sigma1, 0) || sigma1 <= 0 {
 		sigma1 = 1e-2
 	}
@@ -85,6 +88,12 @@ func (bl *BlackLittermanModel) Optimize2Asset(
 	}
 	if math.IsNaN(viewExpectedReturn2) || math.IsInf(viewExpectedReturn2, 0) {
 		viewExpectedReturn2 = 0.0
+	}
+	if math.IsNaN(viewConfidence1) || math.IsInf(viewConfidence1, 0) {
+		viewConfidence1 = 0.50
+	}
+	if math.IsNaN(viewConfidence2) || math.IsInf(viewConfidence2, 0) {
+		viewConfidence2 = 0.50
 	}
 
 	s1 := math.Max(1e-4, sigma1)
@@ -123,16 +132,23 @@ func (bl *BlackLittermanModel) Optimize2Asset(
 	rawW2 := (1.0 / bl.RiskAversion) * (inv01*er1 + inv11*er2)
 
 	// Long-only projection for cash accounts (spot)
-	if rawW1 < 0 {
+	if math.IsNaN(rawW1) || math.IsInf(rawW1, 0) || rawW1 < 0 {
 		rawW1 = 0
 	}
-	if rawW2 < 0 {
+	if math.IsNaN(rawW2) || math.IsInf(rawW2, 0) || rawW2 < 0 {
 		rawW2 = 0
 	}
 	sumW := rawW1 + rawW2
 	if sumW > 1.0 {
 		rawW1 /= sumW
 		rawW2 /= sumW
+	}
+
+	if math.IsNaN(er1) || math.IsInf(er1, 0) {
+		er1 = 0
+	}
+	if math.IsNaN(er2) || math.IsInf(er2, 0) {
+		er2 = 0
 	}
 
 	return rawW1, rawW2, er1, er2

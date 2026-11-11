@@ -373,4 +373,33 @@ func TestHole39_GuardrailNaNMarksAndExposure(t *testing.T) {
 	}
 }
 
+// TestHole52_PreTradeGuardConstructorNaN verifies that passing NaN parameters in GuardrailConfig
+// to NewPreTradeGuard does not leave NaN thresholds that disable kill-switch drawdown or price checks.
+func TestHole52_PreTradeGuardConstructorNaN(t *testing.T) {
+	cfg := GuardrailConfig{
+		MaxDailyDrawdownPct:   math.NaN(),
+		FatFingerMaxDeviation: math.NaN(),
+		RateLimitRate:         math.NaN(),
+		RateLimitCapacity:     math.NaN(),
+	}
+	guard := NewPreTradeGuard(cfg)
+	if guard.cfg.MaxDailyDrawdownPct != 2.0 || guard.cfg.FatFingerMaxDeviation != 0.015 ||
+		guard.cfg.RateLimitRate != 10.0 || guard.cfg.RateLimitCapacity != 20.0 {
+		t.Fatalf("Hole 52 failed: NewPreTradeGuard with NaN did not set safe default thresholds: %+v", guard.cfg)
+	}
+
+	// Verify kill switch activates when drawdown exceeds 2.0%
+	now := time.Now()
+	guard.UpdatePortfolioState(9700.0, 10000.0, nil, nil, now) // 3% drawdown > 2% limit
+	ord := OrderRequest{
+		Symbol:   "BTCUSDT",
+		Side:     "BUY",
+		Price:    60000.0,
+		Quantity: 0.01,
+	}
+	if err := guard.ValidateOrder(ord, 60000.0, 60005.0, now); !errors.Is(err, ErrKillSwitchTripped) {
+		t.Fatalf("Hole 52 failed: expected ErrKillSwitchTripped, got %v", err)
+	}
+}
+
 

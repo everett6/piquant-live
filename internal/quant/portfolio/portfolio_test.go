@@ -90,3 +90,22 @@ func TestHole37_KellySizerUnderfundedProtection(t *testing.T) {
 	}
 }
 
+// TestHole51_BlackLittermanConfidenceNaNProtection verifies that passing NaN parameters to
+// NewBlackLittermanModel or NaN confidence to Optimize2Asset does not result in NaN weights or returns.
+func TestHole51_BlackLittermanConfidenceNaNProtection(t *testing.T) {
+	bl := NewBlackLittermanModel(math.NaN(), math.NaN())
+	if bl.Tau != 0.05 || bl.RiskAversion != 2.5 {
+		t.Fatalf("Hole 51 failed: NewBlackLittermanModel with NaN did not set default parameters: %+v", bl)
+	}
+
+	w1, w2, er1, er2 := bl.Optimize2Asset(
+		0.02, 0.04, 0.65,
+		0.50, 0.50,
+		0.15, 0.02,
+		math.NaN(), math.NaN(), // NaN confidence
+	)
+	if math.IsNaN(w1) || math.IsNaN(w2) || math.IsNaN(er1) || math.IsNaN(er2) {
+		t.Fatalf("Hole 51 failed: Optimize2Asset produced NaN outputs: w1=%v w2=%v er1=%v er2=%v", w1, w2, er1, er2)
+	}
+}
+

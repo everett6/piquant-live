@@ -126,6 +126,19 @@ func extractBaseCurrency(s string) string {
 
 // UpdateTick records a new ticker tick from Coinbase.
 func (o *CoinbaseSignalOracle) UpdateTick(normSymbol string, price, bestBid, bestAsk, size float64, isBuy bool, now time.Time) {
+	if math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 {
+		return
+	}
+	if math.IsNaN(bestBid) || math.IsInf(bestBid, 0) || bestBid < 0 {
+		bestBid = 0
+	}
+	if math.IsNaN(bestAsk) || math.IsInf(bestAsk, 0) || bestAsk < 0 {
+		bestAsk = 0
+	}
+	if math.IsNaN(size) || math.IsInf(size, 0) || size < 0 {
+		size = 0
+	}
+
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
@@ -188,6 +201,9 @@ func (o *CoinbaseSignalOracle) UpdateTick(normSymbol string, price, bestBid, bes
 			if dt >= 0.20 && oldest.Price > 0 {
 				retBps := (sig.MidPrice - oldest.Price) / oldest.Price * 1e4
 				sig.Velocity1sBps = retBps / dt
+				if math.IsNaN(sig.Velocity1sBps) || math.IsInf(sig.Velocity1sBps, 0) {
+					sig.Velocity1sBps = 0
+				}
 			}
 		}
 	}
@@ -205,17 +221,17 @@ func (o *CoinbaseSignalOracle) EvaluateAgainstBinance(normSymbol string, binance
 	defer o.mu.Unlock()
 
 	sig, ok := o.signals[normSymbol]
-	if !ok || sig.MidPrice <= 0 {
+	if !ok || sig.MidPrice <= 0 || math.IsNaN(sig.MidPrice) || math.IsInf(sig.MidPrice, 0) {
 		// Multi-quote fallback: try base currency or equivalent quote pair
 		base := extractBaseCurrency(normSymbol)
 		for _, cand := range []string{base, base + "USD", base + "USDT", base + "USDC"} {
-			if s, found := o.signals[cand]; found && s.MidPrice > 0 {
+			if s, found := o.signals[cand]; found && s.MidPrice > 0 && !math.IsNaN(s.MidPrice) && !math.IsInf(s.MidPrice, 0) {
 				sig = s
 				break
 			}
 		}
 	}
-	if sig == nil || sig.MidPrice <= 0 {
+	if sig == nil || sig.MidPrice <= 0 || math.IsNaN(sig.MidPrice) || math.IsInf(sig.MidPrice, 0) {
 		return CoinbaseSymbolSignal{Symbol: normSymbol}
 	}
 
@@ -231,6 +247,12 @@ func (o *CoinbaseSignalOracle) EvaluateAgainstBinance(normSymbol string, binance
 
 	// Compute Basis in basis points: (CoinbaseMid - BinanceMid) / BinanceMid * 10,000
 	sig.BasisBps = (sig.MidPrice - binanceMid) / binanceMid * 1e4
+	if math.IsNaN(sig.BasisBps) || math.IsInf(sig.BasisBps, 0) {
+		sig.BasisBps = 0
+	}
+	if math.IsNaN(sig.Velocity1sBps) || math.IsInf(sig.Velocity1sBps, 0) {
+		sig.Velocity1sBps = 0
+	}
 
 	// Lead-Lag Skew Calculation:
 	// When Coinbase leads upwards (positive basis and positive velocity),
@@ -243,6 +265,9 @@ func (o *CoinbaseSignalOracle) EvaluateAgainstBinance(normSymbol string, binance
 	} else {
 		// Discordant: damp toward zero
 		rawSkew = 0.20 * sig.BasisBps
+	}
+	if math.IsNaN(rawSkew) || math.IsInf(rawSkew, 0) {
+		rawSkew = 0
 	}
 
 	// Clamp skew to [-2.5, +2.5] bps
@@ -631,6 +656,19 @@ func FastParseCoinbaseTicker(payload []byte) (symbol string, price, bestBid, bes
 	bestBid = fastExtractJSONFloat(payload, []byte(`"best_bid":`))
 	bestAsk = fastExtractJSONFloat(payload, []byte(`"best_ask":`))
 	lastSize = fastExtractJSONFloat(payload, []byte(`"last_size":`))
+
+	if math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 {
+		return "", 0, 0, 0, 0, false, false
+	}
+	if math.IsNaN(bestBid) || math.IsInf(bestBid, 0) || bestBid < 0 {
+		bestBid = 0
+	}
+	if math.IsNaN(bestAsk) || math.IsInf(bestAsk, 0) || bestAsk < 0 {
+		bestAsk = 0
+	}
+	if math.IsNaN(lastSize) || math.IsInf(lastSize, 0) || lastSize < 0 {
+		lastSize = 0
+	}
 
 	// 3. Extract side ("buy" vs "sell")
 	sideKey := []byte(`"side":`)

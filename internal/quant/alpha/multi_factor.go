@@ -124,7 +124,14 @@ func (m *MultiFactorModel) Update(price, volume, vpin, spreadBps float64, now ti
 	delta := price - m.meanAcc
 	m.meanAcc += 0.05 * delta
 	m.varAcc = 0.95*m.varAcc + 0.05*(delta*delta)
+	if math.IsNaN(m.varAcc) || math.IsInf(m.varAcc, 0) || m.varAcc < 0 {
+		m.varAcc = 1e-4
+		m.meanAcc = price
+	}
 	rollingStd := math.Sqrt(math.Max(1e-8, m.varAcc))
+	if math.IsNaN(rollingStd) || math.IsInf(rollingStd, 0) || rollingStd <= 0 {
+		rollingStd = 1e-4
+	}
 
 	// VWAP tracking
 	if volume > 0 {
@@ -135,6 +142,9 @@ func (m *MultiFactorModel) Update(price, volume, vpin, spreadBps float64, now ti
 	if m.cumVol > 0 {
 		vwap = m.cumPV / m.cumVol
 	}
+	if math.IsNaN(vwap) || math.IsInf(vwap, 0) {
+		vwap = price
+	}
 
 	// 1. Momentum Factor (F_mom)
 	// Ratio of fast EWMA vs slow EWMA + return over available history
@@ -142,8 +152,14 @@ func (m *MultiFactorModel) Update(price, volume, vpin, spreadBps float64, now ti
 	if m.ewmaSlow > 0 {
 		momFastBps = (m.ewmaFast - m.ewmaSlow) / m.ewmaSlow * 1e4
 	}
+	if math.IsNaN(momFastBps) || math.IsInf(momFastBps, 0) {
+		momFastBps = 0
+	}
 	// Normalize to [-1, +1] assuming 20 bps is significant momentum
 	fMom := momFastBps / 20.0
+	if math.IsNaN(fMom) || math.IsInf(fMom, 0) {
+		fMom = 0
+	}
 	if fMom > 1.0 {
 		fMom = 1.0
 	} else if fMom < -1.0 {
@@ -157,8 +173,14 @@ func (m *MultiFactorModel) Update(price, volume, vpin, spreadBps float64, now ti
 	if rollingStd > 0 {
 		zVWAP = (vwap - price) / rollingStd
 	}
+	if math.IsNaN(zVWAP) || math.IsInf(zVWAP, 0) {
+		zVWAP = 0.0
+	}
 	// Cap Z-score to [-2.5, +2.5] and normalize to [-1, +1]
 	fVal := zVWAP / 2.5
+	if math.IsNaN(fVal) || math.IsInf(fVal, 0) {
+		fVal = 0.0
+	}
 	if fVal > 1.0 {
 		fVal = 1.0
 	} else if fVal < -1.0 {
@@ -212,6 +234,9 @@ func (m *MultiFactorModel) Update(price, volume, vpin, spreadBps float64, now ti
 
 	// 5. Composite Score Blending
 	composite := m.WeightMom*fMom + m.WeightVal*fVal + m.WeightVol*fVol
+	if math.IsNaN(composite) || math.IsInf(composite, 0) {
+		composite = 0.0
+	}
 	if composite > 1.0 {
 		composite = 1.0
 	} else if composite < -1.0 {
@@ -220,6 +245,9 @@ func (m *MultiFactorModel) Update(price, volume, vpin, spreadBps float64, now ti
 
 	// Logistic sigmoid conviction: P(Up) in [0.0, 1.0]
 	conviction := 1.0 / (1.0 + math.Exp(-2.5*composite))
+	if math.IsNaN(conviction) || math.IsInf(conviction, 0) {
+		conviction = 0.50
+	}
 
 	return MultiFactorScore{
 		Timestamp:      now,
