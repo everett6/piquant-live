@@ -55,3 +55,18 @@ A variant passes only if all of these hold:
 - I'd guess both fail.
 
 One run. No variants after results.
+
+## Result (run once, 2026-11-11): both FAIL. P1 stays.
+
+| | full geo %/mo | max DD | losing | ≥7% | worst month | D | C | B | discovery | A | bear/flat/bull | stress |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Q1 DD brake | +5.88 | **−70%** | 42% | 36% | −42% | +21.45 | +4.06 | +1.28 | +2.61 | +1.70 | −4.9/−3.1/+25.3 | +2.13 |
+| Q2 BTC/ETH/SOL | +7.78 | −81% | 44% | 38% | **−35%** | +19.37 | +5.14 | +5.03 | +8.33 | +1.06 | −7.5/−4.6/+32.1 | +1.82 |
+| P1 (comparator) | +8.50 | −84% | 43% | 39% | −49% | +27.99 | +6.24 | +0.77 | +6.25 | +3.32 | −8.0/−3.9/+38.2 | +1.19 |
+
+- **Q1:** cut the drawdown by 14 points, but the return fell to +5.88%/month. It failed check 1.
+- **Q2:** kept ≥7% and had the mildest worst month, but its drawdown was only 3 points better. It failed
+  check 2.
+- **The trade-off is real:** in this data, every unit of drawdown removed also removes return. Leveraged
+  long-or-flat trend reaches 7%/month only with drawdowns of about −80% or worse.
+- **Next step:** no ledger change. P1 remains the live paper variant.
