@@ -66,6 +66,8 @@ func main() {
 		err = runSecrets(args)
 	case "tax":
 		err = runTax(ctx, args)
+	case "news":
+		err = runNews(ctx, args)
 	case "version", "-v", "--version":
 		printVersion()
 	case "help", "-h", "--help":
@@ -98,6 +100,7 @@ func usage() {
   piquant bench            run Pi 5 architecture stress test and micro-latency benchmark
   piquant secrets     manage the local credential store
   piquant tax         crypto capital gains, IRS Form 8949 CSV export & CA tax reserve
+  piquant news        macro & micro news intelligence oracle with exploit defense
   piquant version     print build information
 
 Run "piquant <command> -h" for the options of one command.

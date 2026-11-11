@@ -52,6 +52,7 @@ type dryRunFlags struct {
 	wsURL             string
 	enableCoinbase    bool
 	coinbaseWS        string
+	enableNews        bool
 }
 
 func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
@@ -80,6 +81,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.Float64Var(&f.clipFraction, "clip-fraction", 0.45, "fraction of max allocation per quote clip (default: 0.45 = 45% for high capital turnover)")
 	fs.BoolVar(&f.enableTaker, "enable-taker", false, "opt-in to tactical taker executions on high-conviction momentum (default false)")
 	fs.BoolVar(&f.debug, "debug", false, "enable verbose real-time MFT decision matrix logging and deep telemetry")
+	fs.BoolVar(&f.enableNews, "enable-news", true, "enable macro and micro news intelligence pipeline with time-decay & exploit defense (default true)")
 	fs.BoolVar(&f.cleanReset, "reset", false, "reset cumulative historical win/loss stats and trade count on start")
 	fs.BoolVar(&f.statusOnly, "status", false, "print terminal summary of active dry run and exit")
 	fs.BoolVar(&f.reportOnly, "report", false, "generate and print institutional EOD risk & tear-sheet report and exit")
@@ -234,6 +236,7 @@ func runDryRun(ctx context.Context, args []string) error {
 	paperCfg.EnableAllModels = f.enableAllModels
 	paperCfg.ExtendOnShutdown = f.extendOnShutdown
 	paperCfg.FlattenOnShutdown = f.flattenOnShutdown
+	paperCfg.EnableNewsPipeline = f.enableNews
 
 	dryRunEngine, err := paper.NewDryRunEngine(paperCfg, ring, ingestor)
 	if err != nil {

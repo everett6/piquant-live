@@ -19,6 +19,7 @@ import (
 	"piquant-live/internal/cluster"
 	"piquant-live/internal/discovery"
 	"piquant-live/internal/experiment"
+	"piquant-live/internal/macro"
 	"piquant-live/internal/models"
 	"piquant-live/internal/models/common"
 	"piquant-live/internal/paper"
@@ -66,6 +67,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/debug", s.handlePaperMFT)
 	s.mux.HandleFunc("/api/tax", s.handleTax)
 	s.mux.HandleFunc("/api/tax/export.csv", s.handleTaxExportCSV)
+	s.mux.HandleFunc("/api/news", s.handleNews)
+	s.mux.HandleFunc("/api/news/sentiment", s.handleNewsSentiment)
+	s.mux.HandleFunc("/api/news/ingest", s.handleNewsIngest)
 	s.mux.HandleFunc("/tax", s.handleTaxPage)
 }
 
@@ -2384,4 +2388,88 @@ func (s *Server) handleTaxPage(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = io.WriteString(w, taxPageHTML)
 }
+
+// resolveNewsPipeline returns the active news pipeline from DryRun engine or local cache fallback.
+func (s *Server) resolveNewsPipeline() *macro.NewsPipeline {
+	if s.opts.DryRun != nil {
+		if eng, ok := s.opts.DryRun.(*paper.DryRunEngine); ok && eng.NewsPipeline() != nil {
+			return eng.NewsPipeline()
+		}
+	}
+	dataDir := "data"
+	if len(s.opts.DataDirs) > 0 {
+		dataDir = s.opts.DataDirs[0]
+	}
+	return macro.NewNewsPipeline(dataDir, "")
+}
+
+// handleNews returns recent ingested and classified news items.
+func (s *Server) handleNews(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	limit := 20
+	if lStr := r.URL.Query().Get("limit"); lStr != "" {
+		if parsed, err := strconv.Atoi(lStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	pipe := s.resolveNewsPipeline()
+	items := pipe.GetRecentNews(limit)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total": len(items),
+		"news":  items,
+	})
+}
+
+// handleNewsSentiment returns the aggregated real-time sentiment, time-decay weights,
+// and defense states (bid kills, ask kills, spread expansions).
+func (s *Server) handleNewsSentiment(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	pipe := s.resolveNewsPipeline()
+	report := pipe.Evaluate(time.Now())
+	writeJSON(w, http.StatusOK, report)
+}
+
+// handleNewsIngest handles incoming webhooks or manual news injections.
+func (s *Server) handleNewsIngest(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req struct {
+		Title     string `json:"title"`
+		Summary   string `json:"summary"`
+		Source    string `json:"source"`
+		URL       string `json:"url"`
+		Timestamp string `json:"timestamp"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Title) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload: title required"})
+		return
+	}
+	t := time.Now().UTC()
+	if req.Timestamp != "" {
+		if parsed, err := time.Parse(time.RFC3339, req.Timestamp); err == nil {
+			t = parsed
+		}
+	}
+	pipe := s.resolveNewsPipeline()
+	item := pipe.IngestRawHeadline(req.Title, req.Summary, req.Source, req.URL, t)
+	rep := pipe.Evaluate(time.Now())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":     true,
+		"item":   item,
+		"report": rep,
+	})
+}
+
 

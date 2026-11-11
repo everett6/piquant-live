@@ -46,6 +46,8 @@ type DryRunConfig struct {
 	MaxLeverage       float64       // Maximum allowable leverage ceiling (default: 5.0x)
 	EnableMacroShield bool          // Zero-cost macro calendar event shield (default: true)
 	MacroSyncURL      string        // Optional custom URL for macro calendar sync (default: ForexFactory free feed)
+	EnableNewsPipeline bool         // Macro and micro news intelligence pipeline with time-decay & exploit defense (default: true)
+	NewsSyncURL        string       // Optional custom URL for news feed ingestion
 	DataDir           string        // Root data directory (default: "data")
 	TargetProfitBps   float64       // Net target profit margin per swing in bps (default: 25.0 bps = 0.25%)
 	EntryOffsetBps    float64       // Minimum maker entry distance from mid in bps (default: 12.5 bps = 0.125%)
@@ -84,8 +86,9 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		FlattenOnShutdown: true,
 		BaseLeverage:      2.5,
 		MaxLeverage:       3.5,
-		EnableMacroShield: true,
-		DataDir:           dataDir,
+		EnableMacroShield:  true,
+		EnableNewsPipeline: true,
+		DataDir:            dataDir,
 		TargetProfitBps:   50.0, // Quant hedge fund swing target (>= 50 bps per swing, completely eliminating fee drag)
 		EntryOffsetBps:    2.5,  // Patient maker entry at inside touch/queue level
 		StopLossBps:       60.0, // Structural stop-loss protecting against crashes
@@ -186,6 +189,7 @@ type DryRunState struct {
 	LastResumeTime         time.Time                     `json:"last_resume_time"`         // Timestamp of latest recovery after shutdown
 	Leverage               DynamicLeverageState          `json:"leverage"`                 // Real-time automatic dynamic leverage and regime
 	Macro                  macro.MacroState              `json:"macro"`                    // Zero-cost macro calendar event shield telemetry
+	NewsSentiment          *macro.NewsSentimentReport    `json:"news_sentiment,omitempty"` // Macro/micro news intelligence & exploit defense
 	ActiveOrders           map[string][]ActiveMakerOrder `json:"active_orders,omitempty"`   // Currently resting maker limit orders in the book
 	ScalpingState          map[string]ScalpingRegimeState `json:"scalping_state,omitempty"` // Per-symbol scalping viability & regime
 	SelfAdaptation         SelfAdaptationState           `json:"self_adaptation"`          // Autonomous parameter backtesting & hot-reloading
@@ -229,6 +233,9 @@ type MFTDiagnosticSnapshot struct {
 	FundingAPR              float64   `json:"funding_apr"`
 	PreTradeRiskPassed      bool      `json:"pre_trade_risk_passed"`
 	QuotingMode             string    `json:"quoting_mode"`
+	NewsSentimentScore      float64   `json:"news_sentiment_score"`
+	NewsHeadline            string    `json:"news_headline,omitempty"`
+	NewsBidKill             bool      `json:"news_bid_kill"`
 }
 
 // ScalpingRegimeState reports per-symbol scalping viability and mode (Scalp vs Patient Swing).
@@ -429,6 +436,7 @@ type DryRunEngine struct {
 	hawkesEst     *common.OnlineHawkesEstimator
 	leverageCtrl  *DynamicLeverageController
 	macroGuardian *macro.MacroGuardian
+	newsPipeline  *macro.NewsPipeline
 
 	// Online tick tracking & autonomous cloud parameter hot-reload
 	minHalfSpreadFloorBps float64
@@ -687,6 +695,13 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		}
 		e.macroGuardian = macro.NewMacroGuardian(dDir, cfg.MacroSyncURL)
 	}
+	if cfg.EnableNewsPipeline {
+		dDir := cfg.DataDir
+		if dDir == "" {
+			dDir = filepath.Dir(filepath.Dir(cfg.StateFile))
+		}
+		e.newsPipeline = macro.NewNewsPipeline(dDir, cfg.NewsSyncURL)
+	}
 	e.maybeReloadCloudParams()
 
 	// Attempt to restore existing state from checkpoint
@@ -779,6 +794,10 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	if e.macroGuardian != nil {
 		e.state.Macro = e.macroGuardian.Evaluate(time.Now())
 	}
+	if e.newsPipeline != nil {
+		newsRep := e.newsPipeline.Evaluate(time.Now())
+		e.state.NewsSentiment = &newsRep
+	}
 	if e.quantOrch != nil {
 		rep := e.quantOrch.Report(time.Now())
 		e.state.QuantOrchestrator = &rep
@@ -829,6 +848,9 @@ func (e *DryRunEngine) Start(ctx context.Context) {
 	if e.macroGuardian != nil {
 		e.macroGuardian.Start(ctx)
 	}
+	if e.newsPipeline != nil {
+		e.newsPipeline.Start(ctx)
+	}
 
 	e.wg.Add(3)
 	go e.runExecutionLoop(ctx)
@@ -846,6 +868,9 @@ func (e *DryRunEngine) Stop() {
 
 	if e.macroGuardian != nil {
 		e.macroGuardian.Stop()
+	}
+	if e.newsPipeline != nil {
+		e.newsPipeline.Stop()
 	}
 
 	e.mu.Lock()
@@ -1074,6 +1099,11 @@ func (e *DryRunEngine) State() DryRunState {
 		cp.Macro = e.macroGuardian.Evaluate(now)
 	}
 
+	if e.newsPipeline != nil {
+		newsRep := e.newsPipeline.Evaluate(now)
+		cp.NewsSentiment = &newsRep
+	}
+
 	if e.cbOracle != nil {
 		cbSnap := e.cbOracle.Snapshot()
 		cp.Coinbase = &cbSnap
@@ -1142,6 +1172,13 @@ func (e *DryRunEngine) QuantOrchestrator() *orchestrator.LatencyAdaptiveOrchestr
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.quantOrch
+}
+
+// NewsPipeline returns the active macro and micro news intelligence pipeline.
+func (e *DryRunEngine) NewsPipeline() *macro.NewsPipeline {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.newsPipeline
 }
 
 // RecentFills returns the most recent executed trades for the blotter.
@@ -1407,6 +1444,10 @@ func (e *DryRunEngine) saveCheckpoint() error {
 
 	if e.macroGuardian != nil {
 		e.state.Macro = e.macroGuardian.Evaluate(now)
+	}
+	if e.newsPipeline != nil {
+		newsRep := e.newsPipeline.Evaluate(now)
+		e.state.NewsSentiment = &newsRep
 	}
 
 	// Populate per-symbol scalping regime state for observability
@@ -2335,6 +2376,15 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		macroSt.AllowQuoting = true
 	}
 
+	// Evaluate Macro/Micro News Intelligence Pipeline
+	var newsRep macro.NewsSentimentReport
+	if e.newsPipeline != nil {
+		newsRep = e.newsPipeline.Evaluate(now)
+		e.mu.Lock()
+		e.state.NewsSentiment = &newsRep
+		e.mu.Unlock()
+	}
+
 	// Populate full 16-feature microstructure vector for current tick
 	var x [common.FeatureCount]float64
 	x[0] = imbL1
@@ -2626,7 +2676,18 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	} else if zBlend < -2.5 {
 		zBlend = -2.5
 	}
-	zTotal := 0.20*zMom + 0.15*zLeadLag + 0.15*zMeta + 0.10*zOBI + 0.15*zMF + 0.25*zBlend
+	zNews := 0.0
+	if val, ok := newsRep.SymbolSentiments[strings.ToUpper(symbol)]; ok {
+		zNews = val * 2.0
+	} else if newsRep.MacroSentiment != 0 {
+		zNews = newsRep.MacroSentiment * 1.5
+	}
+	if zNews > 2.5 {
+		zNews = 2.5
+	} else if zNews < -2.5 {
+		zNews = -2.5
+	}
+	zTotal := 0.18*zMom + 0.12*zLeadLag + 0.12*zMeta + 0.10*zOBI + 0.13*zMF + 0.20*zBlend + 0.15*zNews
 	convictionUp := 1.0 / (1.0 + math.Exp(-1.8*zTotal))
 	if sm.Conviction > 0 && math.Abs(sm.Conviction-0.50) > 1e-4 {
 		convictionUp = sm.Conviction
@@ -2657,6 +2718,12 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	if macroSt.SpreadMultiplier > 1.0 {
 		bidOffsetBps *= macroSt.SpreadMultiplier
 		askOffsetBps *= macroSt.SpreadMultiplier
+	}
+
+	// Apply Macro/Micro News Intelligence spread scaling (e.g. 2.5x exploit defense, 1.5x breaking alert)
+	if newsMult, ok := newsRep.SpreadMultipliers[strings.ToUpper(symbol)]; ok && newsMult > 1.0 {
+		bidOffsetBps *= newsMult
+		askOffsetBps *= newsMult
 	}
 
 	// Volatility-Adaptive Entry Spread (Optimal Microstructure Formula):
@@ -3042,14 +3109,14 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		}
 		// Toxic momentum pull: cancel resting opening quotes if flow becomes adverse or invalidation triggers
 		if ord.Side == "SELL" && currentInv <= 0 {
-			if sm.Ret5sBps > 4.5 || blendedSkewBps > 3.0 || cbSig.IsAdverseAsk || convictionUp > 0.60 || (sm.OBI > 0.20 && convictionUp > 0.28) {
+			if sm.Ret5sBps > 4.5 || blendedSkewBps > 3.0 || cbSig.IsAdverseAsk || convictionUp > 0.60 || (sm.OBI > 0.20 && convictionUp > 0.28) || newsRep.SymbolAskKills[strings.ToUpper(symbol)] {
 				ord.CancelingUntil = now.Add(cancelLatency)
 				keptOrders = append(keptOrders, ord)
 				continue
 			}
 		}
 		if ord.Side == "BUY" && currentInv >= 0 {
-			if sm.Ret5sBps < -4.5 || blendedSkewBps < -3.0 || cbSig.IsAdverseBid || convictionUp < 0.40 || (sm.OBI < -0.20 && convictionUp < 0.72) {
+			if sm.Ret5sBps < -4.5 || blendedSkewBps < -3.0 || cbSig.IsAdverseBid || convictionUp < 0.40 || (sm.OBI < -0.20 && convictionUp < 0.72) || newsRep.SymbolBidKills[strings.ToUpper(symbol)] {
 				ord.CancelingUntil = now.Add(cancelLatency)
 				keptOrders = append(keptOrders, ord)
 				continue
@@ -3121,6 +3188,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		// Opening / accumulating long inventory
 		if currentInv+clipQty > maxInvQty || blendedSkewBps <= -3.5 || currentInv >= 2.0*clipQty {
 			allowBuy = false
+		}
+		if newsRep.SymbolBidKills[strings.ToUpper(symbol)] {
+			allowBuy = false // Exploit defense: kill bids immediately to avoid toxic falling knife fills!
 		}
 		if blendedSkewBps < -2.0 || sm.Ret5sBps < -3.0 || cbSig.IsAdverseBid || (!sm.BidCooldownUntil.IsZero() && now.Before(sm.BidCooldownUntil)) {
 			allowBuy = false // Toxic cascade defense: do not catch falling knife whether flat or long!
@@ -3212,6 +3282,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			}
 			if currentInv-clipQty < -maxInvQty || blendedSkewBps >= 3.5 || currentInv <= -2.0*clipQty {
 				allowSell = false
+			}
+			if newsRep.SymbolAskKills[strings.ToUpper(symbol)] {
+				allowSell = false // Squeeze/catalyst defense: kill asks to prevent naked shorting into explosive rally!
 			}
 			if blendedSkewBps > 2.0 || sm.Ret5sBps > 3.0 || cbSig.IsAdverseAsk || (!sm.AskCooldownUntil.IsZero() && now.Before(sm.AskCooldownUntil)) {
 				allowSell = false // Toxic cascade defense: do not short into surging knife whether flat or short!
@@ -3317,6 +3390,18 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		preTradeOk = !isTripped
 	}
 
+	newsScore := 0.0
+	if val, ok := newsRep.SymbolSentiments[strings.ToUpper(symbol)]; ok {
+		newsScore = val
+	} else if newsRep.MacroSentiment != 0 {
+		newsScore = newsRep.MacroSentiment
+	}
+	newsHeadline := ""
+	if len(newsRep.ActiveAlerts) > 0 {
+		newsHeadline = newsRep.ActiveAlerts[0].Title
+	}
+	newsBidKill := newsRep.SymbolBidKills[strings.ToUpper(symbol)]
+
 	snap := MFTDiagnosticSnapshot{
 		Symbol:                  symbol,
 		Timestamp:               now.UTC(),
@@ -3345,6 +3430,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		FundingAPR:              liveFundingAPR,
 		PreTradeRiskPassed:      preTradeOk,
 		QuotingMode:             quotingMode,
+		NewsSentimentScore:      newsScore,
+		NewsHeadline:            newsHeadline,
+		NewsBidKill:             newsBidKill,
 	}
 
 	if e.state.MFTDiagnostics == nil {

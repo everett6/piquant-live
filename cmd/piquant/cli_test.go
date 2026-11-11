@@ -234,3 +234,23 @@ func TestDryRunCLIFlagsAndStatus(t *testing.T) {
 		t.Fatalf("unexpected error printing dry run status: %v", err)
 	}
 }
+
+func TestNewsCLI(t *testing.T) {
+	tempDir := t.TempDir()
+	ctx := context.Background()
+
+	// 1. Run news feed print
+	if err := runNews(ctx, []string{"--data", tempDir, "--limit", "3"}); err != nil {
+		t.Fatalf("runNews failed: %v", err)
+	}
+
+	// 2. Ingest breaking headline
+	if err := runNews(ctx, []string{
+		"--data", tempDir,
+		"--ingest", "Solana DEX Bridge Vulnerability Exploit: $60M Drained",
+		"--summary", "Flash loan attack on protocol vaults",
+	}); err != nil {
+		t.Fatalf("runNews --ingest failed: %v", err)
+	}
+}
+

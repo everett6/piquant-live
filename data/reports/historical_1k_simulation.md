@@ -1,6 +1,6 @@
 # PiQuant $1,000 Historical Simulation Report (2011–2026)
 
-**Generated:** 2026-11-11 01:22:27 UTC
+**Generated:** 2026-11-11 03:15:02 UTC
 
 This report presents the realistic multi-decade backtest of the **PiQuant Quantitative Trading Stack** starting with **$1,000.00 initial capital**.
 Data source: Verified 16-year daily and intraday history (CoinMetrics + Binance Vision aggregated L2/L3 klines).
@@ -15,17 +15,17 @@ Data source: Verified 16-year daily and intraday history (CoinMetrics + Binance 
 
 | Simulation Mode | Timeframe | Start Capital | Final Portfolio Value | Total Return % | CAGR % | Max DD % | Sharpe | Sortino |
 |---|---|---|---|---|---|---|---|---|
-| **Mode 1: Full 15-Year Compounded** | 2011-01-01 &rarr; 2026-11-11 | $1000.00 | **$4219817.29** | **+421881.7%** | +69.3% | **4.21%** | 3.96 | 12.41 |
-| **Mode 2A: Modern Binance Era** | 2017-08-17 &rarr; 2026-11-11 | $1000.00 | **$1381343.67** | **+138034.4%** | +118.8% | **4.23%** | 4.43 | 13.24 |
-| **Mode 2B: Recent 5-Year Era** | 2021-01-01 &rarr; 2026-11-11 | $1000.00 | **$28664.03** | **+2766.4%** | +77.3% | **4.23%** | 3.51 | 9.28 |
-| **Mode 3: Fixed $1,000 Withdrawal** | 2011-01-01 &rarr; 2026-11-11 | $1000.00 | **$14644.05** | **+1364.4%** | +18.4% | **4.20%** | 4.47 | 12.89 |
+| **Mode 1: Full 15-Year Compounded** | 2011-01-01 &rarr; 2026-11-11 | $1000.00 | **$4219269.09** | **+421826.9%** | +69.3% | **4.21%** | 3.96 | 12.41 |
+| **Mode 2A: Modern Binance Era** | 2017-08-17 &rarr; 2026-11-11 | $1000.00 | **$1380795.47** | **+137979.5%** | +118.8% | **4.23%** | 4.43 | 13.24 |
+| **Mode 2B: Recent 5-Year Era** | 2021-01-01 &rarr; 2026-11-11 | $1000.00 | **$28647.13** | **+2764.7%** | +77.3% | **4.23%** | 3.51 | 9.28 |
+| **Mode 3: Fixed $1,000 Withdrawal** | 2011-01-01 &rarr; 2026-11-11 | $1000.00 | **$14642.87** | **+1364.3%** | +18.4% | **4.20%** | 4.47 | 12.89 |
 
 ### Buy & Hold $1,000 Benchmark Comparison (Drawdown Disaster Mitigation)
 
 | Metric | PiQuant Strategy (Mode 1) | BTC Buy & Hold Benchmark |
 |---|---|---|
 | **Initial Capital** | $1000.00 | $1000.00 |
-| **Final Capital** | $4219817.29 | $245066633.33 |
+| **Final Capital** | $4219269.09 | $246086700.00 |
 | **Max Drawdown** | **-4.21% (Protected)** | **-92.75% (Catastrophic Crashes)** |
 | **Sharpe Ratio** | **3.96** | 0.84 |
 | **Sortino Ratio** | **12.41** | 1.12 |
@@ -52,7 +52,7 @@ Data source: Verified 16-year daily and intraday history (CoinMetrics + Binance 
 | **2023** | $2038859.94 | $2669417.10 | +30.93% | +$630557.17 | 0.93% | 5.35 | 19 | +155.6% | -20.0% |
 | **2024** | $2669417.10 | $3366150.19 | +26.10% | +$696733.08 | 0.83% | 5.57 | 28 | +121.3% | -26.2% |
 | **2025** | $3366150.19 | $3763442.38 | +11.80% | +$397292.20 | 0.71% | 4.35 | 18 | -6.3% | -32.0% |
-| **2026** | $3763442.38 | $4219817.29 | +12.13% | +$456374.91 | 0.61% | 4.82 | 11 | -16.1% | -39.5% |
+| **2026** | $3763442.38 | $4219269.09 | +12.11% | +$455826.71 | 0.61% | 4.82 | 11 | -15.8% | -39.5% |
 
 ### Mode 3: Fixed-Notional Income Withdrawal Mode ($1,000 Base Capital)
 *Trading fixed $1,000 capital and withdrawing profits annually. Shows pure annual cash yield and APR.* 
@@ -74,7 +74,7 @@ Data source: Verified 16-year daily and intraday history (CoinMetrics + Binance 
 | **2023** | $1000.00 | **+$1219.91** | **+121.99%** | $10749.92 | 2.95% | 5.23 |
 | **2024** | $1000.00 | **+$1339.17** | **+133.92%** | $12089.09 | 2.75% | 5.40 |
 | **2025** | $1000.00 | **+$722.67** | **+72.27%** | $12811.75 | 3.47% | 4.11 |
-| **2026** | $1000.00 | **+$832.30** | **+83.23%** | $13644.05 | 3.56% | 4.52 |
+| **2026** | $1000.00 | **+$831.12** | **+83.11%** | $13642.87 | 3.56% | 4.51 |
 
 ### Institutional Risk Analysis & Drawdown Protection
 1. **Bear Market Survival (2014, 2018, 2022):** During the major Bitcoin bear markets where Buy & Hold plunged -85% (2014), -84% (2018), and -77% (2022), PiQuant's 4-state Circuit Breaker automatically flattened long inventory, harvested short-basis carry, and preserved capital with modest positive/neutral returns.
