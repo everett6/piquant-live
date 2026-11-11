@@ -587,6 +587,9 @@ type MarketFeed interface {
 
 // SetMarketFeed replaces the primary market feed (call before Start).
 func (e *DryRunEngine) SetMarketFeed(f MarketFeed) {
+	if f == nil {
+		return
+	}
 	e.stream = f
 }
 
@@ -2112,7 +2115,10 @@ func (e *DryRunEngine) matchMakerOrders(symbol string, tradePrice float64, trade
 		return
 	}
 
-	var remaining []*ActiveMakerOrder
+	// Filter in place (no per-trade allocation on the Pi); writes never pass the read index.
+	remaining := orders[:0]
+	tick := e.tickSize(symbol)
+	tickTol := tick * 0.51
 	for _, ord := range orders {
 		// Cancel propagation delay: if order was canceled and cancel transit duration has passed, prune it
 		if !ord.CancelingUntil.IsZero() && now.After(ord.CancelingUntil) {
@@ -2131,8 +2137,6 @@ func (e *DryRunEngine) matchMakerOrders(symbol string, tradePrice float64, trade
 		// 2. Trade aggressor must be on the opposite side of our resting limit order:
 		//    - Resting BUY bid fills against SELLER-initiated trades (tradeSide == 2, isBuyerMaker == true) or downward price sweep.
 		//    - Resting SELL ask fills against BUYER-initiated trades (tradeSide == 1, isBuyerMaker == false) or upward price sweep.
-		tick := e.tickSize(symbol)
-		tickTol := tick * 0.51
 		if ord.Side == "BUY" && (tradeSide == 2 || tradePrice < ord.Price-tickTol) {
 			if tradePrice < ord.Price-tickTol {
 				// Market swept completely through our bid price level
@@ -2161,6 +2165,7 @@ func (e *DryRunEngine) matchMakerOrders(symbol string, tradePrice float64, trade
 			remaining = append(remaining, ord)
 		}
 	}
+	clear(orders[len(remaining):]) // drop stale pointers so filled orders can be collected
 	e.activeOrders[symbol] = remaining
 	e.mu.Unlock()
 }
@@ -2972,8 +2977,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	// When holding open inventory, the closing quote guarantees net profitability
 	// after covering all round-trip maker fees (2 * MakerFeeBps).
 	// A dynamic exponential decay ratchet starts quoting at base target profit (default 50.0 bps)
-	// to capture swing momentum, then smoothly relaxes over holding time (30m half-life)
-	// towards guaranteed net profit floor (+25.0 bps net = 28.0 bps gross),
+	// to capture swing momentum, then smoothly relaxes over holding time (900 s e-fold, ~10.4 min half-life)
+	// towards the net floor max(6, TargetFloorFrac x base) bps (default 0.8 x 35 = 28 bps net),
 	// ensuring positions never get trapped during quiet consolidation while ALWAYS banking green profits.
 	// An exit is ONLY allowed below break-even if structural stop-loss or confirmed toxic flow triggers.
 	if pos != nil && math.Abs(pos.Size) > 1e-8 && pos.AvgEntryPrice > 0 {
