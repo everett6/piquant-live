@@ -83,6 +83,8 @@ def simulate_brackets(o, h, l, c, times_ns, signal, tp_bps, sl_bps, max_hold, lo
     Returns a DataFrame of trades with net returns (fraction of notional) and hold hours.
     """
     n = len(o)
+    if n >= 2 and (int(times_ns[1]) - int(times_ns[0])) < 10**9:
+        raise ValueError("times_ns must be epoch nanoseconds (use index.as_unit('ns').asi8)")
     trades = []
     i = 0
     round_trip_cost = 2 * (costs.taker_bps + costs.slip_bps) * 1e-4

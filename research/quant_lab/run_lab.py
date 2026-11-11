@@ -26,7 +26,8 @@ def wf_select(daily: pd.DataFrame, train_days=365, test_days=91) -> pd.Series:
     while t < len(daily):
         tr = daily.iloc[t - train_days:t]
         sd = tr.std().replace(0, np.nan)
-        best = (tr.mean() / sd).idxmax()
+        score = (tr.mean() / sd).fillna(-np.inf)
+        best = score.idxmax() if np.isfinite(score.max()) else score.index[0]
         out.append(daily.iloc[t:t + test_days][best])
         t += test_days
     return pd.concat(out) if out else pd.Series(dtype=float)
@@ -36,7 +37,7 @@ def segments_as_trades(r: pd.Series, pos: np.ndarray) -> pd.DataFrame:
     """Turn a held-position return series into per-holding-period 'trades' for win-rate stats."""
     held = np.concatenate([[0.0], pos[:-1]])
     seg = np.cumsum(np.concatenate([[1], (np.diff(held) != 0).astype(int)]))
-    df = pd.DataFrame({"r": r.to_numpy(), "seg": seg, "held": held, "t": r.index.asi8})
+    df = pd.DataFrame({"r": r.to_numpy(), "seg": seg, "held": held, "t": r.index.as_unit("ns").asi8})
     df = df[df["held"] != 0]
     g = df.groupby("seg")
     net = np.expm1(g["r"].apply(lambda x: np.log1p(x).sum()))

@@ -40,7 +40,7 @@ def s1_run(df: pd.DataFrame, f: pd.DataFrame, p: dict, costs: lab.Costs) -> pd.D
     sig = np.where(np.isfinite(conv), sig, 0)
     sigma = f["sigma15_bps"].to_numpy()
     return lab.simulate_brackets(df["o"].to_numpy(), df["h"].to_numpy(), df["l"].to_numpy(), df["c"].to_numpy(),
-                                 df.index.asi8, sig, p["k_tp"] * sigma, p["k_sl"] * sigma,
+                                 df.index.as_unit("ns").asi8, sig, p["k_tp"] * sigma, p["k_sl"] * sigma,
                                  max_hold=240, loser_stop=45, costs=costs)
 
 
@@ -149,6 +149,6 @@ def s3_run(df: pd.DataFrame, h1: pd.DataFrame, lv: pd.DataFrame, p: dict, costs:
     stop_bps = np.abs(anchor * (1 + nxt) / c - 1) * 1e4  # distance from current price to the next band
     stop_bps = np.where(sig > 0, np.abs(c / (anchor * (1 - nxt)) - 1) * 1e4, stop_bps)
     tp_dummy = np.full(len(c), 1e4)
-    return lab.simulate_brackets(h1["o"].to_numpy(), h1["h"].to_numpy(), h1["l"].to_numpy(), c, h1.index.asi8,
+    return lab.simulate_brackets(h1["o"].to_numpy(), h1["h"].to_numpy(), h1["l"].to_numpy(), c, h1.index.as_unit("ns").asi8,
                                  sig, tp_dummy, np.maximum(stop_bps, 10.0), max_hold=72, loser_stop=48,
                                  costs=costs, target_px=target_px)
