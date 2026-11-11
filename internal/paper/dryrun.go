@@ -362,7 +362,7 @@ func newSymbolMicrostructure(symbol string, kylesLambda float64) *SymbolMicrostr
 	return &SymbolMicrostructure{
 		Symbol:          symbol,
 		CircuitBrk:      experiment.NewMicrostructureCircuitBreaker(1.0),
-		VpinCalc:        common.NewVPINCalculator(25.0, 50), // $25k notional volume buckets
+		VpinCalc:        common.NewVPINCalculator(vpinBucketUSDK, 50), // notional buckets in $k (see vpinNotionalK)
 		KyleEst:         common.NewKylesLambdaEstimator(0.05, kylesLambda),
 		HawkesEst:       common.NewOnlineHawkesEstimator(5.0, 12.0, 20.0),
 		AdaHedge:        common.NewAdaHedgeEnsemble(7, 0.985),
@@ -673,7 +673,7 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		adaHedge:              common.NewAdaHedgeEnsemble(7, 0.985),
 		circuitBrk:            experiment.NewMicrostructureCircuitBreaker(1.0),
 		driftGuard:            experiment.NewPageHinkleyDriftGuard(0.15, 12.0),
-		vpinCalc:              common.NewVPINCalculator(5.0, 50),
+		vpinCalc:              common.NewVPINCalculator(5.0, 50), // $5k notional buckets across all symbols
 		riskSafeguard:         NewCircuitBreaker(DefaultCircuitBreakerConfig()),
 		kyleEst:               common.NewKylesLambdaEstimator(0.05, cfg.KylesLambda),
 		tcaTracker:            NewTCAMarkoutTracker(),
@@ -1904,6 +1904,14 @@ func (e *DryRunEngine) getOrCreateSymbolMicro(symbol string) *SymbolMicrostructu
 }
 
 // processMarketEvent executes hot-path pricing and order matching.
+// vpinBucketUSDK is the per-symbol VPIN volume bucket in thousands of USD. Buckets used to be sized in coins
+// (25 BTC), which on Binance.US (~1.3 BTC/hour) needed ~40 days to fill 50 buckets, so the toxicity filter
+// never engaged; $10k buckets fill in ~5 h (BTC) / ~15 h (ETH) at observed Binance.US volume.
+const vpinBucketUSDK = 10.0
+
+// vpinNotionalK converts a trade to thousands of USD so VPIN buckets are venue- and asset-comparable.
+func vpinNotionalK(price, size float64) float64 { return price * size / 1000 }
+
 func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 	symbol := "BTCUSDT"
 	if int(ev.SymbolID) < len(e.cfg.Symbols) {
@@ -2022,9 +2030,10 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 	// consume the queue ahead (hftbacktest fill realism).
 	if ev.Kind == 0 {
 		isBuyerMaker := (ev.Side == 2)
+		notionalK := vpinNotionalK(price, ev.Size)
 		// Update per-symbol microstructure estimators (prevents BTC/ETH price cross-contamination)
 		if sm.VpinCalc != nil {
-			sm.VpinCalc.UpdateTrade(price, ev.Size, isBuyerMaker)
+			sm.VpinCalc.UpdateTrade(price, notionalK, isBuyerMaker)
 		}
 		if sm.KyleEst != nil {
 			sm.KyleEst.UpdateTrade(price, ev.Size, isBuyerMaker)
@@ -2046,7 +2055,7 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 
 		// Also keep global diagnostic estimators updated
 		if e.vpinCalc != nil {
-			e.vpinCalc.UpdateTrade(price, ev.Size, isBuyerMaker)
+			e.vpinCalc.UpdateTrade(price, notionalK, isBuyerMaker)
 		}
 		if e.kyleEst != nil {
 			e.kyleEst.UpdateTrade(price, ev.Size, isBuyerMaker)
