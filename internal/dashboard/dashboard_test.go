@@ -1009,3 +1009,41 @@ func TestTaxEndpointsAndForm8949Export(t *testing.T) {
 	}
 }
 
+func TestPaperMFTEndpoints(t *testing.T) {
+	srv := newTestServer(t, nil)
+	h := srv.Handler()
+
+	// 1. Unauthenticated request must return 401
+	if rec := get(t, h, http.MethodGet, "/api/paper/mft", nil, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated /api/paper/mft code = %d, want 401", rec.Code)
+	}
+	if rec := get(t, h, http.MethodGet, "/api/debug", nil, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated /api/debug code = %d, want 401", rec.Code)
+	}
+
+	// 2. Authenticated request to /api/paper/mft
+	authHdr := map[string]string{"Authorization": "Bearer " + peerToken}
+	recMFT := get(t, h, http.MethodGet, "/api/paper/mft", authHdr, nil)
+	if recMFT.Code != http.StatusOK {
+		t.Fatalf("authenticated /api/paper/mft code = %d, want 200", recMFT.Code)
+	}
+
+	var resMFT map[string]any
+	if err := json.Unmarshal(recMFT.Body.Bytes(), &resMFT); err != nil {
+		t.Fatalf("failed to decode JSON response: %v", err)
+	}
+	if resMFT["status"] != "ok" {
+		t.Errorf("expected status 'ok', got %v", resMFT["status"])
+	}
+	if _, ok := resMFT["timestamp"]; !ok {
+		t.Errorf("expected timestamp in /api/paper/mft response")
+	}
+
+	// 3. Authenticated request to /api/debug
+	recDebug := get(t, h, http.MethodGet, "/api/debug", authHdr, nil)
+	if recDebug.Code != http.StatusOK {
+		t.Fatalf("authenticated /api/debug code = %d, want 200", recDebug.Code)
+	}
+}
+
+

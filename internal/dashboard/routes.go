@@ -22,6 +22,7 @@ import (
 	"piquant-live/internal/models"
 	"piquant-live/internal/models/common"
 	"piquant-live/internal/paper"
+	"piquant-live/internal/quant/orchestrator"
 	"piquant-live/internal/secrets"
 	"piquant-live/internal/tax"
 )
@@ -61,6 +62,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/paper/historical-sim", s.handlePaperHistoricalSim)
 	s.mux.HandleFunc("/api/paper/tick-sim", s.handlePaperTickSim)
 	s.mux.HandleFunc("/api/paper/cloud-optimizer", s.handlePaperCloudOptimizer)
+	s.mux.HandleFunc("/api/paper/mft", s.handlePaperMFT)
+	s.mux.HandleFunc("/api/debug", s.handlePaperMFT)
 	s.mux.HandleFunc("/api/tax", s.handleTax)
 	s.mux.HandleFunc("/api/tax/export.csv", s.handleTaxExportCSV)
 	s.mux.HandleFunc("/tax", s.handleTaxPage)
@@ -1792,6 +1795,34 @@ func (s *Server) handlePaperDryRun(w http.ResponseWriter, r *http.Request) {
 			{"time": "00:11s ago", "symbol": "BTCUSDT", "side": "ASK (Maker L1)", "price": 50000.44, "qty": 0.019, "edge_bps": 1.32, "adverse_bps": 0.09},
 			{"time": "00:24s ago", "symbol": "ETHUSDT", "side": "BID (Stat-Arb)", "price": 3400.12, "qty": 0.35, "edge_bps": 1.64, "adverse_bps": 0.21},
 		},
+	})
+}
+
+// handlePaperMFT provides deep real-time debugging diagnostics for Medium-Frequency
+// Trading (MFT), multi-horizon momentum, Kalman trend state, dynamic strategy weights, and trailing stop protection.
+func (s *Server) handlePaperMFT(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	st := s.resolveDryRunState()
+	var orchReport *orchestrator.OrchestratorReport
+	if eng, ok := s.opts.DryRun.(*paper.DryRunEngine); ok && eng.QuantOrchestrator() != nil {
+		rep := eng.QuantOrchestrator().Report(time.Now())
+		orchReport = &rep
+	} else if st.QuantOrchestrator != nil {
+		orchReport = st.QuantOrchestrator
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":          "ok",
+		"timestamp":       time.Now().UTC(),
+		"mft_diagnostics": st.MFTDiagnostics,
+		"orchestrator":    orchReport,
+		"positions":       st.Positions,
+		"leverage":        st.Leverage,
+		"scalping_state":  st.ScalpingState,
 	})
 }
 

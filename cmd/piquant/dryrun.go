@@ -40,6 +40,7 @@ type dryRunFlags struct {
 	clipFraction      float64
 	cleanReset        bool
 	enableTaker       bool
+	debug             bool
 	statusOnly        bool
 	reportOnly        bool
 	watch             bool
@@ -78,6 +79,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.BoolVar(&f.zeroFeeMaker, "zero-fee-btc", true, "zero-fee maker tier on BTC pairs (default true for Binance.US)")
 	fs.Float64Var(&f.clipFraction, "clip-fraction", 0.45, "fraction of max allocation per quote clip (default: 0.45 = 45% for high capital turnover)")
 	fs.BoolVar(&f.enableTaker, "enable-taker", false, "opt-in to tactical taker executions on high-conviction momentum (default false)")
+	fs.BoolVar(&f.debug, "debug", false, "enable verbose real-time MFT decision matrix logging and deep telemetry")
 	fs.BoolVar(&f.cleanReset, "reset", false, "reset cumulative historical win/loss stats and trade count on start")
 	fs.BoolVar(&f.statusOnly, "status", false, "print terminal summary of active dry run and exit")
 	fs.BoolVar(&f.reportOnly, "report", false, "generate and print institutional EOD risk & tear-sheet report and exit")
@@ -123,7 +125,7 @@ func runDryRun(ctx context.Context, args []string) error {
 
 	// If --status is requested, print terminal report and return
 	if f.statusOnly {
-		return printDryRunStatus(stateFile)
+		return printDryRunStatus(stateFile, f.debug)
 	}
 
 	// Exclusive file lock on dataDir prevents concurrent processes from clobbering state and accidental shutdown liquidations
@@ -228,6 +230,7 @@ func runDryRun(ctx context.Context, args []string) error {
 	paperCfg.ZeroFeeMaker = f.zeroFeeMaker
 	paperCfg.CleanReset = f.cleanReset
 	paperCfg.EnableTaker = f.enableTaker
+	paperCfg.Debug = f.debug
 	paperCfg.EnableAllModels = f.enableAllModels
 	paperCfg.ExtendOnShutdown = f.extendOnShutdown
 	paperCfg.FlattenOnShutdown = f.flattenOnShutdown
@@ -350,7 +353,12 @@ func runDryRun(ctx context.Context, args []string) error {
 	return srv.ListenAndServe(ctx)
 }
 
-func printDryRunStatus(stateFile string) error {
+func printDryRunStatus(stateFile string, showDebug ...bool) error {
+	isDebug := false
+	if len(showDebug) > 0 {
+		isDebug = showDebug[0]
+	}
+	_ = isDebug
 	data, err := os.ReadFile(stateFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -426,11 +434,46 @@ func printDryRunStatus(stateFile string) error {
 		fmt.Printf(" Circuit Halt:    %s\n", st.CircuitHaltReason)
 	}
 
+	if len(st.MFTDiagnostics) > 0 {
+		fmt.Println("-------------------------------------------------------")
+		fmt.Println(" Medium-Frequency Trading (MFT) Decision Matrix:")
+		for sym, diag := range st.MFTDiagnostics {
+			fmt.Printf("   [%s] Mid: $%.2f | Kalman: $%.2f (Vel: %+.2f bps/s) | Mode: %s\n",
+				sym, diag.MidPrice, diag.KalmanPrice, diag.KalmanVelocityBpsPerSec, diag.QuotingMode)
+			fmt.Printf("     Horizon Returns: 30s=%+.1fbps 5m=%+.1fbps 15m=%+.1fbps 1h=%+.1fbps | TrendScore: %+.2f\n",
+				diag.Ret30sBps, diag.Ret5mBps, diag.Ret15mBps, diag.Ret1hBps, diag.TrendScore)
+			fmt.Printf("     Strategy Blend:  Passive=%+.2f OBI=%+.2f Carry=%+.2f Trend=%+.2f -> Alpha: %+.2f\n",
+				diag.PassiveScore, diag.OBIMomentumScore, diag.FundingCarryScore, diag.TrendScore, diag.BlendedAlpha)
+			fmt.Printf("     Dominant Horizon: %s | Conviction: %.1f%%\n",
+				diag.DominantHorizon, diag.DirectionalConviction*100.0)
+			fmt.Printf("     Target Inventory: %+.4f (Current: %+.4f, Dev: %+.4f)\n",
+				diag.TargetInventory, diag.CurrentInventory, diag.InvDeviation)
+			if diag.TrailingStopPrice > 0 {
+				fmt.Printf("     Trailing Ratchet: Stop=$%.2f Peak=$%.2f (Dist: %.1f bps)\n",
+					diag.TrailingStopPrice, diag.PeakPositionPrice, diag.ActiveStopDistanceBps)
+			}
+			riskStatus := "PASS"
+			if !diag.PreTradeRiskPassed {
+				riskStatus = "FAIL (GATED)"
+			}
+			fmt.Printf("     Microstructure:  VPIN=%.2f Hawkes=%.2f CarryAPR=%.1f%% RiskCheck=%s\n",
+				diag.VPIN, diag.HawkesRatio, diag.FundingAPR*100.0, riskStatus)
+		}
+	}
+
 	fmt.Println("-------------------------------------------------------")
 	fmt.Println(" Open Inventory Positions:")
 	for sym, pos := range st.Positions {
-		fmt.Printf("   %s: Size=%.4f Entry=$%.2f Mark=$%.2f UnrealizedPnL=$%.2f Trades=%d\n",
-			sym, pos.Size, pos.AvgEntryPrice, pos.MarkPrice, pos.UnrealizedPnL, pos.TotalTrades)
+		stopInfo := ""
+		if pos.TrailingStop > 0 {
+			stopInfo = fmt.Sprintf(" Stop=$%.2f Peak=$%.2f", pos.TrailingStop, pos.PeakPrice)
+		}
+		holdInfo := ""
+		if pos.HoldingSec > 0 {
+			holdInfo = fmt.Sprintf(" Hold=%.0fs", pos.HoldingSec)
+		}
+		fmt.Printf("   %s: Size=%.4f Entry=$%.2f Mark=$%.2f UnrealizedPnL=$%.2f Trades=%d%s%s\n",
+			sym, pos.Size, pos.AvgEntryPrice, pos.MarkPrice, pos.UnrealizedPnL, pos.TotalTrades, stopInfo, holdInfo)
 	}
 	fmt.Println("=======================================================")
 	return nil

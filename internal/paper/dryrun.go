@@ -59,6 +59,7 @@ type DryRunConfig struct {
 	ClipFraction      float64       // Fraction of max symbol allocation per quote clip (default: 0.45 = 45%)
 	BuyThreshold      float64       // Directional conviction entry threshold (default: 0.65; dynamic up to 0.72 on thin bids)
 	SellThreshold     float64       // Directional conviction short entry threshold (default: 0.35; dynamic down to 0.28 on heavy bids)
+	Debug             bool          // Enable verbose real-time MFT decision matrix logging (default: false)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -97,21 +98,25 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		SellThreshold:     0.35,  // Short entry threshold (dynamic down to 0.28 on heavy bids)
 		CleanReset:        false,
 		EnableTaker:       false,
+		Debug:             false,
 	}
 }
 
 // Position tracks an individual symbol's inventory and execution metrics.
 type Position struct {
 	Symbol          string  `json:"symbol"`
-	Size            float64 `json:"size"`              // Quantity (positive: long, negative: short)
-	AvgEntryPrice   float64 `json:"avg_entry_price"`   // Volume-weighted entry price
-	MarkPrice       float64 `json:"mark_price"`        // Latest mid price
-	UnrealizedPnL   float64 `json:"unrealized_pnl"`    // Mark-to-market PnL
-	RealizedPnL     float64 `json:"realized_pnl"`      // Cumulative realized PnL
-	TotalTrades     int64   `json:"total_trades"`      // Total completed fills
-	MakerTrades     int64   `json:"maker_trades"`      // Maker fills
-	TakerTrades     int64   `json:"taker_trades"`      // Taker fills
-	TotalVolumeUSDT float64 `json:"total_volume_usdt"` // Cumulative traded notional
+	Size            float64 `json:"size"`                        // Quantity (positive: long, negative: short)
+	AvgEntryPrice   float64 `json:"avg_entry_price"`             // Volume-weighted entry price
+	MarkPrice       float64 `json:"mark_price"`                  // Latest mid price
+	UnrealizedPnL   float64 `json:"unrealized_pnl"`              // Mark-to-market PnL
+	RealizedPnL     float64 `json:"realized_pnl"`                // Cumulative realized PnL
+	TotalTrades     int64   `json:"total_trades"`                // Total completed fills
+	MakerTrades     int64   `json:"maker_trades"`                // Maker fills
+	TakerTrades     int64   `json:"taker_trades"`                // Taker fills
+	TotalVolumeUSDT float64 `json:"total_volume_usdt"`           // Cumulative traded notional
+	PeakPrice       float64 `json:"peak_price,omitempty"`         // Peak favorable price achieved during position lifecycle
+	TrailingStop    float64 `json:"trailing_stop,omitempty"`       // Dynamic locked-in trailing stop price
+	HoldingSec      float64 `json:"holding_sec,omitempty"`         // Current position holding duration in seconds
 }
 
 // TradeRecord represents an individual executed paper trade for the journal.
@@ -191,6 +196,39 @@ type DryRunState struct {
 	AfterTaxEquity         float64                       `json:"after_tax_equity"`          // Equity net of estimated tax reserve
 	AfterTaxReturnPct      float64                       `json:"after_tax_return_pct"`      // Post-tax return percentage
 	QuantOrchestrator      *orchestrator.OrchestratorReport `json:"quant_orchestrator,omitempty"` // Latency-adaptive multi-strategy orchestration
+	MFTDiagnostics         map[string]MFTDiagnosticSnapshot `json:"mft_diagnostics,omitempty"` // Real-time MFT decision telemetry per symbol
+}
+
+// MFTDiagnosticSnapshot captures a real-time observability snapshot of medium-frequency
+// trading decision metrics, alpha blending, Kalman trend state, and trailing stop protection.
+type MFTDiagnosticSnapshot struct {
+	Symbol                  string    `json:"symbol"`
+	Timestamp               time.Time `json:"timestamp"`
+	MidPrice                float64   `json:"mid_price"`
+	KalmanPrice             float64   `json:"kalman_price"`
+	KalmanVelocityBpsPerSec float64   `json:"kalman_velocity_bps_per_sec"`
+	Ret30sBps               float64   `json:"ret_30s_bps"`
+	Ret5mBps                float64   `json:"ret_5m_bps"`
+	Ret15mBps               float64   `json:"ret_15m_bps"`
+	Ret1hBps                float64   `json:"ret_1h_bps"`
+	TrendScore              float64   `json:"trend_score"`
+	PassiveScore            float64   `json:"passive_score"`
+	OBIMomentumScore        float64   `json:"obi_momentum_score"`
+	FundingCarryScore       float64   `json:"funding_carry_score"`
+	BlendedAlpha            float64   `json:"blended_alpha"`
+	DominantHorizon         string    `json:"dominant_horizon"`
+	DirectionalConviction   float64   `json:"directional_conviction"`
+	TargetInventory         float64   `json:"target_inventory"`
+	CurrentInventory        float64   `json:"current_inventory"`
+	InvDeviation            float64   `json:"inv_deviation"`
+	TrailingStopPrice       float64   `json:"trailing_stop_price"`
+	PeakPositionPrice       float64   `json:"peak_position_price"`
+	ActiveStopDistanceBps   float64   `json:"active_stop_distance_bps"`
+	VPIN                    float64   `json:"vpin"`
+	HawkesRatio             float64   `json:"hawkes_ratio"`
+	FundingAPR              float64   `json:"funding_apr"`
+	PreTradeRiskPassed      bool      `json:"pre_trade_risk_passed"`
+	QuotingMode             string    `json:"quoting_mode"`
 }
 
 // ScalpingRegimeState reports per-symbol scalping viability and mode (Scalp vs Patient Swing).
@@ -279,6 +317,11 @@ type SymbolMicrostructure struct {
 	ScalpingDisabledReason string
 	ConsecutiveLosses      int
 	RecentPnlWindow        []float64
+
+	// Medium-Frequency Trading (MFT) Kalman Trend & Multi-Horizon Momentum Tracker
+	MomentumTracker *alpha.MomentumTracker
+	LatestMomentum  alpha.MultiHorizonMomentum
+	LastDebugLog    time.Time
 }
 
 // MidPricePoint stores a historical mid price snapshot for multi-horizon return calculations.
@@ -292,19 +335,20 @@ func newSymbolMicrostructure(symbol string, kylesLambda float64) *SymbolMicrostr
 		kylesLambda = 0.25
 	}
 	return &SymbolMicrostructure{
-		Symbol:      symbol,
-		CircuitBrk:  experiment.NewMicrostructureCircuitBreaker(1.0),
-		VpinCalc:    common.NewVPINCalculator(25.0, 50), // $25k notional volume buckets
-		KyleEst:     common.NewKylesLambdaEstimator(0.05, kylesLambda),
-		HawkesEst:   common.NewOnlineHawkesEstimator(5.0, 12.0, 20.0),
-		AdaHedge:    common.NewAdaHedgeEnsemble(7, 0.985),
-		VolVarBps:   0.15,
-		AtrBps:      35.0, // Baseline 15-minute ATR volatility in bps
-		Conviction:  0.50, // Neutral 50/50 baseline
-		TradeRate1s: 4.0,
-		FundingTracker: common.NewFundingCarryTracker(0.05, 0.0001),
+		Symbol:          symbol,
+		CircuitBrk:      experiment.NewMicrostructureCircuitBreaker(1.0),
+		VpinCalc:        common.NewVPINCalculator(25.0, 50), // $25k notional volume buckets
+		KyleEst:         common.NewKylesLambdaEstimator(0.05, kylesLambda),
+		HawkesEst:       common.NewOnlineHawkesEstimator(5.0, 12.0, 20.0),
+		AdaHedge:        common.NewAdaHedgeEnsemble(7, 0.985),
+		VolVarBps:       0.15,
+		AtrBps:          35.0, // Baseline 15-minute ATR volatility in bps
+		Conviction:      0.50, // Neutral 50/50 baseline
+		TradeRate1s:     4.0,
+		FundingTracker:  common.NewFundingCarryTracker(0.05, 0.0001),
 		FairValueEngine: common.NewTribecaFairValueEngine(common.FairValueMicroPrice, 0.10, 1.5, 0.02),
 		MultiFactor:     alpha.NewMultiFactorModel(100),
+		MomentumTracker: alpha.NewMomentumTracker(2000),
 	}
 }
 
@@ -1072,7 +1116,32 @@ func (e *DryRunEngine) State() DryRunState {
 		}
 	}
 
+	if e.state.MFTDiagnostics != nil {
+		cp.MFTDiagnostics = make(map[string]MFTDiagnosticSnapshot, len(e.state.MFTDiagnostics))
+		for k, v := range e.state.MFTDiagnostics {
+			cp.MFTDiagnostics[k] = v
+		}
+	}
+
 	return cp
+}
+
+// MFTDiagnostics returns the latest per-symbol MFT diagnostic snapshots.
+func (e *DryRunEngine) MFTDiagnostics() map[string]MFTDiagnosticSnapshot {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make(map[string]MFTDiagnosticSnapshot, len(e.state.MFTDiagnostics))
+	for k, v := range e.state.MFTDiagnostics {
+		out[k] = v
+	}
+	return out
+}
+
+// QuantOrchestrator returns the active latency-adaptive multi-strategy orchestrator.
+func (e *DryRunEngine) QuantOrchestrator() *orchestrator.LatencyAdaptiveOrchestrator {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.quantOrch
 }
 
 // RecentFills returns the most recent executed trades for the blotter.
@@ -1450,6 +1519,9 @@ func (e *DryRunEngine) loadCheckpoint() error {
 	if st.Positions == nil {
 		st.Positions = make(map[string]*Position)
 	}
+	if st.MFTDiagnostics == nil {
+		st.MFTDiagnostics = make(map[string]MFTDiagnosticSnapshot)
+	}
 
 	// Discard resting orders from checkpoint: old orders from prior process run are stale.
 	st.ActiveOrders = nil
@@ -1605,11 +1677,20 @@ func (e *DryRunEngine) recoverStateFromJournal() (*DryRunState, error) {
 			if math.Abs(newSize) < 1e-7 {
 				newSize = 0.0
 				pos.AvgEntryPrice = 0.0
+				pos.PeakPrice = 0.0
+				pos.TrailingStop = 0.0
+				pos.HoldingSec = 0.0
 			} else if newSize > 0 {
 				if pos.Size >= 0 {
 					pos.AvgEntryPrice = (pos.AvgEntryPrice*pos.Size + r.Price*r.Size) / newSize
 				} else {
 					pos.AvgEntryPrice = r.Price
+					pos.PeakPrice = r.Price
+					pos.TrailingStop = 0.0
+					pos.HoldingSec = 0.0
+				}
+				if pos.PeakPrice <= 0 {
+					pos.PeakPrice = r.Price
 				}
 			}
 			pos.Size = newSize
@@ -1618,17 +1699,29 @@ func (e *DryRunEngine) recoverStateFromJournal() (*DryRunState, error) {
 			if math.Abs(newSize) < 1e-7 {
 				newSize = 0.0
 				pos.AvgEntryPrice = 0.0
+				pos.PeakPrice = 0.0
+				pos.TrailingStop = 0.0
+				pos.HoldingSec = 0.0
 			} else if newSize < 0 {
 				if pos.Size <= 0 {
 					pos.AvgEntryPrice = (pos.AvgEntryPrice*(-pos.Size) + r.Price*r.Size) / (-newSize)
 				} else {
 					pos.AvgEntryPrice = r.Price
+					pos.PeakPrice = r.Price
+					pos.TrailingStop = 0.0
+					pos.HoldingSec = 0.0
+				}
+				if pos.PeakPrice <= 0 {
+					pos.PeakPrice = r.Price
 				}
 			}
 			pos.Size = newSize
 		} else if strings.Contains(r.Side, "LIQUIDATE") {
 			pos.Size = 0.0
 			pos.AvgEntryPrice = 0.0
+			pos.PeakPrice = 0.0
+			pos.TrailingStop = 0.0
+			pos.HoldingSec = 0.0
 		}
 
 		if isClosing {
@@ -1968,6 +2061,16 @@ func (e *DryRunEngine) matchMakerOrders(symbol string, tradePrice float64, trade
 func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, now time.Time) {
 	e.mu.Lock()
 	sm := e.getOrCreateSymbolMicro(symbol)
+	if sm.MomentumTracker == nil {
+		sm.MomentumTracker = alpha.NewMomentumTracker(2000)
+	}
+	mom := sm.MomentumTracker.Update(midPrice, now)
+	sm.LatestMomentum = mom
+	kfPrice := sm.MomentumTracker.Kalman.Price
+	kfVelBps := 0.0
+	if sm.MomentumTracker.Kalman.Price > 0 {
+		kfVelBps = (sm.MomentumTracker.Kalman.Velocity / sm.MomentumTracker.Kalman.Price) * 1e4
+	}
 	e.mu.Unlock()
 
 	var spreadBps float64 = 0.80
@@ -2475,6 +2578,23 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		sm.LatestMultiFactor = mfScore
 	}
 
+	// Dynamic MFT Strategy Blending via LatencyAdaptiveOrchestrator
+	passiveScore := math.Tanh(qd.ReservationBps / 4.0)
+	obiScore := math.Tanh(sm.Ofi5s*2.0 + sm.OBI*1.5)
+	carryScore := math.Tanh(liveFundingAPR / 0.40)
+	trendScore := mom.TrendScore
+
+	blendedAlpha := 0.0
+	dominantHorizon := "Adaptive Swing"
+	if e.quantOrch != nil {
+		blendedAlpha, dominantHorizon = e.quantOrch.BlendAlpha(
+			passiveScore,
+			obiScore,
+			carryScore,
+			trendScore,
+		)
+	}
+
 	zMom := 0.20*(sm.Ret1mBps/15.0) + 0.45*(sm.Ret5mBps/25.0) + 0.35*(sm.Ret15mBps/40.0)
 	zLeadLag := cbSig.LeadLagSkewBps / 3.0
 	if zLeadLag > 2.5 {
@@ -2500,7 +2620,13 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	} else if zMF < -2.5 {
 		zMF = -2.5
 	}
-	zTotal := 0.25*zMom + 0.20*zLeadLag + 0.20*zMeta + 0.15*zOBI + 0.20*zMF
+	zBlend := blendedAlpha * 2.0
+	if zBlend > 2.5 {
+		zBlend = 2.5
+	} else if zBlend < -2.5 {
+		zBlend = -2.5
+	}
+	zTotal := 0.20*zMom + 0.15*zLeadLag + 0.15*zMeta + 0.10*zOBI + 0.15*zMF + 0.25*zBlend
 	convictionUp := 1.0 / (1.0 + math.Exp(-1.8*zTotal))
 	if sm.Conviction > 0 && math.Abs(sm.Conviction-0.50) > 1e-4 {
 		convictionUp = sm.Conviction
@@ -2648,6 +2774,15 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	targetBid := centerPrice - (bidOffsetBps * centerPrice * 1e-4)
 	targetAsk := centerPrice + (askOffsetBps * centerPrice * 1e-4)
 
+	peakPrice := 0.0
+	trailingStop := 0.0
+	holdSec := 0.0
+	if pos != nil {
+		peakPrice = pos.PeakPrice
+		trailingStop = pos.TrailingStop
+		holdSec = pos.HoldingSec
+	}
+
 	// Institutional Breakeven Floor & Dynamic Profit Decay Ratchet:
 	// When holding open inventory, the closing quote guarantees net profitability
 	// after covering all round-trip maker fees (2 * MakerFeeBps).
@@ -2672,7 +2807,6 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 
 		minNetFloorBps := math.Max(6.0, baseTargetProfitBps*0.50)
 		targetProfitBps := minNetFloorBps
-		holdSec := 0.0
 		if !sm.InventorySince.IsZero() {
 			holdSec = now.Sub(sm.InventorySince).Seconds()
 			decayFactor := math.Exp(-holdSec / 900.0) // 15-minute half-life decay
@@ -2682,14 +2816,41 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		}
 
 		if pos.Size > 0 { // Holding LONG position
+			if peakPrice <= 0 || midPrice > peakPrice {
+				peakPrice = midPrice
+			}
+			gainBps := (peakPrice - pos.AvgEntryPrice) / pos.AvgEntryPrice * 1e4
+			// Stage 1: Breakeven lock-in after >= 25.0 bps gain
+			if gainBps >= 25.0 {
+				beStop := pos.AvgEntryPrice * (1.0 + (roundTripFeeBps+3.0)*1e-4)
+				if beStop > trailingStop {
+					trailingStop = beStop
+				}
+			}
+			// Stage 2: Lock in >= 50% of peak gains after >= 45.0 bps gain
+			if gainBps >= 45.0 {
+				profitLockStop := pos.AvgEntryPrice + (peakPrice-pos.AvgEntryPrice)*0.50
+				if profitLockStop > trailingStop {
+					trailingStop = profitLockStop
+				}
+			}
+
 			minProfitAsk := pos.AvgEntryPrice * (1.0 + (roundTripFeeBps+targetProfitBps)*1e-4)
 			adverseDrawdownBps := (pos.AvgEntryPrice - midPrice) / pos.AvgEntryPrice * 1e4
 
 			// Asymmetric Hysteresis Exit Conditions:
+			// 0. Trailing stop ratchet hit: lock in banked runner profits immediately!
 			// 1. Structural stop loss >= 60.0 bps
 			// 2. Confirmed toxic cascade (VPIN > 0.75 or Hawkes >= 0.85) with adverse drawdown > 25.0 bps
 			// 3. Decisive structural invalidation (Conviction < 0.38 && OBI < -0.25 && Ret5mBps < -10.0 bps)
-			if adverseDrawdownBps > stopLossBps {
+			if trailingStop > 0 && midPrice <= trailingStop {
+				if bestAsk > 0 {
+					targetAsk = bestAsk
+				} else {
+					targetAsk = midPrice
+				}
+				sm.BidCooldownUntil = now.Add(30 * time.Second)
+			} else if adverseDrawdownBps > stopLossBps {
 				// Structural invalidation: stop-loss triggered to protect capital against sustained crashes
 				if bestAsk > 0 {
 					targetAsk = bestAsk
@@ -2732,10 +2893,36 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				}
 			}
 		} else if pos.Size < 0 { // Holding SHORT position
+			if peakPrice <= 0 || midPrice < peakPrice {
+				peakPrice = midPrice
+			}
+			gainBps := (pos.AvgEntryPrice - peakPrice) / pos.AvgEntryPrice * 1e4
+			// Stage 1: Breakeven lock-in after >= 25.0 bps gain
+			if gainBps >= 25.0 {
+				beStop := pos.AvgEntryPrice * (1.0 - (roundTripFeeBps+3.0)*1e-4)
+				if trailingStop <= 0 || beStop < trailingStop {
+					trailingStop = beStop
+				}
+			}
+			// Stage 2: Lock in >= 50% of peak gains after >= 45.0 bps gain
+			if gainBps >= 45.0 {
+				profitLockStop := pos.AvgEntryPrice - (pos.AvgEntryPrice-peakPrice)*0.50
+				if trailingStop <= 0 || profitLockStop < trailingStop {
+					trailingStop = profitLockStop
+				}
+			}
+
 			maxProfitBid := pos.AvgEntryPrice * (1.0 - (roundTripFeeBps+targetProfitBps)*1e-4)
 			adverseDrawdownBps := (midPrice - pos.AvgEntryPrice) / pos.AvgEntryPrice * 1e4
 
-			if adverseDrawdownBps > stopLossBps {
+			if trailingStop > 0 && midPrice >= trailingStop {
+				if bestBid > 0 {
+					targetBid = bestBid
+				} else {
+					targetBid = midPrice
+				}
+				sm.AskCooldownUntil = now.Add(30 * time.Second)
+			} else if adverseDrawdownBps > stopLossBps {
 				// Structural invalidation: stop-loss triggered to protect capital
 				if bestBid > 0 {
 					targetBid = bestBid
@@ -2947,8 +3134,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if currentInv > 0 && convictionUp < buyThreshold {
 			allowBuy = false // Position accumulation gate: adding to existing long requires >= buyThreshold
 		}
-		if currentInv == 0 && e.quantOrch != nil && e.quantOrch.Report(now).CurrentMode != orchestrator.ModeLowLatency && convictionUp < 0.48 {
-			allowBuy = false // Structural wave gate: do not open new long without positive conviction
+		if currentInv == 0 && sm.ScalpingDisabled && convictionUp < 0.50 {
+			allowBuy = false // Patient swing mode: only open long in confirmed upward trend direction
 		}
 		if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
 			allowBuy = false // Extreme leakage circuit: halt opening new long positions until recalibrated!
@@ -3038,8 +3225,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			if currentInv < 0 && convictionUp > sellThreshold {
 				allowSell = false // Position accumulation gate: adding to existing short requires <= sellThreshold
 			}
-			if currentInv == 0 && e.quantOrch != nil && e.quantOrch.Report(now).CurrentMode != orchestrator.ModeLowLatency && convictionUp > 0.52 {
-				allowSell = false // Structural wave gate: do not open new short without negative conviction
+			if currentInv == 0 && sm.ScalpingDisabled && convictionUp > 0.50 {
+				allowSell = false // Patient swing mode: only short in confirmed downward trend direction
 			}
 			if sm.ScalpingDisabled && sm.ConsecutiveLosses >= 4 {
 				allowSell = false // Extreme leakage circuit: halt opening new short positions until recalibrated!
@@ -3092,6 +3279,89 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	if e.quantOrch != nil {
 		rep := e.quantOrch.Report(now)
 		e.state.QuantOrchestrator = &rep
+	}
+
+	if pos != nil && math.Abs(pos.Size) > 1e-8 {
+		pos.PeakPrice = peakPrice
+		pos.TrailingStop = trailingStop
+		pos.HoldingSec = holdSec
+	}
+
+	quotingMode := "ACTIVE_SWING"
+	if e.state.TotalReturnPct >= gainCapPct {
+		quotingMode = "CAPITAL_PRESERVATION"
+	} else if sm.ScalpingDisabled {
+		if sm.ConsecutiveLosses >= 4 {
+			quotingMode = "DISABLED_LEAK_GUARD"
+		} else {
+			quotingMode = "PATIENT_SWING"
+		}
+	} else if mfScore.Regime == alpha.RegimeHighVolToxic {
+		quotingMode = "TOXIC_DEFENSE"
+	}
+
+	stopDistBps := 0.0
+	posStop := 0.0
+	posPeak := 0.0
+	if pos != nil {
+		posStop = pos.TrailingStop
+		posPeak = pos.PeakPrice
+		if pos.TrailingStop > 0 && midPrice > 0 {
+			stopDistBps = math.Abs(midPrice-pos.TrailingStop) / midPrice * 1e4
+		}
+	}
+
+	preTradeOk := true
+	if e.preTradeGuard != nil {
+		isTripped, _, _, _, _, _ := e.preTradeGuard.Status()
+		preTradeOk = !isTripped
+	}
+
+	snap := MFTDiagnosticSnapshot{
+		Symbol:                  symbol,
+		Timestamp:               now.UTC(),
+		MidPrice:                midPrice,
+		KalmanPrice:             kfPrice,
+		KalmanVelocityBpsPerSec: kfVelBps,
+		Ret30sBps:               mom.Ret30sBps,
+		Ret5mBps:                mom.Ret5mBps,
+		Ret15mBps:               mom.Ret15mBps,
+		Ret1hBps:                mom.Ret1hBps,
+		TrendScore:              mom.TrendScore,
+		PassiveScore:            passiveScore,
+		OBIMomentumScore:        obiScore,
+		FundingCarryScore:       carryScore,
+		BlendedAlpha:            blendedAlpha,
+		DominantHorizon:         dominantHorizon,
+		DirectionalConviction:   convictionUp,
+		TargetInventory:         targetInv,
+		CurrentInventory:        currentInv,
+		InvDeviation:            invDeviation,
+		TrailingStopPrice:       posStop,
+		PeakPositionPrice:       posPeak,
+		ActiveStopDistanceBps:   stopDistBps,
+		VPIN:                    liveVpin,
+		HawkesRatio:             hkRatio,
+		FundingAPR:              liveFundingAPR,
+		PreTradeRiskPassed:      preTradeOk,
+		QuotingMode:             quotingMode,
+	}
+
+	if e.state.MFTDiagnostics == nil {
+		e.state.MFTDiagnostics = make(map[string]MFTDiagnosticSnapshot)
+	}
+	e.state.MFTDiagnostics[symbol] = snap
+
+	// Real-Time Debug Observability: rate-limited to at most 1 log per 3 seconds per symbol
+	if e.cfg.Debug && (sm.LastDebugLog.IsZero() || now.Sub(sm.LastDebugLog) >= 3*time.Second) {
+		sm.LastDebugLog = now
+		fmt.Printf("[DEBUG][MFT] %s | Mid: $%.2f | Kalman: $%.2f (Vel: %+.2f bps/s) | Returns: 30s=%+.1f 5m=%+.1f 15m=%+.1f 1h=%+.1f bps | Trend: %+.2f | Blend: %+.2f (%s) | Pos: %+.4f (Target: %+.4f) | Stop: $%.2f (Peak: $%.2f) | VPIN: %.2f | Hawkes: %.2f | Mode: %s\n",
+			symbol, midPrice, kfPrice, kfVelBps,
+			mom.Ret30sBps, mom.Ret5mBps, mom.Ret15mBps, mom.Ret1hBps,
+			mom.TrendScore, blendedAlpha, dominantHorizon,
+			currentInv, targetInv, posStop, posPeak,
+			liveVpin, hkRatio, quotingMode,
+		)
 	}
 
 	// Tactical Taker Execution:
@@ -3155,11 +3425,20 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 		if math.Abs(newSize) < 1e-7 {
 			newSize = 0.0
 			pos.AvgEntryPrice = 0.0
+			pos.PeakPrice = 0.0
+			pos.TrailingStop = 0.0
+			pos.HoldingSec = 0.0
 		} else if newSize > 0 {
 			if pos.Size >= 0 {
 				pos.AvgEntryPrice = (pos.AvgEntryPrice*pos.Size + orderPrice*qty) / newSize
 			} else {
 				pos.AvgEntryPrice = orderPrice
+				pos.PeakPrice = orderPrice
+				pos.TrailingStop = 0.0
+				pos.HoldingSec = 0.0
+			}
+			if pos.PeakPrice <= 0 {
+				pos.PeakPrice = orderPrice
 			}
 		}
 		pos.Size = newSize
@@ -3173,11 +3452,20 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 		if math.Abs(newSize) < 1e-7 {
 			newSize = 0.0
 			pos.AvgEntryPrice = 0.0
+			pos.PeakPrice = 0.0
+			pos.TrailingStop = 0.0
+			pos.HoldingSec = 0.0
 		} else if newSize < 0 {
 			if pos.Size <= 0 {
 				pos.AvgEntryPrice = (pos.AvgEntryPrice*(-pos.Size) + orderPrice*qty) / (-newSize)
 			} else {
 				pos.AvgEntryPrice = orderPrice
+				pos.PeakPrice = orderPrice
+				pos.TrailingStop = 0.0
+				pos.HoldingSec = 0.0
+			}
+			if pos.PeakPrice <= 0 {
+				pos.PeakPrice = orderPrice
 			}
 		}
 		pos.Size = newSize
@@ -3321,11 +3609,20 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 		if math.Abs(newSize) < 1e-7 {
 			newSize = 0.0
 			pos.AvgEntryPrice = 0.0
+			pos.PeakPrice = 0.0
+			pos.TrailingStop = 0.0
+			pos.HoldingSec = 0.0
 		} else if newSize > 0 {
 			if pos.Size >= 0 {
 				pos.AvgEntryPrice = (pos.AvgEntryPrice*pos.Size + execPrice*qty) / newSize
 			} else {
 				pos.AvgEntryPrice = execPrice
+				pos.PeakPrice = execPrice
+				pos.TrailingStop = 0.0
+				pos.HoldingSec = 0.0
+			}
+			if pos.PeakPrice <= 0 {
+				pos.PeakPrice = execPrice
 			}
 		}
 		pos.Size = newSize
@@ -3339,11 +3636,20 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 		if math.Abs(newSize) < 1e-7 {
 			newSize = 0.0
 			pos.AvgEntryPrice = 0.0
+			pos.PeakPrice = 0.0
+			pos.TrailingStop = 0.0
+			pos.HoldingSec = 0.0
 		} else if newSize < 0 {
 			if pos.Size <= 0 {
 				pos.AvgEntryPrice = (pos.AvgEntryPrice*(-pos.Size) + execPrice*qty) / (-newSize)
 			} else {
 				pos.AvgEntryPrice = execPrice
+				pos.PeakPrice = execPrice
+				pos.TrailingStop = 0.0
+				pos.HoldingSec = 0.0
+			}
+			if pos.PeakPrice <= 0 {
+				pos.PeakPrice = execPrice
 			}
 		}
 		pos.Size = newSize
