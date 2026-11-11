@@ -60,6 +60,7 @@ type dryRunFlags struct {
 	maxHoldMin        float64
 	monthlyTarget     float64
 	targetWinRate     float64
+	cloudParams       bool
 }
 
 func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
@@ -107,6 +108,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.Float64Var(&f.orderLatencyMs, "order-latency-ms", 0, "override order placement latency in ms (default: region measurement)")
 	fs.Float64Var(&f.monthlyTarget, "monthly-target", 7.0, "goal controller monthly return target in % (steers leverage and selectivity; not guaranteed)")
 	fs.Float64Var(&f.targetWinRate, "target-win-rate", 60.0, "goal controller target win rate in %")
+	fs.BoolVar(&f.cloudParams, "cloud-params", true, "hot-reload optimal_params.json overrides (gamma, leverage, clip) from cloud/backtest tuning")
 	fs.Float64Var(&f.maxHoldMin, "max-hold-minutes", 45, "time stop: exit a losing position held longer than this many minutes (0 disables)")
 	return f
 }
@@ -275,6 +277,7 @@ func runDryRun(ctx context.Context, args []string) error {
 	paperCfg.MaxHoldMinutes = f.maxHoldMin
 	paperCfg.MonthlyTargetPct = f.monthlyTarget
 	paperCfg.TargetWinRatePct = f.targetWinRate
+	paperCfg.DisableCloudParams = !f.cloudParams
 	if f.orderLatencyMs > 0 {
 		paperCfg.OrderLatency = time.Duration(f.orderLatencyMs * float64(time.Millisecond))
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -190,5 +192,24 @@ func TestGoalNoReRiskAfterDeRiskAndGradualRecovery(t *testing.T) {
 	g2.evaluate(t0, 0.1, 1.0/24, 0, 8, 0, 1)
 	if g2.ProjectedMonthlyPct != 0 {
 		t.Fatalf("projection after 1h must be 0, got %v", g2.ProjectedMonthlyPct)
+	}
+}
+
+func TestDisableCloudParamsIgnoresOverrides(t *testing.T) {
+	dir := t.TempDir()
+	cfg := DefaultDryRunConfig(dir)
+	cfg.Symbols = []string{"BTCUSDT"}
+	cfg.DisableCloudParams = true
+	eng, err := NewDryRunEngine(cfg, engine.NewSPSCRing(64), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "optimal_params.json"), []byte(`{"min_half_spread_bps": 7.5}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := eng.minHalfSpreadFloorBps
+	eng.maybeReloadCloudParams()
+	if eng.minHalfSpreadFloorBps != before {
+		t.Fatalf("cloud params applied despite DisableCloudParams: %v", eng.minHalfSpreadFloorBps)
 	}
 }

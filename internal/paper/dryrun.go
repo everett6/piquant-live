@@ -69,6 +69,7 @@ type DryRunConfig struct {
 	FundingBpsPerHour float64            // Futures funding cost charged on open notional per hour (default: 0)
 	MonthlyTargetPct  float64            // Goal controller monthly return target in % (default: 7)
 	TargetWinRatePct  float64            // Goal controller win-rate target in % (default: 60)
+	DisableCloudParams bool              // Ignore optimal_params.json hot-reloads (cloud/backtest-tuned overrides)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -1253,6 +1254,9 @@ type cloudOptimalParams struct {
 
 // maybeReloadCloudParams hot-reloads optimal parameters from cloud optimization without interrupting trading.
 func (e *DryRunEngine) maybeReloadCloudParams() {
+	if e.cfg.DisableCloudParams {
+		return
+	}
 	candidates := []string{"/home/everett/piquant-data/config/optimal_params.json"}
 	if e.cfg.DataDir != "" {
 		candidates = append(candidates,
