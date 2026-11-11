@@ -858,6 +858,7 @@ func TestCleanResetPurgesLegacyStats(t *testing.T) {
 func TestAdaptiveMicrostructureFormulasAndProfitDecayRatchet(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := DefaultDryRunConfig(tempDir)
+	cfg.OrderLatency = 5 * time.Millisecond // low-latency (HFT) regime: entry offsets use the 1.0x profile
 	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
 	cfg.EntryOffsetBps = 7.5
 	cfg.TargetProfitBps = 12.5
@@ -870,6 +871,10 @@ func TestAdaptiveMicrostructureFormulasAndProfitDecayRatchet(t *testing.T) {
 	}
 
 	now := time.Now()
+	// Converge the latency EWMA into the low-latency (HFT) regime so offsets use the 1.0x profile
+	for i := 0; i < 60; i++ {
+		engine.quantOrch.RecordLatencyUpdate(5*time.Millisecond, 0, now)
+	}
 
 	// 1. Test Volatility-Adaptive Entry Offset:
 	// BTC should receive 0.90x tighter spread, ETH should receive 1.15x wider spread

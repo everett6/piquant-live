@@ -23,6 +23,18 @@ func TestNewsEndpoints_GetNews(t *testing.T) {
 	s := newTestServer(t, nil)
 	headers := map[string]string{"Authorization": "Bearer " + peerToken}
 
+	// The live pipeline starts empty (no built-in sample headlines), so ingest one first.
+	ing := httptest.NewRequest(http.MethodPost, "/api/news/ingest",
+		bytes.NewReader([]byte(`{"title":"Federal Reserve holds rates steady","source":"Test"}`)))
+	ing.RemoteAddr = "192.168.1.55:4444"
+	ing.Header.Set("Authorization", "Bearer "+peerToken)
+	ing.Header.Set("Content-Type", "application/json")
+	ingRec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(ingRec, ing)
+	if ingRec.Code != http.StatusOK {
+		t.Fatalf("ingest got %d", ingRec.Code)
+	}
+
 	rec := get(t, s.Handler(), http.MethodGet, "/api/news?limit=5", headers, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /api/news got %d, want 200", rec.Code)

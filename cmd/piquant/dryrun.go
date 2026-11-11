@@ -58,6 +58,8 @@ type dryRunFlags struct {
 	takerFeeBps       float64
 	orderLatencyMs    float64
 	maxHoldMin        float64
+	monthlyTarget     float64
+	targetWinRate     float64
 }
 
 func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
@@ -103,6 +105,8 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.Float64Var(&f.makerFeeBps, "maker-fee", -1, "override maker fee in bps (default: region schedule)")
 	fs.Float64Var(&f.takerFeeBps, "taker-fee", -1, "override taker fee in bps (default: region schedule)")
 	fs.Float64Var(&f.orderLatencyMs, "order-latency-ms", 0, "override order placement latency in ms (default: region measurement)")
+	fs.Float64Var(&f.monthlyTarget, "monthly-target", 7.0, "goal controller monthly return target in % (steers leverage and selectivity; not guaranteed)")
+	fs.Float64Var(&f.targetWinRate, "target-win-rate", 60.0, "goal controller target win rate in %")
 	fs.Float64Var(&f.maxHoldMin, "max-hold-minutes", 45, "time stop: exit a losing position held longer than this many minutes (0 disables)")
 	return f
 }
@@ -269,6 +273,8 @@ func runDryRun(ctx context.Context, args []string) error {
 		paperCfg.TakerFeeBps = f.takerFeeBps
 	}
 	paperCfg.MaxHoldMinutes = f.maxHoldMin
+	paperCfg.MonthlyTargetPct = f.monthlyTarget
+	paperCfg.TargetWinRatePct = f.targetWinRate
 	if f.orderLatencyMs > 0 {
 		paperCfg.OrderLatency = time.Duration(f.orderLatencyMs * float64(time.Millisecond))
 	}
@@ -278,6 +284,11 @@ func runDryRun(ctx context.Context, args []string) error {
 		return fmt.Errorf("failed to initialize dry run engine: %w", err)
 	}
 	dryRunEngine.SetAutonomousRecalibrator(backtest.RunAutonomousRecalibration)
+
+	// Live venue latency probe drives order timing and the HFT/MFT/LFT strategy regime
+	latMon := paper.NewLatencyMonitor(streamCfg.Endpoint, 15*time.Second)
+	latMon.Start(ctx)
+	dryRunEngine.SetLatencyMonitor(latMon)
 
 	// Initialize optional Coinbase institutional USD lead-lag signal ingestor
 	if f.enableCoinbase {
@@ -473,6 +484,23 @@ func printDryRunStatus(stateFile string, showDebug ...bool) error {
 
 	if st.CircuitHalted {
 		fmt.Printf(" Circuit Halt:    %s\n", st.CircuitHaltReason)
+	}
+	if g := st.Goal; g.MonthlyTargetPct > 0 {
+		fmt.Println("-------------------------------------------------------")
+		fmt.Printf(" Goal Controller: %s\n", g.Status)
+		fmt.Printf("   Target %.1f%%/mo | Return %+.2f%% vs pace %+.2f%% (gap %+.2f%%) | Projected %+.1f%%/mo\n",
+			g.MonthlyTargetPct, g.ReturnPct, g.ExpectedByNowPct, g.PaceGapPct, g.ProjectedMonthlyPct)
+		fmt.Printf("   Rolling: %d trades | win %.1f%% (target %.0f%%) | expectancy %+.2f bps\n",
+			g.RollingTrades, g.RollingWinRatePct, g.TargetWinRatePct, g.RollingExpectancyBps)
+		fmt.Printf("   Adjusters: leverage x%.2f | conviction %+.2f | %d adjustments\n",
+			g.LeverageMultiplier, g.ConvictionAdjust, g.Adjustments)
+		if g.BenchmarkStartPrice > 0 {
+			fmt.Printf("   vs %s buy&hold: %+.2f%% (excess %+.2f%%)\n", g.BenchmarkSymbol, g.BenchmarkReturnPct, g.ExcessReturnPct)
+		}
+	}
+	if l := st.Latency; l.Samples > 0 || l.EffectiveMs > 0 {
+		fmt.Printf(" Latency:         %s p50 %.1fms p90 %.1fms -> order latency %.1fms | regime %s\n",
+			l.Host, l.P50Ms, l.P90Ms, l.EffectiveMs, l.Mode)
 	}
 
 	if len(st.MFTDiagnostics) > 0 {

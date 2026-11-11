@@ -15,10 +15,13 @@ func TestNewsPipeline_EmbeddedFallback(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	pipeline := NewNewsPipeline(tmpDir, "")
-	recent := pipeline.GetRecentNews(10)
+	// A live pipeline must start empty: sample headlines are not real news.
+	if live := NewNewsPipeline(tmpDir, "").GetRecentNews(10); len(live) != 0 {
+		t.Fatalf("live pipeline preloaded with %d sample headlines", len(live))
+	}
+	recent := getEmbeddedFallbackNews()
 	if len(recent) == 0 {
-		t.Fatalf("expected embedded fallback news items, got 0")
+		t.Fatalf("expected embedded sample news items, got 0")
 	}
 
 	foundMacro := false

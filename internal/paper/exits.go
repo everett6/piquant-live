@@ -47,6 +47,7 @@ func (e *DryRunEngine) recordCloseOutcomeLocked(symbol string, roundTripPnL floa
 	if closed := e.state.WinningTrades + e.state.LosingTrades; closed > 0 {
 		e.state.WinRate = float64(e.state.WinningTrades) / float64(closed) * 100.0
 	}
+	e.state.Goal.recordTrade(roundTripPnL, e.state.Equity)
 	if sm == nil {
 		return
 	}

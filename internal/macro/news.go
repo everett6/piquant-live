@@ -82,6 +82,10 @@ type NewsSentimentReport struct {
 	SpreadMultipliers map[string]float64 `json:"spread_multipliers"` // Dynamic spread expansion multiplier
 	ActiveAlerts      []NewsItem         `json:"active_alerts"`      // Breaking news in active decay window
 	LastUpdated       time.Time          `json:"last_updated"`
+	FeedsOK           int                `json:"feeds_ok"`          // feeds fetched successfully in the last sync
+	FeedsFailed       int                `json:"feeds_failed"`      // feeds that failed in the last sync
+	LastSyncItems     int                `json:"last_sync_items"`   // headlines parsed in the last sync
+	LastSync          time.Time          `json:"last_sync"`
 }
 
 // NewsPipeline manages macro and micro news ingestion, NLP sentiment extraction,
@@ -93,6 +97,9 @@ type NewsPipeline struct {
 	cacheFile  string
 	syncURL    string
 	lastSync   time.Time
+	feedsOK    int
+	feedsFail  int
+	syncItems  int
 	httpClient *http.Client
 	stopCh     chan struct{}
 }
@@ -106,7 +113,8 @@ func NewNewsPipeline(dataDir, syncURL string) *NewsPipeline {
 		syncURL:    syncURL,
 		httpClient: &http.Client{Timeout: 6 * time.Second},
 		stopCh:     make(chan struct{}),
-		items:      getEmbeddedFallbackNews(),
+		// Start empty: only real ingested headlines (or the on-disk cache) may influence trading.
+		items:      nil,
 	}
 
 	_ = p.loadCache()
@@ -379,6 +387,10 @@ func (p *NewsPipeline) Evaluate(now time.Time) NewsSentimentReport {
 		SpreadMultipliers: make(map[string]float64),
 		ActiveAlerts:      make([]NewsItem, 0, 16),
 		LastUpdated:       p.lastSync,
+		FeedsOK:           p.feedsOK,
+		FeedsFailed:       p.feedsFail,
+		LastSyncItems:     p.syncItems,
+		LastSync:          p.lastSync,
 	}
 
 	macroWeightSum := 0.0
@@ -554,40 +566,65 @@ func (p *NewsPipeline) Sync(ctx context.Context) {
 		}
 		urls = append(urls, p.syncURL)
 	} else {
-		// Autonomous public feeds (free, live, no API key required)
-		urls = append(urls, "https://cointelegraph.com/rss")
+		// Autonomous public feeds (free, live, no API key required):
+		// micro (crypto venues/protocols) and macro/regulatory (Fed, SEC).
+		urls = append(urls, DefaultNewsFeeds...)
 	}
 
+	ok, failed, items := 0, 0, 0
 	for _, targetURL := range urls {
-		p.fetchAndIngestFeed(ctx, targetURL)
+		n, err := p.fetchAndIngestFeed(ctx, targetURL)
+		if err != nil {
+			failed++
+			continue
+		}
+		ok++
+		items += n
 	}
 
 	p.mu.Lock()
-	p.lastSync = time.Now().UTC()
+	if ok > 0 { // a sync where every feed failed must not look fresh
+		p.lastSync = time.Now().UTC()
+	}
+	p.feedsOK, p.feedsFail, p.syncItems = ok, failed, items
 	p.mu.Unlock()
 }
 
-func (p *NewsPipeline) fetchAndIngestFeed(ctx context.Context, targetURL string) {
+// DefaultNewsFeeds are free public feeds that need no API key: crypto micro news
+// (Cointelegraph, Decrypt) and macro/regulatory releases (Federal Reserve, SEC).
+var DefaultNewsFeeds = []string{
+	"https://cointelegraph.com/rss",
+	"https://decrypt.co/feed",
+	"https://www.federalreserve.gov/feeds/press_all.xml",
+	"https://www.sec.gov/news/pressreleases.rss",
+}
+
+// fetchAndIngestFeed downloads one JSON or RSS feed and ingests its headlines.
+// It returns the number of headlines parsed, or an error if the feed was unusable.
+func (p *NewsPipeline) fetchAndIngestFeed(ctx context.Context, targetURL string) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
-		return
+		return 0, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; PiQuant-NewsOracle/1.0)")
 	req.Header.Set("Accept", "application/xml, text/xml, application/json, */*")
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return
+		return 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return
+		return 0, fmt.Errorf("%s: HTTP %d", targetURL, resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024)) // 1MB safety cap
-	if err != nil || len(body) == 0 {
-		return
+	if err != nil {
+		return 0, err
+	}
+	if len(body) == 0 {
+		return 0, fmt.Errorf("%s: empty body", targetURL)
 	}
 
 	trimmed := strings.TrimSpace(string(body))
@@ -600,31 +637,37 @@ func (p *NewsPipeline) fetchAndIngestFeed(ctx context.Context, targetURL string)
 			URL       string `json:"url"`
 			Timestamp string `json:"timestamp"`
 		}
-		if err := json.Unmarshal(body, &rawItems); err == nil {
-			for _, raw := range rawItems {
-				t, err := time.Parse(time.RFC3339, raw.Timestamp)
-				if err != nil {
-					t = time.Now().UTC()
-				}
-				p.IngestRawHeadline(raw.Title, raw.Summary, raw.Source, raw.URL, t)
-			}
+		if err := json.Unmarshal(body, &rawItems); err != nil {
+			return 0, fmt.Errorf("%s: %w", targetURL, err)
 		}
-		return
+		for _, raw := range rawItems {
+			t, err := time.Parse(time.RFC3339, raw.Timestamp)
+			if err != nil {
+				t = time.Now().UTC()
+			}
+			p.IngestRawHeadline(raw.Title, raw.Summary, raw.Source, raw.URL, t)
+		}
+		return len(rawItems), nil
 	}
 
 	// RSS/XML feed
 	var doc rssDocument
-	if err := xml.Unmarshal(body, &doc); err == nil && len(doc.Channel.Items) > 0 {
-		sourceName := doc.Channel.Title
-		if sourceName == "" {
-			sourceName = "CoinTelegraph RSS"
-		}
-		for _, it := range doc.Channel.Items {
-			cleanSummary := stripHTMLTags(it.Description)
-			pubT := parsePubDate(it.PubDate)
-			p.IngestRawHeadline(it.Title, cleanSummary, sourceName, it.Link, pubT)
-		}
+	if err := xml.Unmarshal(body, &doc); err != nil {
+		return 0, fmt.Errorf("%s: %w", targetURL, err)
 	}
+	if len(doc.Channel.Items) == 0 {
+		return 0, fmt.Errorf("%s: no items", targetURL)
+	}
+	sourceName := doc.Channel.Title
+	if sourceName == "" {
+		sourceName = req.URL.Hostname()
+	}
+	for _, it := range doc.Channel.Items {
+		cleanSummary := stripHTMLTags(it.Description)
+		pubT := parsePubDate(it.PubDate)
+		p.IngestRawHeadline(it.Title, cleanSummary, sourceName, it.Link, pubT)
+	}
+	return len(doc.Channel.Items), nil
 }
 
 func parsePubDate(s string) time.Time {
@@ -720,7 +763,9 @@ func sanitizeID(s string) string {
 	return sb.String()
 }
 
-// getEmbeddedFallbackNews returns a deterministic, verified historical & baseline
+// getEmbeddedFallbackNews returns illustrative sample headlines for tests and demos only;
+// they are NOT real news and must never be loaded into a live pipeline.
+// Former description: deterministic, verified historical & baseline
 // news distribution covering both Macro (monetary policy, inflation, regulation) and
 // Micro (halving, protocol upgrades, delistings, bridge exploits) events.
 func getEmbeddedFallbackNews() []NewsItem {

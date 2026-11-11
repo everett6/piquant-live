@@ -67,6 +67,8 @@ type DryRunConfig struct {
 	MaxHoldMinutes    float64            // Time stop: exit a losing position held longer than this (default: 45; <0 disables)
 	ContractSizes     map[string]float64 // Futures contract size per symbol (e.g. BTC nano = 0.01); empty = spot lots
 	FundingBpsPerHour float64            // Futures funding cost charged on open notional per hour (default: 0)
+	MonthlyTargetPct  float64            // Goal controller monthly return target in % (default: 7)
+	TargetWinRatePct  float64            // Goal controller win-rate target in % (default: 60)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -108,6 +110,8 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		EnableTaker:       false,
 		Debug:             false,
 		TargetFloorFrac:   0.80,
+		MonthlyTargetPct:  7.0,
+		TargetWinRatePct:  60.0,
 		MaxHoldMinutes:    45,
 	}
 }
@@ -208,6 +212,8 @@ type DryRunState struct {
 	AfterTaxEquity         float64                       `json:"after_tax_equity"`          // Equity net of estimated tax reserve
 	AfterTaxReturnPct      float64                       `json:"after_tax_return_pct"`      // Post-tax return percentage
 	QuantOrchestrator      *orchestrator.OrchestratorReport `json:"quant_orchestrator,omitempty"` // Latency-adaptive multi-strategy orchestration
+	Goal                   GoalState                     `json:"goal"`                     // Self-adjusting monthly-target controller
+	Latency                LatencySnapshot               `json:"latency"`                  // Measured venue latency and chosen strategy regime
 	MFTDiagnostics         map[string]MFTDiagnosticSnapshot `json:"mft_diagnostics,omitempty"` // Real-time MFT decision telemetry per symbol
 }
 
@@ -332,6 +338,7 @@ type SymbolMicrostructure struct {
 	ScalpingDisabledReason string
 	ConsecutiveLosses      int
 	LastCloseAt            time.Time // Time of the last round-trip close (drives loss-streak cooldown)
+	LastMid                float64   // Latest mid price (benchmark / goal controller)
 	RecentPnlWindow        []float64
 
 	// Medium-Frequency Trading (MFT) Kalman Trend & Multi-Horizon Momentum Tracker
@@ -462,6 +469,7 @@ type DryRunEngine struct {
 	recalibBackoff  time.Time // no recalibration before this time (set after a failed run)
 
 	lastFundingAccrual time.Time // last futures funding charge
+	latencyMon         *LatencyMonitor
 
 	// Real-time Coinbase institutional lead-lag signal oracle
 	cbOracle *CoinbaseSignalOracle
@@ -816,6 +824,17 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	}
 	e.updateTaxReservesLocked()
 
+	if e.state.Goal.MonthlyTargetPct <= 0 {
+		e.state.Goal = newGoalState(cfg.MonthlyTargetPct, cfg.TargetWinRatePct)
+	} else {
+		// Resume: keep learned multipliers, adopt any new targets from config
+		e.state.Goal.MonthlyTargetPct = newGoalState(cfg.MonthlyTargetPct, cfg.TargetWinRatePct).MonthlyTargetPct
+		e.state.Goal.TargetWinRatePct = newGoalState(cfg.MonthlyTargetPct, cfg.TargetWinRatePct).TargetWinRatePct
+	}
+	if len(cfg.Symbols) > 0 {
+		e.state.Goal.BenchmarkSymbol = strings.ToUpper(cfg.Symbols[0])
+	}
+
 	return e, nil
 }
 
@@ -1053,6 +1072,7 @@ func (e *DryRunEngine) State() DryRunState {
 		cp.Positions[k] = &posCopy
 	}
 	cp.DailyReturns = append([]float64(nil), e.state.DailyReturns...)
+	cp.Goal.RecentTradeBps = append([]float64(nil), e.state.Goal.RecentTradeBps...)
 
 	// Deep copy active resting maker orders for UI & telemetry
 	cp.ActiveOrders = make(map[string][]ActiveMakerOrder, len(e.activeOrders))
@@ -1212,7 +1232,10 @@ func (e *DryRunEngine) runCheckpointLoop(ctx context.Context) {
 		case <-ticker.C:
 			e.maybeReloadCloudParams()
 			e.mu.Lock()
-			e.accrueFundingLocked(time.Now())
+			now := time.Now()
+			e.accrueFundingLocked(now)
+			e.updateLatencyStateLocked()
+			e.maybeEvaluateGoalLocked(now)
 			e.mu.Unlock()
 			_ = e.saveCheckpoint()
 		}
@@ -2444,18 +2467,24 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		sm.FundingTracker.UpdatePrices(perpRef, midPrice, now.UnixNano())
 		liveFundingAPR = sm.FundingTracker.AnnualizedAPR()
 	}
-	if e.cfg.SpotOnly {
+	if e.cfg.SpotOnly || len(e.cfg.ContractSizes) > 0 {
 		// A spot cash account holds no perpetuals, so there is no funding to earn or pay;
 		// the cross-venue basis above must not be traded as if it were carry.
 		liveFundingAPR = 0.0
 	}
 
-	engineLatency := e.cfg.OrderLatency
-	if engineLatency <= 0 {
-		engineLatency = 120 * time.Millisecond
-	}
+	engineLatency := e.effectiveOrderLatency()
+	latMode := ""
 	if e.quantOrch != nil {
-		e.quantOrch.RecordLatencyUpdate(engineLatency, liveFundingAPR, now)
+		latMode = string(e.quantOrch.RecordLatencyUpdate(engineLatency, liveFundingAPR, now))
+	}
+	latProf := profileForMode(latMode)
+	e.mu.RLock()
+	goalLevMult := e.state.Goal.LeverageMultiplier
+	goalConvAdj := e.state.Goal.ConvictionAdjust
+	e.mu.RUnlock()
+	if goalLevMult <= 0 {
+		goalLevMult = 1.0
 	}
 	if e.preTradeGuard != nil {
 		e.preTradeGuard.UpdatePortfolioState(currEq, peakEq, posSnapshot, marksSnapshot, now)
@@ -2486,7 +2515,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 	if len(e.cfg.ContractSizes) > 0 && !e.cfg.SpotOnly {
 		// Leveraged futures account: size by risk at the stop, cap by leverage, whole contracts.
-		clipQty, maxInvQty = e.applyFuturesSizing(symbol, currEq, midPrice, levState.EffectiveLeverage, sm.AtrBps)
+		clipQty, maxInvQty = e.applyFuturesSizing(symbol, currEq, midPrice, levState.EffectiveLeverage*goalLevMult, sm.AtrBps)
 		if macroSt.LeverageMultiplier > 0 && macroSt.LeverageMultiplier < 1.0 {
 			if cs := e.contractSize(symbol); cs > 0 {
 				clipQty = math.Floor(clipQty*macroSt.LeverageMultiplier/cs+1e-9) * cs
@@ -2502,10 +2531,15 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	} else if clipQty <= 0 {
 		clipQty = 0.001
 		maxInvQty = 0.005
+	} else if goalLevMult < 1.0 {
+		// Spot has no leverage to add; the goal controller can only scale risk down.
+		clipQty *= goalLevMult
+		maxInvQty *= goalLevMult
 	}
 
 	e.mu.Lock()
 	e.state.Leverage = levState
+	sm.LastMid = midPrice
 	pos := e.state.Positions[symbol]
 	currentInv := 0.0
 	if pos != nil {
@@ -2772,7 +2806,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	if strings.HasSuffix(uSym, "USDC") {
 		symMultiplier *= 1.25
 	}
-	effectiveEntryBps := entrySpreadBps * symMultiplier
+	effectiveEntryBps := entrySpreadBps * symMultiplier * latProf.EntryOffsetMult
 	if sm.VolVarBps > 0.40 {
 		volScale := math.Min(2.5, math.Sqrt(sm.VolVarBps/0.40))
 		effectiveEntryBps *= volScale
@@ -2889,6 +2923,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if baseTargetProfitBps <= 0 {
 			baseTargetProfitBps = 50.0
 		}
+		baseTargetProfitBps *= latProf.TargetMult
 		stopLossBps := e.cfg.StopLossBps
 		if stopLossBps <= 0 {
 			stopLossBps = 60.0
@@ -3090,7 +3125,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 
 	orders := e.activeOrders[symbol]
-	latency := e.cfg.OrderLatency
+	latency := engineLatency // measured once per tick
 	if latency <= 0 {
 		latency = 120 * time.Millisecond
 	}
@@ -3208,6 +3243,11 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	} else if sm.OBI < -0.25 {
 		sellThreshold = 0.38
 	}
+	// Latency regime and goal-controller selectivity raise the bar for new entries
+	// (combined add capped so stacked adjustments cannot shut entries off entirely)
+	convAdd := math.Min(maxCombinedConvictionAdd, latProf.ConvictionAdd+goalConvAdj)
+	buyThreshold = math.Min(0.95, buyThreshold+convAdd)
+	sellThreshold = math.Max(0.05, sellThreshold-convAdd)
 
 	// Place resting BUY maker quote at the BACK of the real L1 queue
 	// If currently short (currentInv < 0), this is an inventory COVER order: unconditionally allowed!
