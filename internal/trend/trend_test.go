@@ -120,3 +120,18 @@ func TestSeedDoesNotBacktest(t *testing.T) {
 		t.Fatal("seeded SMA should allow entry on the first forward day")
 	}
 }
+
+func TestRegime(t *testing.T) {
+	st := NewState("x")
+	if _, _, _, ok := st.Regime(50); ok {
+		t.Fatal("no history must be unknown")
+	}
+	st.Seed(days("2026-01-01", rising(50, 100, 1)...))
+	if up, c, m, ok := st.Regime(50); !ok || !up || c != 149 || m != 124.5 {
+		t.Fatalf("regime up=%v c=%v m=%v ok=%v", up, c, m, ok)
+	}
+	st.Seed(days("2026-02-20", 100))
+	if up, _, _, _ := st.Regime(50); up {
+		t.Fatal("close below SMA must be DOWN")
+	}
+}

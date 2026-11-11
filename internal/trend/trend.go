@@ -169,6 +169,16 @@ func sortedKeys(m map[string]*Ledger) []string {
 	return k
 }
 
+// Regime reports whether the last completed daily close is above its SMA(n) (the PREREG6 rule).
+func (st *State) Regime(n int) (up bool, close, avg float64, ok bool) {
+	m, ok := sma(st.History, n)
+	if !ok {
+		return false, 0, 0, false
+	}
+	c := st.History[len(st.History)-1].Close
+	return c > m, c, m, true
+}
+
 // Monthly returns compounded per YYYY-MM (all months present, including the current partial one).
 func (l *Ledger) Monthly() map[string]float64 {
 	out := map[string]float64{}

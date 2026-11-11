@@ -220,6 +220,7 @@ type DryRunState struct {
 	QuantOrchestrator      *orchestrator.OrchestratorReport `json:"quant_orchestrator,omitempty"` // Latency-adaptive multi-strategy orchestration
 	Goal                   GoalState                     `json:"goal"`                     // Self-adjusting monthly-target controller
 	Expectancy             ExpectancyState               `json:"expectancy"`               // Net bps per trade by exit reason vs breakeven
+	TrendGate              *TrendGateState               `json:"trend_gate,omitempty"`     // Daily SMA50 regime gating new MFT entries
 	ExpectancyBreakerOn    bool                          `json:"expectancy_breaker_on"`    // New entries stopped: negative edge confirmed
 	Latency                LatencySnapshot               `json:"latency"`                  // Measured venue latency and chosen strategy regime
 	MFTDiagnostics         map[string]MFTDiagnosticSnapshot `json:"mft_diagnostics,omitempty"` // Real-time MFT decision telemetry per symbol
@@ -462,6 +463,7 @@ type DryRunEngine struct {
 	leverageCtrl  *DynamicLeverageController
 	macroGuardian *macro.MacroGuardian
 	newsPipeline  *macro.NewsPipeline
+	trendGate     *TrendGate
 
 	// Online tick tracking & autonomous cloud parameter hot-reload
 	minHalfSpreadFloorBps float64
@@ -587,6 +589,22 @@ type MarketFeed interface {
 	GetL2Book(symbol string) (*marketdata.L2OrderBook, bool)
 	// CopyL2Book copies the symbol's book into dst without allocating (hot path).
 	CopyL2Book(symbol string, dst *marketdata.L2OrderBook) bool
+}
+
+// SetTrendGate restricts new entries to the daily trend direction (call before Start; nil disables).
+func (e *DryRunEngine) SetTrendGate(g *TrendGate) {
+	e.trendGate = g
+}
+
+// trendEntryAllowed is the single trend-gate decision for opening/adding orders (exits never call it).
+func (e *DryRunEngine) trendEntryAllowed(side string, now time.Time) bool {
+	if e.trendGate == nil {
+		return true
+	}
+	if side == "BUY" {
+		return e.trendGate.AllowLongEntry(now)
+	}
+	return e.trendGate.AllowShortEntry(now)
 }
 
 // SetMarketFeed replaces the primary market feed (call before Start).
@@ -1153,6 +1171,11 @@ func (e *DryRunEngine) State() DryRunState {
 	if e.newsPipeline != nil {
 		newsRep := e.newsPipeline.Evaluate(now)
 		cp.NewsSentiment = &newsRep
+	}
+
+	if e.trendGate != nil {
+		tg := e.trendGate.Snapshot(now)
+		cp.TrendGate = &tg
 	}
 
 	if e.cbOracle != nil {
@@ -3357,6 +3380,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if convictionUp < 0.40 {
 			allowBuy = false // Decisive bearish invalidation: never buy into confirmed downward momentum
 		}
+		if !e.trendEntryAllowed("BUY", now) {
+			allowBuy = false // Daily trend filter: new longs only while BTC closes above its SMA50
+		}
 		if sm.OBI < -0.20 && convictionUp < buyThreshold {
 			allowBuy = false // Order book collapse defense: thin bid depth requires >= 0.72 conviction
 		}
@@ -3431,8 +3457,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		sellSize = math.Abs(currentInv)
 	} else {
 		// Opening / accumulating short inventory
-		if e.cfg.SpotOnly {
-			// Spot-only cash account: naked shorting is strictly prohibited! Cannot sell if flat or short.
+		if e.cfg.SpotOnly || !e.trendEntryAllowed("SELL", now) {
+			// Spot-only cash account, or the long-or-flat daily trend filter: no opening shorts.
 			allowSell = false
 		} else {
 			// Binance minimum notional ($5.00 USDT) enforcement for opening short positions

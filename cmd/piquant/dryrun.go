@@ -54,6 +54,8 @@ type dryRunFlags struct {
 	coinbaseWS        string
 	feedVenue         string
 	expBreaker        int
+	trendGate         bool
+	trendDir          string
 	enableNews        bool
 	region            string
 	makerFeeBps       float64
@@ -104,6 +106,8 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.StringVar(&f.wsURL, "ws-url", "", "custom Binance public WebSocket URL (default auto)")
 	fs.BoolVar(&f.enableCoinbase, "coinbase", true, "enable Coinbase institutional USD lead-lag signal ingestor (default true)")
 	fs.StringVar(&f.coinbaseWS, "coinbase-ws", "", "custom Coinbase public WebSocket URL (default auto)")
+	fs.BoolVar(&f.trendGate, "trend-gate", true, "gate new entries by the daily BTC SMA50 trend (long only above it, no new entries below) and run the 2x/1x trend core ledger in-process")
+	fs.StringVar(&f.trendDir, "trend-dir", "", "trend core ledger directory (default <data dir>/trend)")
 	fs.IntVar(&f.expBreaker, "expectancy-breaker", 50, "stop new entries after N closed trades if mean net bps/trade is < 0 at the upper 95% bound (0 = off; default 50: round 4 showed the live entry loses ~its cost per trade)")
 	fs.StringVar(&f.feedVenue, "feed-venue", "auto", "primary market feed for fills and flow features: 'auto' (coinbase for us-futures, else binance), 'binance' or 'coinbase'")
 	fs.StringVar(&f.region, "region", paper.RegionUS, "trading region rules: 'us' (Binance.US spot, 1x, long-only), 'us-futures' (US regulated nano futures, up to 5x, long/short) or 'global'")
@@ -353,6 +357,17 @@ func runDryRun(ctx context.Context, args []string) error {
 		defer cbIngestor.Stop()
 
 		dryRunEngine.SetCoinbaseOracle(cbOracle)
+	}
+
+	if f.trendGate {
+		tdir := f.trendDir
+		if tdir == "" {
+			tdir = filepath.Join(dDir, "trend")
+		}
+		gate := paper.NewTrendGate(48 * time.Hour)
+		dryRunEngine.SetTrendGate(gate)
+		go runTrendCore(ctx, tdir, gate)
+		fmt.Printf("[TREND] daily SMA50 gate on; 2x/1x trend core ledger in %s\n", tdir)
 	}
 
 	dryRunEngine.Start(ctx)

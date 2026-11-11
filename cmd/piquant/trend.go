@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"piquant-live/internal/collect"
+	"piquant-live/internal/paper"
 	"piquant-live/internal/trend"
 )
 
@@ -30,16 +31,20 @@ func runTrend(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *report {
+		st, err := trend.Load(filepath.Join(*dir, "trend_state.json"))
+		if err != nil {
+			return err
+		}
+		if st == nil {
+			return fmt.Errorf("no state in %s", *dir)
+		}
+		return printTrend(st)
+	}
 	path := filepath.Join(*dir, "trend_state.json")
 	st, err := trend.Load(path)
 	if err != nil {
 		return err
-	}
-	if *report {
-		if st == nil {
-			return fmt.Errorf("no state at %s", path)
-		}
-		return printTrend(st)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -48,6 +53,8 @@ func runTrend(args []string) error {
 		st, err = advanceTrend(ctx, client, st, path)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "[TREND]", err)
+		} else if perr := printTrend(st); perr != nil {
+			fmt.Fprintln(os.Stderr, "[TREND]", perr)
 		}
 		if *once {
 			return err
@@ -91,7 +98,31 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 		return st, err
 	}
 	fmt.Printf("[TREND] %s advanced %d day(s), last %s\n", now.Format(time.RFC3339), n, st.LastDate)
-	return st, printTrend(st)
+	return st, nil
+}
+
+// runTrendCore keeps the 2x/1x trend ledger current and pushes the daily regime into the engine's trend gate,
+// hourly, inside the dryrun process (no extra service). Errors are logged and retried.
+func runTrendCore(ctx context.Context, dir string, gate *paper.TrendGate) {
+	client := &http.Client{Timeout: 20 * time.Second}
+	path := filepath.Join(dir, "trend_state.json")
+	st, err := trend.Load(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[TREND] load:", err)
+	}
+	for {
+		st, err = advanceTrend(ctx, client, st, path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "[TREND]", err)
+		} else if up, c, m, ok := st.Regime(50); ok && gate != nil {
+			gate.Set(up, c, m, time.Now())
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Hour):
+		}
+	}
 }
 
 func printTrend(st *trend.State) error {
