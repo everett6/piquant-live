@@ -109,12 +109,19 @@ def train(args, tok, ex):
         random.Random(ep).shuffle(rows)
         for b in range(0, len(rows), args.batch):
             chunk = rows[b:b + args.batch]
-            L = max(len(i) for i, _ in chunk)
-            ids = torch.tensor([i + [pad] * (L - len(i)) for i, _ in chunk], device="cuda")
-            lab = torch.tensor([l + [-100] * (L - len(l)) for _, l in chunk], device="cuda")
-            att = (torch.arange(L, device="cuda")[None, :] < torch.tensor([len(i) for i, _ in chunk], device="cuda")[:, None]).long()
-            loss = model(input_ids=ids, attention_mask=att, labels=lab).loss
-            loss.backward()
+            n_tok = sum(sum(1 for x in l if x != -100) for _, l in chunk)
+            loss_sum = 0.0
+            for m in range(0, len(chunk), args.micro_batch):  # gradient accumulation keeps logits memory small
+                part = chunk[m:m + args.micro_batch]
+                L = max(len(i) for i, _ in part)
+                ids = torch.tensor([i + [pad] * (L - len(i)) for i, _ in part], device="cuda")
+                lab = torch.tensor([l + [-100] * (L - len(l)) for _, l in part], device="cuda")
+                att = (torch.arange(L, device="cuda")[None, :] < torch.tensor([len(i) for i, _ in part], device="cuda")[:, None]).long()
+                part_tok = sum(sum(1 for x in l if x != -100) for _, l in part)
+                out = model(input_ids=ids, attention_mask=att, labels=lab)
+                (out.loss * part_tok / n_tok).backward()  # token-weighted mean over the full batch
+                loss_sum += out.loss.item() * part_tok / n_tok
+            loss = torch.tensor(loss_sum)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step(); sched.step(); opt.zero_grad(set_to_none=True)
             step += 1
@@ -127,7 +134,7 @@ def train(args, tok, ex):
 
 
 @torch.no_grad()
-def predict(model, tok, titles, batch=32):
+def predict(model, tok, titles, batch=16):
     tok.padding_side = "left"
     out = []
     model.eval()
@@ -193,6 +200,7 @@ def main():
     ap.add_argument("--out", default=os.path.expanduser("~/models/piquant-news-lfm3-v1"))
     ap.add_argument("--epochs", type=int, default=2)
     ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument("--micro-batch", type=int, default=4, help="sequences per forward pass (gradient accumulation)")
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--rank", type=int, default=16)
     ap.add_argument("--max-len", type=int, default=192)

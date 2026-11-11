@@ -1,0 +1,312 @@
+{
+ "data": {
+  "earliest": "2021-01-01 00:00:00+00:00",
+  "latest": "2026-11-10 23:59:00+00:00"
+ },
+ "holdout_B_months": 23.5,
+ "holdout_B_sufficient": true,
+ "n_trials": 600,
+ "Q1": {
+  "discovery": {
+   "n": 927,
+   "r2_base": 0.06947871384796844,
+   "r2_with_lambda": 0.07366474371717469,
+   "r2_gain": 0.0041860298692062425,
+   "lambda_coef": -0.016494355762826603,
+   "lambda_t": -2.043398405991471
+  },
+  "holdout_A": {
+   "n": 491,
+   "r2_base": 0.046597844609987726,
+   "r2_with_lambda": 0.048819071285667315,
+   "r2_gain": 0.0022212266756795884,
+   "lambda_coef": 0.009856821013033106,
+   "lambda_t": 1.0675169616642046
+  },
+  "holdout_B": {
+   "n": 654,
+   "r2_base": 0.026072509328168847,
+   "r2_with_lambda": 0.029840249446006717,
+   "r2_gain": 0.00376774011783787,
+   "lambda_coef": 0.018317937329017445,
+   "lambda_t": 1.5900447146086825
+  }
+ },
+ "S5_vol_managed": {
+  "discovery_best_params": {
+   "target": 0.3,
+   "lookback": 60
+  },
+  "discovery_best": {
+   "total_return_pct": 234.56240644882027,
+   "cagr_pct": 60.88269678335136,
+   "sharpe": 1.6623396096076226,
+   "max_dd_pct": -19.33827851030663,
+   "months_ge_7pct": 0.2903225806451613,
+   "days": 927,
+   "trades": 926,
+   "win_rate_pct": 50.10799136069114,
+   "avg_win_bps": 126.65078545420661,
+   "avg_loss_bps": -98.41783485774572,
+   "profit_factor": 1.2924390933468985,
+   "avg_gross_bps": 14.359529963794113
+  },
+  "pbo": 0.4880952380952381,
+  "discovery_median_sharpe": 1.5923094499858128,
+  "holdout_A": {
+   "us-futures": {
+    "total_return_pct": -33.624360609794856,
+    "cagr_pct": -25.946678600381425,
+    "sharpe": -0.7598331434475842,
+    "max_dd_pct": -52.05022082606388,
+    "months_ge_7pct": 0.058823529411764705,
+    "days": 498,
+    "trades": 497,
+    "win_rate_pct": 48.08853118712273,
+    "avg_win_bps": 116.06194038832145,
+    "avg_loss_bps": -120.10952574122234,
+    "profit_factor": 0.8951391870415274,
+    "avg_gross_bps": -6.53813659643167
+   },
+   "dsr": 0.09907269609459113,
+   "buy_hold": {
+    "total_return_pct": -31.234802055476475,
+    "cagr_pct": -24.00196583126458,
+    "sharpe": -0.4486314487962166,
+    "max_dd_pct": -53.07577953158955,
+    "months_ge_7pct": 0.23529411764705882,
+    "days": 498
+   },
+   "us-futures-stress": {
+    "total_return_pct": -71.54649655229268,
+    "cagr_pct": -60.19672828722729,
+    "sharpe": -2.663297257977195,
+    "max_dd_pct": -73.7022585657471,
+    "months_ge_7pct": 0.058823529411764705,
+    "days": 498,
+    "trades": 497,
+    "win_rate_pct": 42.45472837022133,
+    "avg_win_bps": 113.60657138754158,
+    "avg_loss_bps": -124.66999674300963,
+    "profit_factor": 0.6722919749820851,
+    "avg_gross_bps": -23.510326973298763
+   },
+   "us-spot": {
+    "total_return_pct": -27.17834942114382,
+    "cagr_pct": -20.741406003591212,
+    "sharpe": -0.5575556474975785,
+    "max_dd_pct": -48.96260565984695,
+    "months_ge_7pct": 0.11764705882352941,
+    "days": 498,
+    "trades": 442,
+    "win_rate_pct": 49.547511312217196,
+    "avg_win_bps": 115.83768795986792,
+    "avg_loss_bps": -124.38535900472354,
+    "profit_factor": 0.9145761431093146,
+    "avg_gross_bps": -5.360817635389779
+   }
+  },
+  "holdout_B": {
+   "us-futures": {
+    "total_return_pct": -42.65674049775369,
+    "cagr_pct": -24.71511591338559,
+    "sharpe": -0.8129946849428643,
+    "max_dd_pct": -51.637797981566955,
+    "months_ge_7pct": 0.08333333333333333,
+    "days": 715,
+    "trades": 654,
+    "win_rate_pct": 47.40061162079511,
+    "avg_win_bps": 111.43200203804591,
+    "avg_loss_bps": -114.08517318510341,
+    "profit_factor": 0.8802052986035739,
+    "avg_gross_bps": -7.188652819390434
+   },
+   "dsr": 0.05234416667786829,
+   "buy_hold": {
+    "total_return_pct": -43.451091428097435,
+    "cagr_pct": -25.249317042734443,
+    "sharpe": -0.02420673961431213,
+    "max_dd_pct": -76.6705982872582,
+    "months_ge_7pct": 0.3333333333333333,
+    "days": 715
+   },
+   "us-futures-stress": {
+    "total_return_pct": -68.97898548348923,
+    "cagr_pct": -44.98315030798662,
+    "sharpe": -1.8713757821035277,
+    "max_dd_pct": -70.89876828307258,
+    "months_ge_7pct": 0.041666666666666664,
+    "days": 715,
+    "trades": 654,
+    "win_rate_pct": 45.25993883792049,
+    "avg_win_bps": 107.12629141531403,
+    "avg_loss_bps": -118.83856772594888,
+    "profit_factor": 0.7453278439451113,
+    "avg_gross_bps": -16.56701068342011
+   },
+   "us-spot": {
+    "total_return_pct": -38.505821148553196,
+    "cagr_pct": -21.98071329911022,
+    "sharpe": -0.6923439336017455,
+    "max_dd_pct": -49.490570822642866,
+    "months_ge_7pct": 0.08333333333333333,
+    "days": 715,
+    "trades": 654,
+    "win_rate_pct": 48.92966360856269,
+    "avg_win_bps": 108.99533211342873,
+    "avg_loss_bps": -116.41257570116204,
+    "profit_factor": 0.8970393865862499,
+    "avg_gross_bps": -6.121244660383686
+   }
+  },
+  "discovery_buy_hold": {
+   "total_return_pct": 544.3547747080446,
+   "cagr_pct": 108.25121005171998,
+   "sharpe": 1.7597584677467586,
+   "max_dd_pct": -28.172408134721305,
+   "months_ge_7pct": 0.4838709677419355,
+   "days": 927
+  },
+  "pass": false,
+  "beats_buy_hold_sharpe_everywhere": false
+ },
+ "S6_quantum_walk_regime": {
+  "discovery_best_params": {
+   "delta": 0.2,
+   "window_d": 30,
+   "k": 24
+  },
+  "discovery_best": {
+   "total_return_pct": -84.47326968643715,
+   "cagr_pct": -51.972143128493386,
+   "sharpe": -2.693725503441824,
+   "max_dd_pct": -84.71231032246884,
+   "months_ge_7pct": 0.0,
+   "days": 927,
+   "trades": 885,
+   "win_rate_pct": 40.11299435028249,
+   "avg_win_bps": 62.672177782180455,
+   "avg_loss_bps": -74.29692169053082,
+   "profit_factor": 0.5650104098486076,
+   "avg_gross_bps": -19.35451455740935
+  },
+  "pbo": 0.39285714285714285,
+  "discovery_median_sharpe": -3.502651502503224,
+  "holdout_A": {
+   "us-futures": {
+    "total_return_pct": -68.55820311040137,
+    "cagr_pct": -57.17403082660315,
+    "sharpe": -3.684220275866284,
+    "max_dd_pct": -68.55820311040137,
+    "months_ge_7pct": 0.0,
+    "days": 498,
+    "trades": 472,
+    "win_rate_pct": 35.38135593220339,
+    "avg_win_bps": 62.43098699875222,
+    "avg_loss_bps": -70.038099972417,
+    "profit_factor": 0.4880704079963253,
+    "avg_gross_bps": -23.16874081100756
+   },
+   "dsr": 5.417333248658451e-13,
+   "buy_hold": {
+    "total_return_pct": -31.234802055476408,
+    "cagr_pct": -24.001965831264528,
+    "sharpe": -0.44863144879621736,
+    "max_dd_pct": -53.07577953158962,
+    "months_ge_7pct": 0.23529411764705882,
+    "days": 498
+   },
+   "us-futures-stress": {
+    "total_return_pct": -78.87821638890105,
+    "cagr_pct": -68.00562546307565,
+    "sharpe": -4.881145540378804,
+    "max_dd_pct": -78.87821638890105,
+    "months_ge_7pct": 0.0,
+    "days": 498,
+    "trades": 472,
+    "win_rate_pct": 32.6271186440678,
+    "avg_win_bps": 59.627459769097904,
+    "avg_loss_bps": -75.66230293076717,
+    "profit_factor": 0.3816456820691358,
+    "avg_gross_bps": -31.52115154140442
+   },
+   "us-spot": {
+    "total_return_pct": -32.35308142331991,
+    "cagr_pct": -24.90977820377074,
+    "sharpe": -1.6146882844247714,
+    "max_dd_pct": -32.73393095853735,
+    "months_ge_7pct": 0.0,
+    "days": 498,
+    "trades": 472,
+    "win_rate_pct": 22.88135593220339,
+    "avg_win_bps": 62.2060470140859,
+    "avg_loss_bps": -28.473484351954426,
+    "profit_factor": 0.6482079606352315,
+    "avg_gross_bps": -7.7247780224367215
+   }
+  },
+  "holdout_B": {
+   "us-futures": {
+    "total_return_pct": -74.39818502211442,
+    "cagr_pct": -50.11977231613843,
+    "sharpe": -1.721503414270518,
+    "max_dd_pct": -81.87462830450553,
+    "months_ge_7pct": 0.08333333333333333,
+    "days": 715,
+    "trades": 460,
+    "win_rate_pct": 44.130434782608695,
+    "avg_win_bps": 121.02854965621131,
+    "avg_loss_bps": -141.67508683243338,
+    "profit_factor": 0.6747723154404196,
+    "avg_gross_bps": -25.742829860270607
+   },
+   "dsr": 6.868791646574834e-10,
+   "buy_hold": {
+    "total_return_pct": -42.77744406118643,
+    "cagr_pct": -24.79605461748041,
+    "sharpe": -0.015971809143849682,
+    "max_dd_pct": -76.6705982872583,
+    "months_ge_7pct": 0.3333333333333333,
+    "days": 715
+   },
+   "us-futures-stress": {
+    "total_return_pct": -82.6541465948037,
+    "cagr_pct": -59.1099754897135,
+    "sharpe": -2.2584876828858746,
+    "max_dd_pct": -87.07816799253692,
+    "months_ge_7pct": 0.08333333333333333,
+    "days": 715,
+    "trades": 460,
+    "win_rate_pct": 42.173913043478265,
+    "avg_win_bps": 118.91066817928403,
+    "avg_loss_bps": -145.76323686074608,
+    "profit_factor": 0.5949670422593839,
+    "avg_gross_bps": -34.13989430038556
+   },
+   "us-spot": {
+    "total_return_pct": -34.999177341707174,
+    "cagr_pct": -19.740391503788434,
+    "sharpe": -0.8321354698125842,
+    "max_dd_pct": -46.0955599792618,
+    "months_ge_7pct": 0.041666666666666664,
+    "days": 715,
+    "trades": 460,
+    "win_rate_pct": 25.43478260869565,
+    "avg_win_bps": 108.1552688161567,
+    "avg_loss_bps": -47.58582614734639,
+    "profit_factor": 0.7752857636002946,
+    "avg_gross_bps": -7.97341721097713
+   }
+  },
+  "discovery_buy_hold": {
+   "total_return_pct": 544.3547747080496,
+   "cagr_pct": 108.2512100517206,
+   "sharpe": 1.7597584677467648,
+   "max_dd_pct": -28.172408134721216,
+   "months_ge_7pct": 0.4838709677419355,
+   "days": 927
+  },
+  "pass": false
+ },
+ "elapsed_s": 8.1
+}
