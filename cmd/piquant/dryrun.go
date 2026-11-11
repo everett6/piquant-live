@@ -292,6 +292,9 @@ func runDryRun(ctx context.Context, args []string) error {
 	latMon := paper.NewLatencyMonitor(streamCfg.Endpoint, 15*time.Second)
 	latMon.Start(ctx)
 	dryRunEngine.SetLatencyMonitor(latMon)
+	ordMon := paper.NewLatencyMonitor(paper.OrderEntryEndpoint(region), 15*time.Second)
+	ordMon.Start(ctx)
+	dryRunEngine.SetOrderLatencyMonitor(ordMon)
 
 	// Initialize optional Coinbase institutional USD lead-lag signal ingestor
 	if f.enableCoinbase {
@@ -502,8 +505,8 @@ func printDryRunStatus(stateFile string, showDebug ...bool) error {
 		}
 	}
 	if l := st.Latency; l.Samples > 0 || l.EffectiveMs > 0 {
-		fmt.Printf(" Latency:         %s p50 %.1fms p90 %.1fms -> order latency %.1fms | regime %s\n",
-			l.Host, l.P50Ms, l.P90Ms, l.EffectiveMs, l.Mode)
+		fmt.Printf(" Latency:         feed %s p90 %.1fms | orders %s p90 %.1fms -> reaction %.1fms | regime %s\n",
+			l.Host, l.P90Ms, l.OrderHost, l.OrderP90Ms, l.EffectiveMs, l.Mode)
 	}
 
 	if len(st.MFTDiagnostics) > 0 {

@@ -471,6 +471,7 @@ type DryRunEngine struct {
 
 	lastFundingAccrual time.Time // last futures funding charge
 	latencyMon         *LatencyMonitor
+	orderLatMon        *LatencyMonitor
 
 	// Real-time Coinbase institutional lead-lag signal oracle
 	cbOracle *CoinbaseSignalOracle

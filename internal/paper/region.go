@@ -19,6 +19,18 @@ const (
 	usDefaultTickSz = 0.01
 )
 
+// OrderEntryEndpoint returns the host orders are sent to for a region (probed for latency).
+func OrderEntryEndpoint(region string) string {
+	switch strings.ToLower(strings.TrimSpace(region)) {
+	case RegionUSFutures:
+		return "https://api.coinbase.com" // Coinbase Financial Markets nano futures
+	case RegionGlobal:
+		return "https://api.binance.com"
+	default:
+		return "https://api.binance.us"
+	}
+}
+
 // Regions accepted by ApplyRegionProfile.
 const (
 	RegionUS        = "us"

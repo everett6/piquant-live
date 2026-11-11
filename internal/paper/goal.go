@@ -182,6 +182,10 @@ func (e *DryRunEngine) updateLatencyStateLocked() {
 	if e.latencyMon != nil {
 		snap = e.latencyMon.Snapshot()
 	}
+	if e.orderLatMon != nil {
+		os := e.orderLatMon.Snapshot()
+		snap.OrderHost, snap.OrderP90Ms = os.Host, os.P90Ms
+	}
 	snap.EffectiveMs = float64(e.effectiveOrderLatency().Microseconds()) / 1000.0
 	if e.quantOrch != nil {
 		snap.Mode = string(e.quantOrch.Report(time.Now()).CurrentMode)

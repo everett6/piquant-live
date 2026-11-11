@@ -213,3 +213,23 @@ func TestDisableCloudParamsIgnoresOverrides(t *testing.T) {
 		t.Fatalf("cloud params applied despite DisableCloudParams: %v", eng.minHalfSpreadFloorBps)
 	}
 }
+
+func TestReactionLatencyCombinesFeedAndOrderPaths(t *testing.T) {
+	cfg := DefaultDryRunConfig(t.TempDir())
+	cfg.Symbols = []string{"BTCUSDT"}
+	eng, err := NewDryRunEngine(cfg, engine.NewSPSCRing(64), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	feed, ord := NewLatencyMonitor("wss://f:1", time.Second), NewLatencyMonitor("https://o", time.Second)
+	feed.Record(134)
+	ord.Record(30)
+	eng.SetLatencyMonitor(feed)
+	eng.SetOrderLatencyMonitor(ord)
+	if got := eng.effectiveOrderLatency(); got != 87*time.Millisecond { // 67 + 15 + 5
+		t.Fatalf("reaction latency = %v, want 87ms", got)
+	}
+	if OrderEntryEndpoint(RegionUSFutures) != "https://api.coinbase.com" || OrderEntryEndpoint(RegionUS) != "https://api.binance.us" {
+		t.Fatal("unexpected order-entry endpoints")
+	}
+}

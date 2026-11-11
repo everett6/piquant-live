@@ -19,6 +19,8 @@ type LatencySnapshot struct {
 	Failures    int       `json:"consecutive_failures"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	EffectiveMs float64   `json:"effective_order_latency_ms"` // what the engine uses for order/cancel timing
+	OrderHost   string    `json:"order_host,omitempty"`
+	OrderP90Ms  float64   `json:"order_p90_ms,omitempty"`
 	Mode        string    `json:"strategy_mode,omitempty"`    // latency regime chosen by the orchestrator
 }
 
@@ -161,13 +163,29 @@ func percentile(sorted []float64, q float64) float64 {
 // orderProcessingMs is exchange matching + local processing added on top of network RTT.
 const orderProcessingMs = 5.0
 
-// effectiveOrderLatency returns the order-to-active latency the simulator should use:
-// measured p90 RTT plus processing when measurements exist, else the configured value.
+// effectiveOrderLatency returns the reaction latency the simulator should use: market data
+// travels one way from the feed host and the order travels one way to the order host, so
+// it is half of each measured p90 RTT plus processing. With only one monitor, that
+// monitor's full RTT is used. Falls back to the configured value without measurements.
 func (e *DryRunEngine) effectiveOrderLatency() time.Duration {
+	feedMs, orderMs := 0.0, 0.0
 	if e.latencyMon != nil {
-		if s := e.latencyMon.Snapshot(); s.Samples > 0 && s.P90Ms > 0 {
-			return time.Duration((s.P90Ms + orderProcessingMs) * float64(time.Millisecond))
+		if s := e.latencyMon.Snapshot(); s.Samples > 0 {
+			feedMs = s.P90Ms
 		}
+	}
+	if e.orderLatMon != nil {
+		if s := e.orderLatMon.Snapshot(); s.Samples > 0 {
+			orderMs = s.P90Ms
+		}
+	}
+	switch {
+	case feedMs > 0 && orderMs > 0:
+		return time.Duration((feedMs/2 + orderMs/2 + orderProcessingMs) * float64(time.Millisecond))
+	case feedMs > 0:
+		return time.Duration((feedMs + orderProcessingMs) * float64(time.Millisecond))
+	case orderMs > 0:
+		return time.Duration((orderMs + orderProcessingMs) * float64(time.Millisecond))
 	}
 	if e.cfg.OrderLatency > 0 {
 		return e.cfg.OrderLatency
@@ -184,6 +202,13 @@ func (e *DryRunEngine) SetLatencyMonitor(m *LatencyMonitor) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.latencyMon = m
+}
+
+// SetOrderLatencyMonitor attaches a probe of the order-entry host (call before Start).
+func (e *DryRunEngine) SetOrderLatencyMonitor(m *LatencyMonitor) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.orderLatMon = m
 }
 
 // latencyProfile adapts entries to the latency regime: the slower our orders reach the
