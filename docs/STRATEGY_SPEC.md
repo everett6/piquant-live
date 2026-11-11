@@ -45,3 +45,35 @@
    - Binance.US and Kraken: spot.
    - Coinbase: spot and futures.
    - No real orders without the user's explicit go-ahead.
+
+## Technical answers (second quiz, 2026-11-11)
+
+| Topic | Answer |
+|---|---|
+| Where it runs | Pi now; rent a VPS near the exchanges only if the lead-lag data shows the Pi is too slow |
+| Reaction speed | Set from measured gap lifetimes (lead-lag test first) |
+| Order style | Mixed by exchange: maker where fees are ~0, taker where speed matters |
+| Exchange outage | Keep trading the other venues; the gap strategy pauses while a venue is missing |
+| API keys (at go-live) | Trade-only (no withdrawal), with an IP allow-list |
+| Kill switch | Flatten, email, stay off until the owner restarts it by hand |
+| Kill-switch level | **40% drop from peak** (owner's choice over 25%) |
+| Go-live bar | A pre-registered pass, plus 1 month of paper profit, plus drop under 40%, plus ≥200 trades |
+| Email | Gmail app password, kept in an env file on the Pi (owner sets it up; never in git) |
+| Updates | Claude deploys with the owner's OK and keeps the previous binary for rollback |
+| Tick data retention | Keep everything; revisit when free disk nears the 20 GB guard |
+| Backups | Nightly copy of Pi state to the desktop, plus the ledgers to a private GitHub repo |
+| Tax records | Yearly CSV of every fill (date, price, fee, cost basis) |
+| Clock sync | Halt gap trades if the clock is off by more than 250 ms |
+| Rate limits | Back off, keep positions, email if it repeats |
+| Old engine code | Quarantine market making, Bybit and the global region behind an off switch; keep the tests |
+
+## Problems found in the code (subagent review, 2026-11-11)
+- **The auto-recalibrator can never find data.** It looks for monthly `*.pqbin` files
+  (internal/backtest/auto_recalibrate.go:38), but the collector writes daily `*.jsonl.gz` files. It logs
+  "no tick partitions found" every hour.
+- **There is no email sender anywhere.** Alerts must be built.
+- **Coinbase futures paper fills are priced off the Binance.US spot book** (internal/paper/region.go:47). They
+  should use Coinbase's own book.
+- **No Kraken order connector exists.** Only market data has been recorded, since 2026-11-11.
+- **The engine has no "needs a human restart" lock.** Only the PAPER50 trend profile has `--reset`.
+- **Disk:** at 50–100 MB/day, 110 GB free lasts about 3–5 years, minus other desktop use.
