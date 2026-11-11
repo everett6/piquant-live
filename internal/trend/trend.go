@@ -16,14 +16,16 @@ import (
 // Variant is a frozen PREREG6 strategy definition.
 type Variant struct {
 	Name        string  `json:"name"`
-	Lev         float64 `json:"lev"`                // position when trend holds (0 when not); BH holds Lev always
-	FeeBps      float64 `json:"fee_bps"`            // per unit of turnover
-	SlipBps     float64 `json:"slip_bps"`           // per unit of turnover
-	FundingBpsH float64 `json:"funding_bps_h"`      // per hour per unit of |position|
-	SMA         int     `json:"sma"`                // 0 = always hold (benchmark)
-	KillDD      float64 `json:"kill_dd"`            // stop the variant at this drawdown from peak (0 = never)
-	Pair        bool    `json:"pair,omitempty"`     // PREREG11: half BTC, half ETH sleeve, each Lev when above its own SMA
-	ExitSMA     int     `json:"exit_sma,omitempty"` // PREREG13 R3: also exit below SMA(ExitSMA); enter only at/above it
+	Lev         float64 `json:"lev"`                  // position when trend holds (0 when not); BH holds Lev always
+	FeeBps      float64 `json:"fee_bps"`              // per unit of turnover
+	SlipBps     float64 `json:"slip_bps"`             // per unit of turnover
+	FundingBpsH float64 `json:"funding_bps_h"`        // per hour per unit of |position|
+	SMA         int     `json:"sma"`                  // 0 = always hold (benchmark)
+	KillDD      float64 `json:"kill_dd"`              // stop the variant at this drawdown from peak (0 = never)
+	Pair        bool    `json:"pair,omitempty"`       // PREREG11: half BTC, half ETH sleeve, each Lev when above its own SMA
+	ExitSMA     int     `json:"exit_sma,omitempty"`   // PREREG13 R3: also exit below SMA(ExitSMA); enter only at/above it
+	DailyStop   float64 `json:"daily_stop,omitempty"` // flatten at the close of a day losing this fraction (re-enter next close)
+	Capital     float64 `json:"capital,omitempty"`    // display only: starting dollars for equity_usd
 }
 
 // Variants are frozen by PREREG6.
@@ -36,6 +38,10 @@ var Variants = []Variant{
 	// PREREG13 R3 fast exit: failed that round's -50% drawdown bar but beat P1 on return and drawdown in the
 	// backtest; tracked forward on paper at the user's request (2026-11-11), post hoc, for comparison only.
 	{Name: "R3_btc_eth_fastexit_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, ExitSMA: 20, Pair: true},
+	// Paper-only $50 profile (user request 2026-11-11): P1 rule on spot at 20% of NAV in total ($5 per sleeve),
+	// Coinbase retail spot taker fee (1.2%) + 5 bps slippage, 2% daily loss stop, 5% drawdown kill switch
+	// (manual restart: piquant trend --reset PAPER50_btc_eth_0p2x). Not tested by any pre-registration.
+	{Name: "PAPER50_btc_eth_0p2x", Lev: 0.2, FeeBps: 120, SlipBps: 5, SMA: 50, Pair: true, DailyStop: 0.02, KillDD: 0.05, Capital: 50},
 }
 
 // Day is one completed UTC daily candle.
@@ -59,7 +65,8 @@ type Ledger struct {
 	Peak    float64  `json:"peak"`
 	MaxDD   float64  `json:"max_dd"`
 	Pos     float64  `json:"pos"`
-	PosAlt  float64  `json:"pos_alt,omitempty"` // ETH sleeve position (pair variants)
+	PosAlt  float64  `json:"pos_alt,omitempty"`     // ETH sleeve position (pair variants)
+	Stops   int      `json:"daily_stops,omitempty"` // days the daily loss stop flattened the book
 	Killed  bool     `json:"killed"`
 	Days    []DayRec `json:"days"`
 }
@@ -232,18 +239,47 @@ func (v Variant) sleeve(pos, bar float64, hist []Day) (ret, target float64) {
 }
 
 func (l *Ledger) stepPair(date string, barB, barE float64, histB, histE []Day) {
-	rb, tb := l.Variant.sleeve(l.Pos, barB, histB)
-	re, te := l.Variant.sleeve(l.PosAlt, barE, histE)
-	ret := 0.5*rb + 0.5*re // equal halves, rebalanced daily (as in the PREREG11 backtest)
+	v := l.Variant
+	c := (v.FeeBps + v.SlipBps) * 1e-4
+	f := v.FundingBpsH * 24 * 1e-4
+	// equal halves, rebalanced daily (as in the PREREG11 backtest)
+	held := 0.5*(l.Pos*barB-math.Abs(l.Pos)*f) + 0.5*(l.PosAlt*barE-math.Abs(l.PosAlt)*f)
+	_, tb := v.sleeve(l.Pos, barB, histB)
+	_, te := v.sleeve(l.PosAlt, barE, histE)
+	if l.Killed {
+		tb, te = 0, 0
+	} else if v.DailyStop > 0 && held <= -v.DailyStop {
+		tb, te = 0, 0 // daily loss stop: flat at this close, normal rule again from the next close
+		l.Stops++
+	}
+	ret := held - 0.5*math.Abs(tb-l.Pos)*c - 0.5*math.Abs(te-l.PosAlt)*c
 	l.Equity *= 1 + ret
 	if l.Equity > l.Peak {
 		l.Peak = l.Equity
 	}
-	if dd := 1 - l.Equity/l.Peak; dd > l.MaxDD {
+	dd := 1 - l.Equity/l.Peak
+	if dd > l.MaxDD {
 		l.MaxDD = dd
+	}
+	if v.KillDD > 0 && dd >= v.KillDD && !l.Killed {
+		l.Killed = true // stays flat until a manual reset
+		exit := 0.5*math.Abs(tb)*c + 0.5*math.Abs(te)*c
+		ret -= exit
+		l.Equity *= 1 - exit
+		tb, te = 0, 0
 	}
 	l.Pos, l.PosAlt = tb, te
 	l.Days = append(l.Days, DayRec{Date: date, Ret: ret, PosOut: 0.5*tb + 0.5*te, Equity: l.Equity})
+}
+
+// Reset restarts one variant flat at equity 1 (the manual restart after a kill switch).
+func (st *State) Reset(name string) error {
+	l, ok := st.Ledgers[name]
+	if !ok {
+		return errors.New("unknown variant " + name)
+	}
+	st.Ledgers[name] = &Ledger{Variant: l.Variant, Equity: 1, Peak: 1}
+	return nil
 }
 
 func (l *Ledger) step(date string, bar float64, hist []Day) {
@@ -322,6 +358,8 @@ type Summary struct {
 	BeatRate   float64 `json:"beat_rate"`
 	Killed     bool    `json:"killed"`
 	CurrentPos float64 `json:"current_pos"`
+	EquityUSD  float64 `json:"equity_usd,omitempty"`
+	DailyStops int     `json:"daily_stops,omitempty"`
 }
 
 // Score compares each variant with BH; the month containing asOf (incomplete) is excluded.
@@ -335,7 +373,8 @@ func (st *State) Score(asOf time.Time) []Summary {
 	var out []Summary
 	for _, name := range sortedKeys(st.Ledgers) {
 		l := st.Ledgers[name]
-		s := Summary{Name: name, Equity: l.Equity, MaxDD: l.MaxDD, Sharpe: sharpe(l.Days), Killed: l.Killed, CurrentPos: l.Pos}
+		s := Summary{Name: name, Equity: l.Equity, MaxDD: l.MaxDD, Sharpe: sharpe(l.Days), Killed: l.Killed, CurrentPos: l.Pos,
+			EquityUSD: l.Variant.Capital * l.Equity, DailyStops: l.Stops}
 		if bhM != nil && name != "BH" {
 			for m, r := range l.Monthly() {
 				if m >= cur || (len(st.Registered) >= 7 && m <= st.Registered[:7]) {

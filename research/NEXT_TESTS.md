@@ -18,3 +18,12 @@
   The in-process 2x/1x trend core ledger runs at ~/piquant-data/trend.
 - **Rollback:** /usr/local/bin/piquant.prev-b5fe076.
 - **Re-enable MFT:** remove the drop-in, then run `daemon-reload` and restart.
+
+## Paper $50 profile (added 2026-11-11, user request; not a pre-registered strategy)
+- **Ledger variant:** `PAPER50_btc_eth_0p2x`. It uses the P1 rule on spot at 20% of NAV in total ($5 per
+  sleeve).
+- **Costs:** 1.2% retail taker fee + 5 bps slippage.
+- **Limits:** a 2% daily loss stop (flat for one close) and a 5% drawdown kill switch. Restart with
+  `piquant trend --dir ~/piquant-data/trend --reset PAPER50_btc_eth_0p2x`.
+- **Historical diagnostic (38 start dates, 2016–2025):** the kill switch fired from every start, after a median
+  of 111 days, with $47–78 left. The 1.2% fee on small orders costs more than the trend earns at 0.2x.

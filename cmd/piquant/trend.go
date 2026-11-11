@@ -28,8 +28,21 @@ func runTrend(args []string) error {
 	dir := fs.String("dir", filepath.Join(home, "piquant-trend"), "state directory")
 	once := fs.Bool("once", false, "advance once and exit")
 	report := fs.Bool("report", false, "print the scorecard and exit")
+	reset := fs.String("reset", "", "restart one variant flat at equity 1 (e.g. after its kill switch) and exit")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *reset != "" {
+		path := filepath.Join(*dir, "trend_state.json")
+		st, err := trend.Load(path)
+		if err != nil || st == nil {
+			return fmt.Errorf("no state in %s: %v", *dir, err)
+		}
+		if err := st.Reset(*reset); err != nil {
+			return err
+		}
+		fmt.Printf("[TREND] %s reset to flat, equity 1\n", *reset)
+		return st.Save(path)
 	}
 	if *report {
 		st, err := trend.Load(filepath.Join(*dir, "trend_state.json"))
@@ -126,6 +139,9 @@ func runTrendCore(ctx context.Context, dir string, gate *paper.TrendGate) {
 		fmt.Fprintln(os.Stderr, "[TREND] load:", err)
 	}
 	for {
+		if fresh, lerr := trend.Load(path); lerr == nil && fresh != nil {
+			st = fresh // pick up manual edits such as `piquant trend --reset`
+		}
 		st, err = advanceTrend(ctx, client, st, path)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "[TREND]", err)

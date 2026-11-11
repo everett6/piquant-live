@@ -206,3 +206,45 @@ func TestFastExitSleeveLeavesBelowSMA20(t *testing.T) {
 		t.Fatalf("P1 should hold, got %v", tgt)
 	}
 }
+
+func pairState(t *testing.T) *State {
+	t.Helper()
+	st := NewState("2024-01-01")
+	st.Seed(days("2023-11-01", rising(62, 100, 1)...))
+	st.SeedETH(days("2023-11-01", rising(62, 50, 0.5)...))
+	return st
+}
+
+func TestPaper50DailyStopFlattensForOneClose(t *testing.T) {
+	v := Variant{Name: "x", Lev: 2, FeeBps: 0, SMA: 50, Pair: true, DailyStop: 0.02, Capital: 50}
+	st := pairState(t)
+	st.Ledgers = map[string]*Ledger{"x": {Variant: v, Equity: 1, Peak: 1}}
+	st.Advance(days("2024-01-02", 162, 150, 165))
+	st.AdvanceETH(days("2024-01-02", 81, 75, 82.5))
+	l := st.Ledgers["x"]
+	// day 1: enter both sleeves (2x); day 2: -7.4% on both at 2x -> big loss -> stop -> flat; day 3: flat (0 return), re-enter
+	if l.Stops != 1 || l.Days[1].PosOut != 0 || l.Days[2].Ret != 0 || l.Pos != 2 || l.PosAlt != 2 {
+		t.Fatalf("stops %d days %+v pos %v/%v", l.Stops, l.Days, l.Pos, l.PosAlt)
+	}
+	if got := st.Score(time.Now())[0].EquityUSD; math.Abs(got-50*l.Equity) > 1e-9 {
+		t.Fatalf("equity usd %v", got)
+	}
+}
+
+func TestPaper50KillSwitchAndReset(t *testing.T) {
+	v := Variant{Name: "x", Lev: 2, FeeBps: 0, SMA: 50, Pair: true, KillDD: 0.05}
+	st := pairState(t)
+	st.Ledgers = map[string]*Ledger{"x": {Variant: v, Equity: 1, Peak: 1}}
+	st.Advance(days("2024-01-02", 162, 155, 170, 180))
+	st.AdvanceETH(days("2024-01-02", 81, 77, 85, 90))
+	l := st.Ledgers["x"]
+	if !l.Killed || l.Pos != 0 || l.PosAlt != 0 || l.Days[3].Ret != 0 {
+		t.Fatalf("killed %v pos %v/%v days %+v", l.Killed, l.Pos, l.PosAlt, l.Days)
+	}
+	if err := st.Reset("x"); err != nil || st.Ledgers["x"].Killed || st.Ledgers["x"].Equity != 1 {
+		t.Fatal("reset failed", err)
+	}
+	if st.Reset("nope") == nil {
+		t.Fatal("unknown variant accepted")
+	}
+}
