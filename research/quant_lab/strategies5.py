@@ -43,3 +43,17 @@ def binom_p_one_sided(k: int, n: int) -> float:
     if n == 0:
         return float("nan")
     return sum(math.comb(n, i) for i in range(k, n + 1)) / 2 ** n
+
+
+def ls_positions(daily: pd.DataFrame, n: int, lev_long: float, lev_short: float) -> np.ndarray:
+    """PREREG7 long/short trend: +lev_long when close > SMA(n), -lev_short otherwise (0 during warm-up)."""
+    c = daily["c"]
+    sma = c.rolling(n, min_periods=n).mean()
+    pos = np.where((c > sma).to_numpy(), float(lev_long), -float(lev_short))
+    return np.where(sma.notna().to_numpy(), pos, 0.0)
+
+
+def regime_months(bh_monthly: pd.Series, thr: float = 0.05) -> pd.Series:
+    """'bear' if buy-and-hold month < -thr, 'bull' if > thr, else 'flat'."""
+    return pd.Series(np.where(bh_monthly < -thr, "bear", np.where(bh_monthly > thr, "bull", "flat")),
+                     index=bh_monthly.index)

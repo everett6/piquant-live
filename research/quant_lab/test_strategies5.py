@@ -51,6 +51,19 @@ def test_flat_strategy_beats_in_down_months_only():
     assert 0.4 <= st["beat_rate"] <= 0.6
 
 
+def test_ls_positions_short_below_sma():
+    d = _daily(np.r_[np.full(10, 100.0), np.linspace(100, 120, 10), np.linspace(120, 80, 10)])
+    pos = S5.ls_positions(d, 5, 2.0, 1.0)
+    assert pos[:4].tolist() == [0, 0, 0, 0] and pos[15] == 2.0 and pos[-1] == -1.0
+    r = lab.position_returns(d, pos, lab.US_FUTURES)
+    assert r.iloc[-1] > 0  # short earns in the decline
+
+
+def test_regime_months():
+    m = pd.Series([-0.10, 0.0, 0.08], index=pd.date_range("2023-01-31", periods=3, freq="ME", tz="UTC"))
+    assert S5.regime_months(m).tolist() == ["bear", "flat", "bull"]
+
+
 if __name__ == "__main__":
     for k, f in list(globals().items()):
         if k.startswith("test_"):
