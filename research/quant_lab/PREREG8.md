@@ -72,3 +72,32 @@ failed cell.
 - M2 probably has a high win rate (TP:SL = 1:2) with a near-zero mean. It is the pullback version of S8,
   which failed.
 - I expect neither mechanism to reach 7%/month at ≤ 5x.
+
+## Result (run once, 2026-11-11): both mechanisms FAIL
+
+### Discovery, all cells (net / gross bps per trade, win rate)
+
+| Mechanism | Cell | Trades | Net bps | Gross bps | Win rate |
+|---|---|---|---|---|---|
+| M1 | k=4, H=30 | 6197 | −10.0 | −4.2 | 55% |
+| M1 | k=4, H=120 | 6182 | −10.1 | −4.4 | 56% |
+| M1 | k=6, H=30 | 1722 | −10.8 | −5.0 | 57% |
+| M1 | k=6, H=120 | 1718 | −11.0 | −5.3 | 58% |
+| M2 | q=1, H=120 | 4041 | −8.5 | −2.0 | 52% |
+| M2 | q=1, H=720 | 3290 | −8.0 | −2.3 | 63% |
+| M2 | q=2, H=120 | 3419 | −10.4 | −2.8 | 46% |
+| M2 | q=2, H=720 | 1904 | −8.4 | −1.6 | 57% |
+
+### Holdouts for the selected cells (net bps per trade, win rate, 1x %/month)
+
+| Selected cell | A | B | C | D | Pooled |
+|---|---|---|---|---|---|
+| M1 k=4, H=30 | −9.6, 55%, −18.1 | −12.4, 58%, −20.2 | −16.1, 51%, −26.7 | −14.5, 50%, −26.1 | −13.8 bps, t = −39 |
+| M2 q=1, H=720 | −5.7, 64%, −6.3 | −7.5, 65%, −8.9 | −8.2, 62%, −8.1 | −22.5, 60%, −14.2 | −10.4 bps, t = −6.7 |
+
+- No leverage up to 5x reaches 7%/month. Both lose money at any leverage.
+- **Lesson.** Gross edge is negative even before fees. A resting limit order on 1m bars gets filled mainly
+  when price keeps running through it (adverse selection). That costs more than the maker discount saves.
+- Shocks continue more often than they revert at the 1m scale.
+- Win rates of 55–65% again come with negative expectancy: the loss size outweighs them.
+- No Go changes. No variants.
