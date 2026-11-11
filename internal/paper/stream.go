@@ -198,6 +198,21 @@ func (m *MarketStreamIngestor) SymbolForID(id uint16) string {
 	return m.symbolByID[id]
 }
 
+// CopyL2Book copies the symbol's book into dst without allocating (engine hot path).
+func (m *MarketStreamIngestor) CopyL2Book(symbol string, dst *marketdata.L2OrderBook) bool {
+	m.booksMu.RLock()
+	defer m.booksMu.RUnlock()
+	b, ok := m.books[symbol]
+	if !ok {
+		b, ok = m.books[strings.ToUpper(symbol)]
+	}
+	if !ok {
+		return false
+	}
+	*dst = *b
+	return true
+}
+
 func (m *MarketStreamIngestor) GetL2Book(symbol string) (*marketdata.L2OrderBook, bool) {
 	m.booksMu.RLock()
 	defer m.booksMu.RUnlock()

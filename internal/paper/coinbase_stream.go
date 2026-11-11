@@ -376,6 +376,21 @@ func (c *CoinbaseStreamIngestor) GetL2Book(symbol string) (*marketdata.L2OrderBo
 	return &cp, true
 }
 
+// CopyL2Book copies the level-1 book for an engine symbol into dst without allocating.
+func (c *CoinbaseStreamIngestor) CopyL2Book(symbol string, dst *marketdata.L2OrderBook) bool {
+	c.booksMu.RLock()
+	defer c.booksMu.RUnlock()
+	b, ok := c.books[symbol]
+	if !ok {
+		b, ok = c.books[strings.ToUpper(symbol)]
+	}
+	if !ok {
+		return false
+	}
+	*dst = *b
+	return true
+}
+
 // IsFallback is always false: the Coinbase ingestor has no REST fallback mode.
 func (c *CoinbaseStreamIngestor) IsFallback() bool { return false }
 

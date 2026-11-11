@@ -284,6 +284,7 @@ type SelfAdaptationState struct {
 // 16-feature streaming extraction, VPIN toxicity, Kyle's Lambda, Hawkes intensity,
 // and MicrostructureCircuitBreaker so multi-asset price/depth scales never cross-contaminate.
 type SymbolMicrostructure struct {
+	bookBuf marketdata.L2OrderBook // reusable book copy; only touched by the single market-event consumer
 	Symbol       string
 	CircuitBrk   *experiment.MicrostructureCircuitBreaker
 	VpinCalc     *common.VPINCalculator
@@ -583,6 +584,8 @@ type MarketFeed interface {
 	IsFallback() bool
 	Stats() (total, depths, trades, gaps, reconnects, fallbacks uint64, lastNs int64)
 	GetL2Book(symbol string) (*marketdata.L2OrderBook, bool)
+	// CopyL2Book copies the symbol's book into dst without allocating (hot path).
+	CopyL2Book(symbol string, dst *marketdata.L2OrderBook) bool
 }
 
 // SetMarketFeed replaces the primary market feed (call before Start).
@@ -2203,7 +2206,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	hasLiveBook := false
 
 	if e.stream != nil {
-		if book, hasBook := e.stream.GetL2Book(symbol); hasBook && book != nil && book.NumBids > 0 && book.NumAsks > 0 {
+		if book := &sm.bookBuf; e.stream.CopyL2Book(symbol, book) && book.NumBids > 0 && book.NumAsks > 0 {
 			hasLiveBook = true
 			b0 := book.Bids[0]
 			a0 := book.Asks[0]

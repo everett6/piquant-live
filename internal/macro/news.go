@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 )
@@ -103,7 +104,18 @@ type NewsPipeline struct {
 	syncItems  int
 	httpClient *http.Client
 	stopCh     chan struct{}
+
+	// Evaluate is called on every market tick but news only changes on ingest/sync. A report is reused for
+	// up to newsEvalCacheTTL unless the pipeline changed (ver bumps on every write).
+	ver      atomic.Uint64
+	repMu    sync.Mutex
+	repCache NewsSentimentReport
+	repAt    time.Time
+	repVer   uint64
+	repOK    bool
 }
+
+const newsEvalCacheTTL = time.Second
 
 // NewNewsPipeline initializes the autonomous macro/micro news intelligence pipeline.
 func NewNewsPipeline(dataDir, syncURL string) *NewsPipeline {
@@ -132,6 +144,7 @@ func (p *NewsPipeline) Ingest(item NewsItem) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	defer p.ver.Add(1)
 
 	// Dedup by title / ID
 	for _, existing := range p.items {
@@ -387,6 +400,23 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 // Evaluate computes the real-time aggregated sentiment scores, time-decay weights,
 // and risk defenses (bid kills, ask kills, spread expansions) as of `now`.
 func (p *NewsPipeline) Evaluate(now time.Time) NewsSentimentReport {
+	v := p.ver.Load()
+	p.repMu.Lock()
+	if p.repOK && p.repVer == v && !now.Before(p.repAt) && now.Sub(p.repAt) < newsEvalCacheTTL {
+		r := p.repCache
+		p.repMu.Unlock()
+		return r
+	}
+	p.repMu.Unlock()
+	r := p.evaluate(now)
+	p.repMu.Lock()
+	p.repCache, p.repAt, p.repVer, p.repOK = r, now, v, true
+	p.repMu.Unlock()
+	return r
+}
+
+// evaluate computes the time-decayed report. The returned maps are shared by cached callers: read only.
+func (p *NewsPipeline) evaluate(now time.Time) NewsSentimentReport {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -594,6 +624,7 @@ func (p *NewsPipeline) Sync(ctx context.Context) {
 	}
 
 	p.mu.Lock()
+	p.ver.Add(1)
 	if ok > 0 { // a sync where every feed failed must not look fresh
 		p.lastSync = time.Now().UTC()
 	}
@@ -752,6 +783,7 @@ func (p *NewsPipeline) loadCache() error {
 		return err
 	}
 	p.mu.Lock()
+	p.ver.Add(1)
 	p.items = cached
 	p.lastSync = time.Now().UTC()
 	p.mu.Unlock()
