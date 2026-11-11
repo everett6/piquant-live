@@ -53,6 +53,10 @@ type dryRunFlags struct {
 	enableCoinbase    bool
 	coinbaseWS        string
 	enableNews        bool
+	region            string
+	makerFeeBps       float64
+	takerFeeBps       float64
+	orderLatencyMs    float64
 }
 
 func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
@@ -94,6 +98,10 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.StringVar(&f.wsURL, "ws-url", "", "custom Binance public WebSocket URL (default auto)")
 	fs.BoolVar(&f.enableCoinbase, "coinbase", true, "enable Coinbase institutional USD lead-lag signal ingestor (default true)")
 	fs.StringVar(&f.coinbaseWS, "coinbase-ws", "", "custom Coinbase public WebSocket URL (default auto)")
+	fs.StringVar(&f.region, "region", paper.RegionUS, "trading region rules: 'us' (Binance.US spot, 1x, long-only) or 'global'")
+	fs.Float64Var(&f.makerFeeBps, "maker-fee", -1, "override maker fee in bps (default: region schedule)")
+	fs.Float64Var(&f.takerFeeBps, "taker-fee", -1, "override taker fee in bps (default: region schedule)")
+	fs.Float64Var(&f.orderLatencyMs, "order-latency-ms", 0, "override order placement latency in ms (default: region measurement)")
 	return f
 }
 
@@ -170,12 +178,20 @@ func runDryRun(ctx context.Context, args []string) error {
 		symList[i] = strings.TrimSpace(strings.ToUpper(symList[i]))
 	}
 
+	region := strings.ToLower(strings.TrimSpace(f.region))
+	if region != paper.RegionUS && region != paper.RegionGlobal {
+		return fmt.Errorf("unknown --region %q (want us or global)", f.region)
+	}
+
 	streamCfg := paper.DefaultStreamConfig()
 	streamCfg.Symbols = symList
 	streamCfg.EnableFallback = f.enableFallback
-	if f.wsURL != "" {
+	switch {
+	case f.wsURL != "":
 		streamCfg.Endpoint = f.wsURL
-	} else {
+	case region == paper.RegionUS:
+		streamCfg.Endpoint = paper.BuildBinanceUSStreamURL(symList)
+	default:
 		streamCfg.Endpoint = paper.BuildBinanceStreamURL(symList)
 	}
 	ingestor := paper.NewMarketStreamIngestor(streamCfg, ring)
@@ -237,6 +253,22 @@ func runDryRun(ctx context.Context, args []string) error {
 	paperCfg.ExtendOnShutdown = f.extendOnShutdown
 	paperCfg.FlattenOnShutdown = f.flattenOnShutdown
 	paperCfg.EnableNewsPipeline = f.enableNews
+
+	if region == paper.RegionUS && !f.spotOnly {
+		fmt.Fprintln(os.Stderr, "note: --region us forces spot-only (US retail spot has no margin or shorting)")
+	}
+	if err := paper.ApplyRegionProfile(&paperCfg, region); err != nil {
+		return err
+	}
+	if f.makerFeeBps >= 0 {
+		paperCfg.MakerFeeBps = f.makerFeeBps
+	}
+	if f.takerFeeBps >= 0 {
+		paperCfg.TakerFeeBps = f.takerFeeBps
+	}
+	if f.orderLatencyMs > 0 {
+		paperCfg.OrderLatency = time.Duration(f.orderLatencyMs * float64(time.Millisecond))
+	}
 
 	dryRunEngine, err := paper.NewDryRunEngine(paperCfg, ring, ingestor)
 	if err != nil {
@@ -348,6 +380,9 @@ func runDryRun(ctx context.Context, args []string) error {
 	fmt.Printf(" Window Preset:   %s (%d Days / %dh)\n", st.WindowPreset, st.TargetDays, targetHours)
 	fmt.Printf(" Initial Capital: $%.2f USDT\n", st.InitialCapital)
 	fmt.Printf(" Active Universe: %s\n", strings.Join(symList, ", "))
+	fmt.Printf(" Region:          %s (feed %s, leverage %.1fx, maker %.2f / taker %.2f bps, latency %s)\n",
+		strings.ToUpper(region), streamCfg.Endpoint[:strings.Index(streamCfg.Endpoint+"?", "?")], paperCfg.MaxLeverage,
+		paperCfg.MakerFeeBps, paperCfg.TakerFeeBps, paperCfg.OrderLatency)
 	fmt.Printf(" Max Drawdown Limit: %.2f%% (Circuit Breaker)\n", paperCfg.MaxDrawdownPct)
 	fmt.Printf(" State Checkpoint: %s\n", paperCfg.StateFile)
 	fmt.Printf(" Monitoring Dashboard: http://%s\n", listenHint(f.addr))

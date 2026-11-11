@@ -47,6 +47,16 @@ type StreamConfig struct {
 
 // BuildBinanceStreamURL constructs the Binance combined WebSocket URL for the given symbols.
 func BuildBinanceStreamURL(symbols []string) string {
+	return "wss://data-stream.binance.vision:9443/stream?streams=" + binanceStreamList(symbols)
+}
+
+// BuildBinanceUSStreamURL builds the Binance.US public combined-stream URL (depth20@100ms +
+// trades). Binance.com rejects US IPs, so US accounts must quote against the Binance.US book.
+func BuildBinanceUSStreamURL(symbols []string) string {
+	return "wss://stream.binance.us:9443/stream?streams=" + binanceStreamList(symbols)
+}
+
+func binanceStreamList(symbols []string) string {
 	if len(symbols) == 0 {
 		symbols = []string{"BTCUSDT", "ETHUSDT"}
 	}
@@ -58,7 +68,7 @@ func BuildBinanceStreamURL(symbols []string) string {
 		}
 		streams = append(streams, clean+"@depth20@100ms", clean+"@trade")
 	}
-	return "wss://data-stream.binance.vision:9443/stream?streams=" + strings.Join(streams, "/")
+	return strings.Join(streams, "/")
 }
 
 // DefaultStreamConfig returns institutional defaults for Binance public feeds.

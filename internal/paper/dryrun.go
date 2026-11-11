@@ -62,6 +62,7 @@ type DryRunConfig struct {
 	BuyThreshold      float64       // Directional conviction entry threshold (default: 0.65; dynamic up to 0.72 on thin bids)
 	SellThreshold     float64       // Directional conviction short entry threshold (default: 0.35; dynamic down to 0.28 on heavy bids)
 	Debug             bool          // Enable verbose real-time MFT decision matrix logging (default: false)
+	TickSizes         map[string]float64 // Per-symbol venue price tick overrides (e.g. Binance.US BTCUSDT = 0.01)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -2071,7 +2072,7 @@ func (e *DryRunEngine) matchMakerOrders(symbol string, tradePrice float64, trade
 		// 2. Trade aggressor must be on the opposite side of our resting limit order:
 		//    - Resting BUY bid fills against SELLER-initiated trades (tradeSide == 2, isBuyerMaker == true) or downward price sweep.
 		//    - Resting SELL ask fills against BUYER-initiated trades (tradeSide == 1, isBuyerMaker == false) or upward price sweep.
-		tick := symbolTickSize(symbol)
+		tick := e.tickSize(symbol)
 		tickTol := tick * 0.51
 		if ord.Side == "BUY" && (tradeSide == 2 || tradePrice < ord.Price-tickTol) {
 			if tradePrice < ord.Price-tickTol {
@@ -2442,6 +2443,11 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		}
 		sm.FundingTracker.UpdatePrices(perpRef, midPrice, now.UnixNano())
 		liveFundingAPR = sm.FundingTracker.AnnualizedAPR()
+	}
+	if e.cfg.SpotOnly {
+		// A spot cash account holds no perpetuals, so there is no funding to earn or pay;
+		// the cross-venue basis above must not be traded as if it were carry.
+		liveFundingAPR = 0.0
 	}
 
 	engineLatency := e.cfg.OrderLatency
@@ -3050,7 +3056,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 
 	// Quantize to valid exchange price tick size per symbol
-	tick := symbolTickSize(symbol)
+	tick := e.tickSize(symbol)
 	targetBid = quantizePrice(targetBid, tick, false)
 	targetAsk = quantizePrice(targetAsk, tick, true)
 
@@ -3849,6 +3855,14 @@ func (e *DryRunEngine) TCAMarkout() *TCAMarkoutTracker {
 }
 
 // symbolTickSize returns the exchange price tick size for a given instrument.
+// tickSize returns the venue price tick for symbol, preferring configured overrides.
+func (e *DryRunEngine) tickSize(symbol string) float64 {
+	if t, ok := e.cfg.TickSizes[strings.ToUpper(symbol)]; ok && t > 0 {
+		return t
+	}
+	return symbolTickSize(symbol)
+}
+
 func symbolTickSize(symbol string) float64 {
 	u := strings.ToUpper(symbol)
 	switch {
