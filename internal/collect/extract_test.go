@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -81,5 +82,33 @@ func TestRunExtraction_StopsWhenServerDown(t *testing.T) {
 	x := &Extractor{Endpoint: "http://127.0.0.1:1", Model: "m", Client: &http.Client{Timeout: time.Second}}
 	if n, err := RunExtraction(context.Background(), x, dir, 0, nil); err == nil || n != 0 {
 		t.Fatalf("expected error and nothing recorded, n=%d err=%v", n, err)
+	}
+}
+
+func TestRunExtractionFile_ScoresListedHeadlinesOnce(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req["think"] != false {
+			t.Error("expected think=false")
+		}
+		fmt.Fprint(w, `{"message":{"content":"{\"event_type\":\"etf_flows\",\"assets\":[\"BTC\"],\"direction\":0.5,\"magnitude\":0.5,\"confidence\":0.5,\"novelty\":0.5,\"horizon\":\"days\"}"}}`)
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	in := filepath.Join(dir, "in.jsonl")
+	_ = os.WriteFile(in, []byte(`{"id":"x1","title":"ETF inflows","at":"2024-01-02T03:04:05Z","src":"cni"}
+{"id":"x1","title":"ETF inflows","at":"2024-01-02T03:04:05Z","src":"cni"}
+{"id":"x2","title":"Fed holds","at":"2024-01-03T03:04:05Z","src":"cni"}
+`), 0o644)
+	x := &Extractor{Endpoint: srv.URL, Model: "m", Client: srv.Client()}
+	out := filepath.Join(dir, "teacher")
+	if n, err := RunExtractionFile(context.Background(), x, in, out, 0, nil); err != nil || n != 2 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if n, _ := RunExtractionFile(context.Background(), x, in, out, 0, nil); n != 0 || calls.Load() != 2 {
+		t.Fatalf("rerun must skip scored IDs, n=%d calls=%d", n, calls.Load())
 	}
 }

@@ -107,12 +107,20 @@ func runExtract(ctx context.Context, args []string) error {
 	every := fs.Duration("every", 10*time.Minute, "re-scan interval for new headlines")
 	once := fs.Bool("once", false, "process the current backlog once and exit")
 	limit := fs.Int("limit", 0, "max headlines per pass (0 = all)")
+	input := fs.String("input", "", "score headlines from this JSONL file (id,title,at,src) instead of the collector store; implies --once")
+	outSub := fs.String("out", "teacher", "output subdirectory of --dir when --input is set")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	x := &collect.Extractor{Endpoint: *endpoint, Model: *model, Client: &http.Client{Timeout: 5 * time.Minute}}
+	progress := func(s string) { fmt.Println("[EXTRACT]", s) }
+	if *input != "" {
+		n, err := collect.RunExtractionFile(ctx, x, *input, filepath.Join(*dir, *outSub), *limit, progress)
+		fmt.Printf("[EXTRACT] file done: %d headlines (err=%v)\n", n, err)
+		return err
+	}
 	for {
-		n, err := collect.RunExtraction(ctx, x, *dir, *limit, func(s string) { fmt.Println("[EXTRACT]", s) })
+		n, err := collect.RunExtraction(ctx, x, *dir, *limit, progress)
 		fmt.Printf("[EXTRACT] pass done: %d headlines (err=%v)\n", n, err)
 		if *once || ctx.Err() != nil {
 			return nil

@@ -137,7 +137,7 @@ func (x *Extractor) Extract(ctx context.Context, title string) (Signal, error) {
 	}
 	msgs = append(msgs, map[string]string{"role": "user", "content": title})
 	body, _ := json.Marshal(map[string]any{
-		"model": x.Model, "stream": false, "format": signalSchema(),
+		"model": x.Model, "stream": false, "think": false, "format": signalSchema(),
 		"options": map[string]any{"temperature": 0}, "messages": msgs,
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(x.Endpoint, "/")+"/api/chat", bytes.NewReader(body))
@@ -230,18 +230,57 @@ func loadDone(outDir string) map[string]bool {
 
 // RunExtraction processes every stored headline without a signal, writing
 // <dir>/extract/<day>.jsonl.gz (by headline time). It returns the number processed.
-// Headlines whose model output fails to parse are recorded with ParseErr so they are not retried forever.
 func RunExtraction(ctx context.Context, x *Extractor, dir string, limit int, progress func(string)) (int, error) {
 	outDir := filepath.Join(dir, "extract")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return 0, err
 	}
+	pending := loadPending(dir, loadDone(outDir))
+	return extractInto(ctx, x, outDir, pending, limit, progress)
+}
+
+// RunExtractionFile scores headlines listed in a JSONL file (fields id, title, at, src)
+// into outDir, skipping IDs already scored with the current prompt. Used for bulk teacher labels.
+func RunExtractionFile(ctx context.Context, x *Extractor, input, outDir string, limit int, progress func(string)) (int, error) {
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return 0, err
+	}
+	f, err := os.Open(input)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	done := loadDone(outDir)
+	var pending []pendingHeadline
+	dec := json.NewDecoder(f)
+	for {
+		var r struct {
+			ID    string    `json:"id"`
+			Title string    `json:"title"`
+			At    time.Time `json:"at"`
+			Src   string    `json:"src"`
+		}
+		if err := dec.Decode(&r); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return 0, fmt.Errorf("%s: %w", input, err)
+		}
+		if r.ID != "" && r.Title != "" && !done[r.ID] {
+			done[r.ID] = true
+			pending = append(pending, pendingHeadline{r.ID, r.Src, r.Title, r.At})
+		}
+	}
+	return extractInto(ctx, x, outDir, pending, limit, progress)
+}
+
+// extractInto scores pending headlines, recording parse failures with ParseErr so they are not retried forever.
+func extractInto(ctx context.Context, x *Extractor, outDir string, pending []pendingHeadline, limit int, progress func(string)) (int, error) {
 	store, err := newDailyStore(outDir)
 	if err != nil {
 		return 0, err
 	}
 	defer store.Flush()
-	pending := loadPending(dir, loadDone(outDir))
 	if limit > 0 && len(pending) > limit {
 		pending = pending[:limit]
 	}
