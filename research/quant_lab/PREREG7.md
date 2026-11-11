@@ -48,3 +48,15 @@ whipsaw costs. L2 has larger drawdowns. Whether either one beats the long-or-fla
 history is genuinely uncertain.
 
 One run. Results are recorded as they come out.
+
+## Result (run once, 2026-11-11): both variants FAIL
+| | full geo %/mo | bear months | flat months | bull months | 2022 | A | max DD | stress |
+|---|---|---|---|---|---|---|---|---|
+| L1 2x/1x short | +5.95 | −6.55 | −9.95 | +32.18 | −9.72 | +2.32 | −87% | −4.35 |
+| L2 2x/2x short | +2.71 | −1.90 | −13.65 | +27.33 | −7.63 | +3.93 | −93% | −9.84 |
+| core 2x/flat | +7.29 | −12.65 | −7.07 | +37.00 | −11.48 | +0.58 | −86% | −0.41 |
+
+- Shorting softened bear months, but did not make them positive. L1 failed checks 1, 2 and 3; L2 failed all four.
+- The core's bear-month losses come from false breakouts. Example: 2x long into the 2022-09-13 CPI day (−10% → −20%).
+- Every bull-month return comes from the long side. The short side gives back more in chop than it earns in declines.
+- The pre-registered rule keeps the long-or-flat core. No short side is added to the ledger or the gate. No variants follow.

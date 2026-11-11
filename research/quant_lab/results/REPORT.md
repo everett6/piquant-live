@@ -261,3 +261,13 @@ Pick {"n": 50, "lev": 2.0}; PBO (monthly excess) nan
 Pooled holdout beat rate 0.596 (59/99), one-sided binomial p = 0.0350; D sufficient True -> **FAIL**
 Trials charged in total: 687
 
+
+## Round 7 (PREREG7): long/short SMA50 trend, bull vs bear months
+
+Trials charged: 689. Regime months (BTC buy-and-hold): {'bull': 63, 'bear': 44, 'flat': 23}.
+
+| variant | full geo %/mo | months >=7% | losing months | max DD % | bear-month mean % | flat-month mean % | bull-month mean % | 2022 mean %/mo | A mean %/mo | stress geo %/mo | pass |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| L1_long2_short1 | 5.95 | 0.42 | 0.46 | -87 | -6.55 | -9.95 | 32.18 | -9.72 | 2.32 | -4.35 | False |
+| L2_long2_short2 | 2.71 | 0.42 | 0.47 | -93 | -1.90 | -13.65 | 27.33 | -7.63 | 3.93 | -9.84 | False |
+| core_long2_flat | 7.29 | 0.36 | 0.43 | -86 | -12.65 | -7.07 | 37.00 | -11.48 | 0.58 | -0.41 | comparator |
