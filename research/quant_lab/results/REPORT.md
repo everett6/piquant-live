@@ -195,3 +195,40 @@ Best discovery params {"fast": 12, "slow": 336, "tp": 600, "sl": 100}, discovery
 
 Trials charged in total: 660
 
+## Round 4 (PREREG4.md) — G1: >=55% win-rate geometry on the live entry
+
+**Discovery win rate % (mean over th)**
+
+| tp \ sl | 40 | 60 | 80 |
+| --- | --- | --- | --- |
+| 20 | 57.7 | 60.1 | 60.7 |
+| 30 | n/a | 48.4 | 48.7 |
+| 40 | n/a | 40.1 | 40.7 |
+
+**Zero-edge prediction 100*S/(T+S)**
+
+| tp \ sl | 40 | 60 | 80 |
+| --- | --- | --- | --- |
+| 20 | 66.7 | 75.0 | 80.0 |
+| 30 | n/a | 66.7 | 72.7 |
+| 40 | n/a | 60.0 | 66.7 |
+
+**Discovery mean net bps/trade**
+
+| tp \ sl | 40 | 60 | 80 |
+| --- | --- | --- | --- |
+| 20 | -14.3 | -14.5 | -14.4 |
+| 30 | n/a | -14.5 | -14.5 |
+| 40 | n/a | -14.5 | -14.2 |
+
+Pick {"th": 0.75, "tp": 20, "sl": 40} vs live comparator {"th": 0.75, "tp": 39, "sl": 30}, PBO 0.02
+
+| Holdout | G1 win % | G1 net bps/trade | G1 ret % | G1 Sharpe | Live win % | Live net bps/trade | Live ret % |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| holdout_A | 55.7 | -14.5 | -100.0 | -40.74 | 34.8 | -14.1 | -100.0 |
+| holdout_B | 62.9 | -14.8 | -100.0 | -39.06 | 40.9 | -14.2 | -100.0 |
+| holdout_C | 57.2 | -16.3 | -100.0 | -30.41 | 37.9 | -14.8 | -100.0 |
+
+H-win (>=55% on A, B, C): True; net bps better on 0/3; return better on 2/3 -> adopt: **False**; H-profit pass: **False**
+Trials charged in total: 675
+
