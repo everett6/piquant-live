@@ -36,7 +36,8 @@ US_FUTURES_STRESS = Costs("us-futures-stress", taker_bps=6.0, slip_bps=1.0, fund
 US_SPOT = Costs("us-spot", taker_bps=2.0, slip_bps=1.0, funding_bps_h=0.0, can_short=False)
 
 
-def load_candles(collect_dir: str = "~/piquant-collect", product: str = "BTC-USD", cache: bool = True) -> pd.DataFrame:
+def load_candles(collect_dir: str = "~/piquant-collect", product: str = "BTC-USD", cache: bool = True,
+                 since: pd.Timestamp | None = DATA_START) -> pd.DataFrame:
     """1-minute OHLCV indexed by UTC time. Cached to parquet; the cache is rebuilt when new day files appear."""
     collect_dir = os.path.expanduser(collect_dir)
     files = sorted(glob.glob(os.path.join(collect_dir, "candles", product, "*.jsonl.gz")))
@@ -45,7 +46,7 @@ def load_candles(collect_dir: str = "~/piquant-collect", product: str = "BTC-USD
         df = pd.read_parquet(cache_path)
         if "n_files" in df and len(files) == int(df["n_files"].iloc[0]):
             df = df.drop(columns=["n_files"])
-            return df[df.index >= DATA_START]
+            return df if since is None else df[df.index >= since]
     rows = []
     for p in files:
         try:
@@ -62,7 +63,7 @@ def load_candles(collect_dir: str = "~/piquant-collect", product: str = "BTC-USD
         out = df.copy()
         out["n_files"] = len(files)
         out.to_parquet(cache_path)
-    return df[df.index >= DATA_START]
+    return df if since is None else df[df.index >= since]
 
 
 def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
