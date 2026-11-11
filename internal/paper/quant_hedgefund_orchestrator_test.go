@@ -11,6 +11,7 @@ import (
 func TestQuantHedgeFundOrchestratorAndGuardrailsIntegration(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := DefaultDryRunConfig(tempDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
 	cfg.OrderLatency = 100 * time.Millisecond // California fiber latency
 
 	ring := engine.NewSPSCRing(128)

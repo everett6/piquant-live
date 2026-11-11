@@ -57,6 +57,7 @@ type dryRunFlags struct {
 	makerFeeBps       float64
 	takerFeeBps       float64
 	orderLatencyMs    float64
+	maxHoldMin        float64
 }
 
 func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
@@ -75,9 +76,9 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.Float64Var(&f.baseLev, "base-leverage", 2.5, "nominal base leverage multiplier (e.g. 2.5 for 2.5x, 3.5 for 3.5x to reach $20/mo on $200)")
 	fs.Float64Var(&f.maxLev, "max-leverage", 3.5, "maximum allowable leverage ceiling")
 	fs.StringVar(&f.symbols, "symbols", "BTCUSDC,ETHUSDT", "comma-separated trading symbols")
-	fs.Float64Var(&f.targetProfitBps, "target-profit", 50.0, "net target profit margin per swing in bps (default: 50.0 bps = 0.50% for quant hedge fund)")
+	fs.Float64Var(&f.targetProfitBps, "target-profit", 35.0, "net take-profit target in bps; decays to 80% of this while holding (default 35 -> 28 bps floor)")
 	fs.Float64Var(&f.entryOffsetBps, "entry-offset", 2.5, "minimum maker entry distance from mid in bps (default: 2.5 bps = 0.025%)")
-	fs.Float64Var(&f.stopLossBps, "stop-loss", 60.0, "structural invalidation stop loss in bps (default: 60.0 bps = 0.60%)")
+	fs.Float64Var(&f.stopLossBps, "stop-loss", 30.0, "stop loss in bps, executed as a taker exit (default 30, matched to the 28 bps target floor)")
 	fs.Float64Var(&f.monthlyGainCap, "monthly-cap", 15.0, "maximum target gain percentage per month before entering capital preservation (default: 15.0%)")
 	fs.BoolVar(&f.spotOnly, "spot-only", false, "spot-only cash account mode: disable naked shorting, long inventory only (default false)")
 	fs.Float64Var(&f.taxRate, "tax-rate", 35.0, "estimated income/capital gains tax rate percentage for after-tax reserve (default: 35.0% for US/CA)")
@@ -98,10 +99,11 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.StringVar(&f.wsURL, "ws-url", "", "custom Binance public WebSocket URL (default auto)")
 	fs.BoolVar(&f.enableCoinbase, "coinbase", true, "enable Coinbase institutional USD lead-lag signal ingestor (default true)")
 	fs.StringVar(&f.coinbaseWS, "coinbase-ws", "", "custom Coinbase public WebSocket URL (default auto)")
-	fs.StringVar(&f.region, "region", paper.RegionUS, "trading region rules: 'us' (Binance.US spot, 1x, long-only) or 'global'")
+	fs.StringVar(&f.region, "region", paper.RegionUS, "trading region rules: 'us' (Binance.US spot, 1x, long-only), 'us-futures' (US regulated nano futures, up to 5x, long/short) or 'global'")
 	fs.Float64Var(&f.makerFeeBps, "maker-fee", -1, "override maker fee in bps (default: region schedule)")
 	fs.Float64Var(&f.takerFeeBps, "taker-fee", -1, "override taker fee in bps (default: region schedule)")
 	fs.Float64Var(&f.orderLatencyMs, "order-latency-ms", 0, "override order placement latency in ms (default: region measurement)")
+	fs.Float64Var(&f.maxHoldMin, "max-hold-minutes", 45, "time stop: exit a losing position held longer than this many minutes (0 disables)")
 	return f
 }
 
@@ -179,8 +181,8 @@ func runDryRun(ctx context.Context, args []string) error {
 	}
 
 	region := strings.ToLower(strings.TrimSpace(f.region))
-	if region != paper.RegionUS && region != paper.RegionGlobal {
-		return fmt.Errorf("unknown --region %q (want us or global)", f.region)
+	if region != paper.RegionUS && region != paper.RegionUSFutures && region != paper.RegionGlobal {
+		return fmt.Errorf("unknown --region %q (want us, us-futures or global)", f.region)
 	}
 
 	streamCfg := paper.DefaultStreamConfig()
@@ -189,7 +191,7 @@ func runDryRun(ctx context.Context, args []string) error {
 	switch {
 	case f.wsURL != "":
 		streamCfg.Endpoint = f.wsURL
-	case region == paper.RegionUS:
+	case region == paper.RegionUS || region == paper.RegionUSFutures:
 		streamCfg.Endpoint = paper.BuildBinanceUSStreamURL(symList)
 	default:
 		streamCfg.Endpoint = paper.BuildBinanceStreamURL(symList)
@@ -266,6 +268,7 @@ func runDryRun(ctx context.Context, args []string) error {
 	if f.takerFeeBps >= 0 {
 		paperCfg.TakerFeeBps = f.takerFeeBps
 	}
+	paperCfg.MaxHoldMinutes = f.maxHoldMin
 	if f.orderLatencyMs > 0 {
 		paperCfg.OrderLatency = time.Duration(f.orderLatencyMs * float64(time.Millisecond))
 	}

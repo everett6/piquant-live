@@ -11,6 +11,7 @@ import (
 func TestRealisticQueueFillsAndLatency(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := DefaultDryRunConfig(tempDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
 	cfg.OrderLatency = 20 * time.Millisecond // 20ms test latency
 	cfg.EntryOffsetBps = 2.0
 

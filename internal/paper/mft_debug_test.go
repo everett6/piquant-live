@@ -58,6 +58,7 @@ func TestMFT_TrailingStopRatchetLong(t *testing.T) {
 	cfg := DefaultDryRunConfig(tmpDir)
 	cfg.Symbols = []string{"BTCUSDT"}
 	cfg.MakerFeeBps = 1.5
+	cfg.TargetProfitBps = 40.0 // breakeven lock arms at 0.7 x target = 28 bps, so +30 bps triggers Stage 1
 
 	ring := engine.NewSPSCRing(1024)
 	eng, err := NewDryRunEngine(cfg, ring, nil)
@@ -84,13 +85,13 @@ func TestMFT_TrailingStopRatchetLong(t *testing.T) {
 	eng.mu.Unlock()
 
 	// 2. Market rallies by +30 bps (50,000 * 1.0030 = 50,150) -> triggers Stage 1 (>= 25 bps)
-	// Round trip fee: 2 * 1.5 = 3.0 bps. Breakeven stop = 50,000 * (1 + (3.0 + 3.0)*1e-4) = 50,030.0
+	// Stop exits are taker: maker 1.5 + taker 4.0 + 1.0 slippage = 6.5 bps; breakeven stop = 50,000 * (1 + (6.5 + 3.0)*1e-4) = 50,047.5
 	t1 := baseTime.Add(10 * time.Second)
 	eng.evaluateQuotesAndGating("BTCUSDT", 50150.0, t1)
 
 	eng.mu.RLock()
 	pos = eng.state.Positions["BTCUSDT"]
-	expectedBEStop := entryPrice * (1.0 + (6.0 * 1e-4))
+	expectedBEStop := entryPrice * (1.0 + (9.5 * 1e-4))
 	if math.Abs(pos.TrailingStop-expectedBEStop) > 0.1 {
 		eng.mu.RUnlock()
 		t.Fatalf("expected Stage 1 trailing stop ~%.2f, got %.2f", expectedBEStop, pos.TrailingStop)
@@ -116,28 +117,11 @@ func TestMFT_TrailingStopRatchetLong(t *testing.T) {
 	eng.mu.RUnlock()
 
 	// 4. Market reverses down through trailing stop (price drops to 50,140 <= 50,150)
-	// Verify that targetAsk drops to the touch / midPrice to immediately exit and lock in profit!
+	// Trailing-stop exits now cross the spread as a taker order: the position must be closed
+	// immediately (no resting maker exit), booked as a winning round trip.
 	t3 := baseTime.Add(45 * time.Second)
 	eng.evaluateQuotesAndGating("BTCUSDT", 50140.0, t3)
-
-	eng.mu.RLock()
-	orders := eng.activeOrders["BTCUSDT"]
-	var sellOrder *ActiveMakerOrder
-	for _, o := range orders {
-		if o.Side == "SELL" && o.CancelingUntil.IsZero() {
-			sellOrder = o
-			break
-		}
-	}
-	if sellOrder == nil {
-		eng.mu.RUnlock()
-		t.Fatalf("expected active SELL exit order after trailing stop triggered")
-	}
-	if sellOrder.Price > 50150.0 {
-		eng.mu.RUnlock()
-		t.Fatalf("expected aggressive exit order near 50,140, got %.2f", sellOrder.Price)
-	}
-	eng.mu.RUnlock()
+	assertTakerTrailingExit(t, eng, "BTCUSDT", "SELL")
 }
 
 func TestMFT_TrailingStopRatchetShort(t *testing.T) {
@@ -145,6 +129,7 @@ func TestMFT_TrailingStopRatchetShort(t *testing.T) {
 	cfg := DefaultDryRunConfig(tmpDir)
 	cfg.Symbols = []string{"ETHUSDT"}
 	cfg.MakerFeeBps = 1.5
+	cfg.TargetProfitBps = 40.0 // breakeven lock arms at 0.7 x target = 28 bps, so +30 bps triggers Stage 1
 
 	ring := engine.NewSPSCRing(1024)
 	eng, err := NewDryRunEngine(cfg, ring, nil)
@@ -171,13 +156,13 @@ func TestMFT_TrailingStopRatchetShort(t *testing.T) {
 	eng.mu.Unlock()
 
 	// 2. Market drops by +30 bps (3000 * (1 - 0.0030) = 2991.0) -> triggers Stage 1 (>= 25 bps)
-	// Round trip fee: 2 * 1.5 = 3.0 bps. Breakeven stop for short = 3000 * (1 - (3.0 + 3.0)*1e-4) = 2998.20
+	// Stop exits are taker: 6.5 bps cost; breakeven stop for short = 3000 * (1 - (6.5 + 3.0)*1e-4) = 2997.15
 	t1 := baseTime.Add(10 * time.Second)
 	eng.evaluateQuotesAndGating("ETHUSDT", 2991.0, t1)
 
 	eng.mu.RLock()
 	pos = eng.state.Positions["ETHUSDT"]
-	expectedBEStop := entryPrice * (1.0 - (6.0 * 1e-4))
+	expectedBEStop := entryPrice * (1.0 - (9.5 * 1e-4))
 	if math.Abs(pos.TrailingStop-expectedBEStop) > 0.05 {
 		eng.mu.RUnlock()
 		t.Fatalf("expected Stage 1 trailing stop ~%.2f, got %.2f", expectedBEStop, pos.TrailingStop)
@@ -199,26 +184,33 @@ func TestMFT_TrailingStopRatchetShort(t *testing.T) {
 	eng.mu.RUnlock()
 
 	// 4. Market bounces through trailing stop (price rises to 2992.0 >= 2991.0)
-	// Verify that targetBid rises to the touch / midPrice to immediately cover and lock in profit!
+	// Trailing-stop covers now cross the spread as a taker order.
 	t3 := baseTime.Add(45 * time.Second)
 	eng.evaluateQuotesAndGating("ETHUSDT", 2992.0, t3)
+	assertTakerTrailingExit(t, eng, "ETHUSDT", "BUY")
+}
 
+// assertTakerTrailingExit checks a trailing stop closed the position with a taker fill,
+// cancelled resting quotes, and counted a winning round trip.
+func assertTakerTrailingExit(t *testing.T, eng *DryRunEngine, symbol, side string) {
+	t.Helper()
 	eng.mu.RLock()
-	orders := eng.activeOrders["ETHUSDT"]
-	var buyOrder *ActiveMakerOrder
-	for _, o := range orders {
-		if o.Side == "BUY" && o.CancelingUntil.IsZero() {
-			buyOrder = o
-			break
-		}
+	defer eng.mu.RUnlock()
+	if pos := eng.state.Positions[symbol]; pos == nil || pos.Size != 0 || pos.TrailingStop != 0 || pos.PeakPrice != 0 {
+		t.Fatalf("expected flat position with cleared stop state after trailing exit, got %+v", pos)
 	}
-	if buyOrder == nil {
-		eng.mu.RUnlock()
-		t.Fatalf("expected active BUY cover order after trailing stop triggered")
+	if len(eng.recentFills) == 0 {
+		t.Fatal("expected a taker exit fill")
 	}
-	if buyOrder.Price < 2990.0 {
-		eng.mu.RUnlock()
-		t.Fatalf("expected aggressive cover order near 2992.0, got %.2f", buyOrder.Price)
+	last := eng.recentFills[len(eng.recentFills)-1]
+	if last.Role != "TAKER" || last.Strategy != "EXIT_TRAILING_STOP" || last.Side != side {
+		t.Fatalf("unexpected exit fill: %+v", last)
 	}
-	eng.mu.RUnlock()
+	if last.PnLRealized <= 0 || eng.state.WinningTrades != 1 || eng.state.LosingTrades != 0 {
+		t.Fatalf("expected one winning round trip, got pnl=%.4f wins=%d losses=%d",
+			last.PnLRealized, eng.state.WinningTrades, eng.state.LosingTrades)
+	}
+	if len(eng.activeOrders[symbol]) != 0 {
+		t.Fatalf("expected resting quotes cancelled, got %d", len(eng.activeOrders[symbol]))
+	}
 }

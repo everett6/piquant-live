@@ -233,6 +233,7 @@ func TestMonthlyGainCapPreservationAndNoiseScratchElimination(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
 	cfg.CleanReset = true
 	cfg.InitialCapital = 200.00
 	cfg.MonthlyGainCapPct = 15.0 // 15% monthly target ceiling
@@ -326,6 +327,7 @@ func TestSpotOnlyModeAndTaxReserveAccounting(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
 	cfg.Symbols = []string{"BTCUSDT", "ETHUSDT"}
 	cfg.InitialCapital = 200.0
 	cfg.SpotOnly = true

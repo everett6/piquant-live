@@ -63,6 +63,10 @@ type DryRunConfig struct {
 	SellThreshold     float64       // Directional conviction short entry threshold (default: 0.35; dynamic down to 0.28 on heavy bids)
 	Debug             bool          // Enable verbose real-time MFT decision matrix logging (default: false)
 	TickSizes         map[string]float64 // Per-symbol venue price tick overrides (e.g. Binance.US BTCUSDT = 0.01)
+	TargetFloorFrac   float64            // Take-profit decays to this fraction of the target, never lower (default: 0.80)
+	MaxHoldMinutes    float64            // Time stop: exit a losing position held longer than this (default: 45; <0 disables)
+	ContractSizes     map[string]float64 // Futures contract size per symbol (e.g. BTC nano = 0.01); empty = spot lots
+	FundingBpsPerHour float64            // Futures funding cost charged on open notional per hour (default: 0)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -103,6 +107,8 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 		CleanReset:        false,
 		EnableTaker:       false,
 		Debug:             false,
+		TargetFloorFrac:   0.80,
+		MaxHoldMinutes:    45,
 	}
 }
 
@@ -121,6 +127,7 @@ type Position struct {
 	PeakPrice       float64 `json:"peak_price,omitempty"`         // Peak favorable price achieved during position lifecycle
 	TrailingStop    float64 `json:"trailing_stop,omitempty"`       // Dynamic locked-in trailing stop price
 	HoldingSec      float64 `json:"holding_sec,omitempty"`         // Current position holding duration in seconds
+	EntryFeesUSDT   float64 `json:"entry_fees_usdt,omitempty"`     // Fees/funding paid on the open inventory, charged to the round trip on close
 }
 
 // TradeRecord represents an individual executed paper trade for the journal.
@@ -324,6 +331,7 @@ type SymbolMicrostructure struct {
 	ScalpingDisabled       bool
 	ScalpingDisabledReason string
 	ConsecutiveLosses      int
+	LastCloseAt            time.Time // Time of the last round-trip close (drives loss-streak cooldown)
 	RecentPnlWindow        []float64
 
 	// Medium-Frequency Trading (MFT) Kalman Trend & Multi-Horizon Momentum Tracker
@@ -452,6 +460,8 @@ type DryRunEngine struct {
 	recalibrating   atomic.Bool
 	lastAutoRecalib time.Time
 	recalibBackoff  time.Time // no recalibration before this time (set after a failed run)
+
+	lastFundingAccrual time.Time // last futures funding charge
 
 	// Real-time Coinbase institutional lead-lag signal oracle
 	cbOracle *CoinbaseSignalOracle
@@ -884,6 +894,7 @@ func (e *DryRunEngine) Stop() {
 	// 2. Auto TS (Trailing Stop / Liquidation) on Shutdown:
 	// If configured (default true), close any open inventory at current MarkPrice to convert all unrealized PnL to cash
 	if e.cfg.FlattenOnShutdown {
+		e.accrueFundingLocked(time.Now()) // charge funding up to the flatten
 		e.emergencyFlattenLocked("Shutdown_Auto_TS_Flatten")
 	}
 	e.mu.Unlock()
@@ -919,26 +930,23 @@ func (e *DryRunEngine) emergencyFlattenLocked(reason string) {
 			netRealizedPnL := realizedPnL - feeUSDT
 			e.state.Cash += netRealizedPnL
 
+			// Record liquidation fill in journal/blotter with proper standard BUY/SELL side
+			liqSide := "SELL"
+			if pos.Size < 0 {
+				liqSide = "BUY"
+			}
+			roundTripPnL := netRealizedPnL - pos.EntryFeesUSDT
+
 			pos.RealizedPnL += netRealizedPnL
 			pos.UnrealizedPnL = 0
-			pos.Size = 0
+			resetPositionLifecycle(pos)
 			pos.TotalTrades++
 			pos.TakerTrades++
 			pos.TotalVolumeUSDT += valUSDT
 
 			e.state.RealizedPnL += netRealizedPnL
 			e.state.TotalTrades++
-			if netRealizedPnL > 0 {
-				e.state.WinningTrades++
-			} else if netRealizedPnL < 0 {
-				e.state.LosingTrades++
-			}
-
-			// Record liquidation fill in journal/blotter with proper standard BUY/SELL side
-			liqSide := "SELL"
-			if pos.Size < 0 {
-				liqSide = "BUY"
-			}
+			e.recordCloseOutcomeLocked(sym, roundTripPnL, false)
 			fillRec := TradeRecord{
 				Timestamp:   time.Now().UTC(),
 				Symbol:      sym,
@@ -954,18 +962,7 @@ func (e *DryRunEngine) emergencyFlattenLocked(reason string) {
 				Strategy:    "EMERGENCY_PROTECTIVE_LIQUIDATE: " + reason,
 				DataSource:  e.state.DataSource,
 			}
-			e.recentFills = append([]TradeRecord{fillRec}, e.recentFills...)
-			if len(e.recentFills) > 64 {
-				e.recentFills = e.recentFills[:64]
-			}
-			if e.journalCh != nil {
-				if b, err := json.Marshal(fillRec); err == nil {
-					select {
-					case e.journalCh <- append(b, '\n'):
-					default:
-					}
-				}
-			}
+			e.appendTradeRecord(fillRec)
 		}
 	}
 	// Reset unrealized PnL and lock equity into cash
@@ -1214,6 +1211,9 @@ func (e *DryRunEngine) runCheckpointLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			e.maybeReloadCloudParams()
+			e.mu.Lock()
+			e.accrueFundingLocked(time.Now())
+			e.mu.Unlock()
 			_ = e.saveCheckpoint()
 		}
 	}
@@ -2484,7 +2484,19 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		clipQty *= macroSt.LeverageMultiplier
 		maxInvQty *= macroSt.LeverageMultiplier
 	}
-	if currEq < 5.0 {
+	if len(e.cfg.ContractSizes) > 0 && !e.cfg.SpotOnly {
+		// Leveraged futures account: size by risk at the stop, cap by leverage, whole contracts.
+		clipQty, maxInvQty = e.applyFuturesSizing(symbol, currEq, midPrice, levState.EffectiveLeverage, sm.AtrBps)
+		if macroSt.LeverageMultiplier > 0 && macroSt.LeverageMultiplier < 1.0 {
+			if cs := e.contractSize(symbol); cs > 0 {
+				clipQty = math.Floor(clipQty*macroSt.LeverageMultiplier/cs+1e-9) * cs
+				maxInvQty = math.Floor(maxInvQty*macroSt.LeverageMultiplier/cs+1e-9) * cs
+			}
+		}
+		if clipQty <= 0 {
+			clipQty, maxInvQty = 0, 0
+		}
+	} else if currEq < 5.0 {
 		clipQty = 0
 		maxInvQty = 0
 	} else if clipQty <= 0 {
@@ -2857,6 +2869,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	peakPrice := 0.0
 	trailingStop := 0.0
 	holdSec := 0.0
+	forceExitReason := ""
 	if pos != nil {
 		peakPrice = pos.PeakPrice
 		trailingStop = pos.TrailingStop
@@ -2876,33 +2889,46 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if baseTargetProfitBps <= 0 {
 			baseTargetProfitBps = 50.0
 		}
-		if sm.VolVarBps > 0.40 {
-			baseTargetProfitBps *= math.Min(2.0, math.Sqrt(sm.VolVarBps/0.40))
-		}
 		stopLossBps := e.cfg.StopLossBps
 		if stopLossBps <= 0 {
 			stopLossBps = 60.0
 		}
+		if sm.VolVarBps > 0.40 {
+			// Scale target AND stop together so volatility never worsens the payoff ratio
+			volScale := math.Min(2.0, math.Sqrt(sm.VolVarBps/0.40))
+			baseTargetProfitBps *= volScale
+			stopLossBps *= volScale
+		}
 		roundTripFeeBps := 2.0 * e.makerFeeBps(symbol)
+		// Stop-based exits are taker orders: a breakeven stop must cover maker entry + taker exit + slippage
+		stopExitFeeBps := e.makerFeeBps(symbol) + e.cfg.TakerFeeBps + 1.0
 
-		minNetFloorBps := math.Max(6.0, baseTargetProfitBps*0.50)
+		floorFrac := e.cfg.TargetFloorFrac
+		if floorFrac <= 0 || floorFrac > 1 {
+			floorFrac = 0.80
+		}
+		minNetFloorBps := math.Max(6.0, baseTargetProfitBps*floorFrac)
 		targetProfitBps := minNetFloorBps
 		if !sm.InventorySince.IsZero() {
 			holdSec = now.Sub(sm.InventorySince).Seconds()
-			decayFactor := math.Exp(-holdSec / 900.0) // 15-minute half-life decay
+			decayFactor := math.Exp(-holdSec / 900.0) // 900s e-fold (~10.4 min half-life)
 			targetProfitBps = minNetFloorBps + (baseTargetProfitBps-minNetFloorBps)*decayFactor
 		} else {
 			targetProfitBps = baseTargetProfitBps
 		}
+
+		// Arm the breakeven lock near the target, not at a fixed level a bounce can reach without paying
+		breakevenLockBps := math.Max(stopExitFeeBps+6.0, 0.70*targetProfitBps)
+		timeStopSec := e.cfg.MaxHoldMinutes * 60.0
 
 		if pos.Size > 0 { // Holding LONG position
 			if peakPrice <= 0 || midPrice > peakPrice {
 				peakPrice = midPrice
 			}
 			gainBps := (peakPrice - pos.AvgEntryPrice) / pos.AvgEntryPrice * 1e4
-			// Stage 1: Breakeven lock-in after >= 25.0 bps gain
-			if gainBps >= 25.0 {
-				beStop := pos.AvgEntryPrice * (1.0 + (roundTripFeeBps+3.0)*1e-4)
+			// Stage 1: Breakeven lock-in once most of the take-profit distance is reached
+			if gainBps >= breakevenLockBps {
+				beStop := pos.AvgEntryPrice * (1.0 + (stopExitFeeBps+3.0)*1e-4)
 				if beStop > trailingStop {
 					trailingStop = beStop
 				}
@@ -2923,34 +2949,22 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			// 1. Structural stop loss >= 60.0 bps
 			// 2. Confirmed toxic cascade (VPIN > 0.75 or Hawkes >= 0.85) with adverse drawdown > 25.0 bps
 			// 3. Decisive structural invalidation (Conviction < 0.38 && OBI < -0.25 && Ret5mBps < -10.0 bps)
+			// Defensive exits cross the spread as taker orders: a resting stop can sit unfilled
+			// while price falls through it, and a maker-priced stop overstated paper results.
 			if trailingStop > 0 && midPrice <= trailingStop {
-				if bestAsk > 0 {
-					targetAsk = bestAsk
-				} else {
-					targetAsk = midPrice
-				}
+				forceExitReason = "TRAILING_STOP"
 				sm.BidCooldownUntil = now.Add(30 * time.Second)
 			} else if adverseDrawdownBps > stopLossBps {
-				// Structural invalidation: stop-loss triggered to protect capital against sustained crashes
-				if bestAsk > 0 {
-					targetAsk = bestAsk
-				}
+				forceExitReason = "STOP_LOSS"
 				sm.BidCooldownUntil = now.Add(45 * time.Second)
 			} else if adverseDrawdownBps > 25.0 && ((sm.VpinCalc != nil && sm.VpinCalc.VPIN() > 0.75) || (sm.HawkesEst != nil && sm.HawkesEst.BranchingRatio() >= 0.85)) {
-				// Informed Toxic Cascade Defense: exit passively at touch only when order flow is demonstrably toxic
-				if bestAsk > 0 {
-					targetAsk = bestAsk
-				} else {
-					targetAsk = midPrice
-				}
+				forceExitReason = "TOXIC_FLOW"
 				sm.BidCooldownUntil = now.Add(45 * time.Second)
 			} else if adverseDrawdownBps > 20.0 && convictionUp < 0.38 && sm.OBI < -0.25 && sm.Ret5mBps < -10.0 {
-				// Decisive multi-horizon alpha invalidation (asymmetric hysteresis exit)
-				if bestAsk > 0 {
-					targetAsk = bestAsk
-				} else {
-					targetAsk = midPrice
-				}
+				forceExitReason = "ALPHA_INVALIDATION"
+				sm.BidCooldownUntil = now.Add(45 * time.Second)
+			} else if timeStopSec > 0 && holdSec > timeStopSec && adverseDrawdownBps > 0 {
+				forceExitReason = "TIME_STOP"
 				sm.BidCooldownUntil = now.Add(45 * time.Second)
 			} else {
 				// Normal market oscillation / swing holding: quote at or above minProfitAsk
@@ -2977,9 +2991,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 				peakPrice = midPrice
 			}
 			gainBps := (pos.AvgEntryPrice - peakPrice) / pos.AvgEntryPrice * 1e4
-			// Stage 1: Breakeven lock-in after >= 25.0 bps gain
-			if gainBps >= 25.0 {
-				beStop := pos.AvgEntryPrice * (1.0 - (roundTripFeeBps+3.0)*1e-4)
+			// Stage 1: Breakeven lock-in once most of the take-profit distance is reached
+			if gainBps >= breakevenLockBps {
+				beStop := pos.AvgEntryPrice * (1.0 - (stopExitFeeBps+3.0)*1e-4)
 				if trailingStop <= 0 || beStop < trailingStop {
 					trailingStop = beStop
 				}
@@ -2996,33 +3010,19 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			adverseDrawdownBps := (midPrice - pos.AvgEntryPrice) / pos.AvgEntryPrice * 1e4
 
 			if trailingStop > 0 && midPrice >= trailingStop {
-				if bestBid > 0 {
-					targetBid = bestBid
-				} else {
-					targetBid = midPrice
-				}
+				forceExitReason = "TRAILING_STOP"
 				sm.AskCooldownUntil = now.Add(30 * time.Second)
 			} else if adverseDrawdownBps > stopLossBps {
-				// Structural invalidation: stop-loss triggered to protect capital
-				if bestBid > 0 {
-					targetBid = bestBid
-				}
+				forceExitReason = "STOP_LOSS"
 				sm.AskCooldownUntil = now.Add(45 * time.Second)
 			} else if adverseDrawdownBps > 25.0 && ((sm.VpinCalc != nil && sm.VpinCalc.VPIN() > 0.75) || (sm.HawkesEst != nil && sm.HawkesEst.BranchingRatio() >= 0.85)) {
-				// Informed Toxic Cascade Defense: exit passively at touch only when order flow is demonstrably toxic
-				if bestBid > 0 {
-					targetBid = bestBid
-				} else {
-					targetBid = midPrice
-				}
+				forceExitReason = "TOXIC_FLOW"
 				sm.AskCooldownUntil = now.Add(45 * time.Second)
 			} else if adverseDrawdownBps > 20.0 && convictionUp > 0.62 && sm.OBI > 0.25 && sm.Ret5mBps > 10.0 {
-				// Decisive multi-horizon alpha invalidation for short
-				if bestBid > 0 {
-					targetBid = bestBid
-				} else {
-					targetBid = midPrice
-				}
+				forceExitReason = "ALPHA_INVALIDATION"
+				sm.AskCooldownUntil = now.Add(45 * time.Second)
+			} else if timeStopSec > 0 && holdSec > timeStopSec && adverseDrawdownBps > 0 {
+				forceExitReason = "TIME_STOP"
 				sm.AskCooldownUntil = now.Add(45 * time.Second)
 			} else {
 				// Normal market oscillation / swing holding: cover at or below maxProfitBid
@@ -3068,6 +3068,26 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
+	if forceExitReason != "" {
+		if p := e.state.Positions[symbol]; p != nil && math.Abs(p.Size) > 1e-8 {
+			e.takerExitLocked(symbol, bestBid, bestAsk, midPrice, forceExitReason)
+			return
+		}
+	}
+
+	// Loss-streak cooldown: after a quiet period flat, clear the streak so the
+	// leakage circuit cannot deadlock (it otherwise only resets on a close).
+	if math.Abs(currentInv) < 1e-8 && sm.ConsecutiveLosses > 0 {
+		if sm.LastCloseAt.IsZero() {
+			sm.LastCloseAt = now // streak restored without a close time: start the cooldown now
+		} else if now.Sub(sm.LastCloseAt) > lossStreakCooldown {
+			sm.ConsecutiveLosses = 0
+			sm.ScalpingDisabled = false
+			sm.ScalpingDisabledReason = ""
+			sm.RecentPnlWindow = nil // otherwise the next close re-disables scalping at once
+		}
+	}
 
 	orders := e.activeOrders[symbol]
 	latency := e.cfg.OrderLatency
@@ -3214,8 +3234,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if sm.OBI < -0.20 && convictionUp < buyThreshold {
 			allowBuy = false // Order book collapse defense: thin bid depth requires >= 0.72 conviction
 		}
-		if currentInv > 0 && convictionUp < buyThreshold {
-			allowBuy = false // Position accumulation gate: adding to existing long requires >= buyThreshold
+		if convictionUp < buyThreshold {
+			allowBuy = false // Opening or adding to a long requires >= buyThreshold conviction
 		}
 		if currentInv == 0 && sm.ScalpingDisabled && convictionUp < 0.50 {
 			allowBuy = false // Patient swing mode: only open long in confirmed upward trend direction
@@ -3308,7 +3328,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			if sm.OBI > 0.20 && convictionUp > sellThreshold {
 				allowSell = false // Order book surge defense: thin ask depth requires <= 0.28 conviction
 			}
-			if currentInv < 0 && convictionUp > sellThreshold {
+			if convictionUp > sellThreshold {
 				allowSell = false // Position accumulation gate: adding to existing short requires <= sellThreshold
 			}
 			if currentInv == 0 && sm.ScalpingDisabled && convictionUp > 0.50 {
@@ -3516,10 +3536,12 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 	realizedPnL := 0.0
 	isClosing := false
 
+	prevAbsSize := math.Abs(pos.Size)
+	closeQty := 0.0
 	if side == "BUY" {
 		if pos.Size < -1e-7 { // Closing short
 			isClosing = true
-			closeQty := math.Min(-pos.Size, qty)
+			closeQty = math.Min(-pos.Size, qty)
 			realizedPnL = closeQty * (pos.AvgEntryPrice - orderPrice)
 		}
 		newSize := pos.Size + qty
@@ -3546,7 +3568,7 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 	} else {
 		if pos.Size > 1e-7 { // Closing long
 			isClosing = true
-			closeQty := math.Min(pos.Size, qty)
+			closeQty = math.Min(pos.Size, qty)
 			realizedPnL = closeQty * (orderPrice - pos.AvgEntryPrice)
 		}
 		newSize := pos.Size - qty
@@ -3576,6 +3598,22 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 	netRealizedPnL := realizedPnL - feeUSDT
 	e.state.Cash += netRealizedPnL
 
+	// Round-trip PnL for win/loss classification also carries the entry fees of the closed quantity
+	roundTripPnL := netRealizedPnL
+	closeFee := feeUSDT * closeQty / qty
+	openFee := feeUSDT - closeFee
+	if isClosing && prevAbsSize > 0 {
+		entryShare := pos.EntryFeesUSDT * math.Min(1.0, closeQty/prevAbsSize)
+		pos.EntryFeesUSDT -= entryShare
+		roundTripPnL = (realizedPnL - closeFee) - entryShare
+	}
+	if math.Abs(pos.Size) < 1e-7 {
+		pos.EntryFeesUSDT = 0
+	}
+	if openFee > 0 && math.Abs(pos.Size) > 1e-7 {
+		pos.EntryFeesUSDT += openFee
+	}
+
 	pos.RealizedPnL += netRealizedPnL
 	pos.TotalTrades++
 	pos.MakerTrades++
@@ -3598,49 +3636,7 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 	e.state.RealizedPnL += netRealizedPnL
 	e.state.TotalTrades++
 	if isClosing { // Round-trip closing fill
-		sm := e.symMicro[symbol]
-		if sm != nil {
-			if netRealizedPnL > 0 {
-				e.state.WinningTrades++
-				sm.ConsecutiveLosses = 0
-			} else {
-				e.state.LosingTrades++
-				sm.ConsecutiveLosses++
-			}
-			sm.RecentPnlWindow = append(sm.RecentPnlWindow, netRealizedPnL)
-			if len(sm.RecentPnlWindow) > 10 {
-				sm.RecentPnlWindow = sm.RecentPnlWindow[1:]
-			}
-
-			// Autonomous Scalping Viability Evaluation:
-			// If tight scalping is leaking money or suffering adverse markouts, stop scalping entirely
-			viable, reason := sm.EvaluateScalpingViability(e.tcaTracker)
-			if !viable {
-				if !sm.ScalpingDisabled {
-					sm.ScalpingDisabled = true
-					sm.ScalpingDisabledReason = reason
-					fmt.Printf("[SELF-IMPROVING] %s: Scalping disabled (%s) -> Transitioned to Patient Swing Liquidity Provision.\n", symbol, reason)
-				}
-				// Money leakage detected: trigger autonomous walk-forward backtest recalibration!
-				e.maybeTriggerAutoRecalibrationLocked(symbol)
-			} else if sm.ScalpingDisabled && sm.ConsecutiveLosses == 0 && (sm.VpinCalc == nil || sm.VpinCalc.VPIN() < 0.55) {
-				sm.ScalpingDisabled = false
-				sm.ScalpingDisabledReason = ""
-				fmt.Printf("[SELF-IMPROVING] %s: Market conditions normalized -> Resuming standard two-sided GLFT scalping.\n", symbol)
-			}
-		} else {
-			if netRealizedPnL > 0 {
-				e.state.WinningTrades++
-			} else {
-				e.state.LosingTrades++
-			}
-		}
-	}
-
-	if closed := e.state.WinningTrades + e.state.LosingTrades; closed > 0 {
-		e.state.WinRate = float64(e.state.WinningTrades) / float64(closed) * 100.0
-	} else if e.state.TotalTrades > 0 {
-		e.state.WinRate = float64(e.state.WinningTrades) / float64(e.state.TotalTrades) * 100.0
+		e.recordCloseOutcomeLocked(symbol, roundTripPnL, true)
 	}
 	e.updateTaxReservesLocked()
 

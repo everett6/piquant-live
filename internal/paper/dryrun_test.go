@@ -858,6 +858,7 @@ func TestCleanResetPurgesLegacyStats(t *testing.T) {
 func TestAdaptiveMicrostructureFormulasAndProfitDecayRatchet(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := DefaultDryRunConfig(tempDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
 	cfg.EntryOffsetBps = 7.5
 	cfg.TargetProfitBps = 12.5
 
@@ -932,8 +933,8 @@ func TestAdaptiveMicrostructureFormulasAndProfitDecayRatchet(t *testing.T) {
 
 	// Evaluate after 30m of holding:
 	// decayFactor = exp(-1800 / 900) = exp(-2) ≈ 0.1353
-	// targetProfit = 6.25 + (12.5 - 6.25) * 0.1353 ≈ 6.25 + 0.846 = 7.096 bps net
-	// minProfitAsk = 2200 * (1 + (3.0 + 7.096)*1e-4) ≈ 2200 * (1 + 10.096*1e-4) ≈ 2202.22
+	// floor = 0.80 * 12.5 = 10.0 bps (TargetFloorFrac); targetProfit = 10 + 2.5 * 0.1353 ≈ 10.34 bps net
+	// minProfitAsk = 2200 * (1 + (3.0 + 10.34)*1e-4) ≈ 2202.93
 	engine.evaluateQuotesAndGating("ETHUSDT", 2200.00, now)
 	stDecay := engine.State()
 	var exitAsk *ActiveMakerOrder
@@ -947,19 +948,20 @@ func TestAdaptiveMicrostructureFormulasAndProfitDecayRatchet(t *testing.T) {
 		t.Fatalf("missing ETH exit ask after 30m holding")
 	}
 
-	// Net edge must be >= 6.0 bps net and < 12.5 bps base target
+	// Net edge must be >= the 10.0 bps floor and have decayed well below the 12.5 bps base target
 	netEdgeBps := (exitAsk.Price-2200.00)/2200.00*1e4 - 3.0 // subtracting 3.0 bps fee
-	if netEdgeBps < 6.0 {
-		t.Errorf("expected net edge >= 6.0 bps floor, got %f", netEdgeBps)
+	if netEdgeBps < 10.0 {
+		t.Errorf("expected net edge >= 10.0 bps floor, got %f", netEdgeBps)
 	}
-	if netEdgeBps > 9.0 {
-		t.Errorf("expected net edge to have decayed towards floor (< 9.0 bps), got %f", netEdgeBps)
+	if netEdgeBps > 11.0 {
+		t.Errorf("expected net edge to have decayed towards floor (< 11.0 bps), got %f", netEdgeBps)
 	}
 }
 
 func TestSelfImprovingScalpingDefenseAndRecalibration(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := DefaultDryRunConfig(tempDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
 	cfg.EntryOffsetBps = 7.5
 	cfg.TargetProfitBps = 12.5
 
@@ -1156,6 +1158,7 @@ func TestUSDCMarketMakingAndVolatilityAdaptiveQuoting(t *testing.T) {
 	// 3. Test USDC market making quote placement with volatility adaptation
 	tempDir := t.TempDir()
 	cfg := DefaultDryRunConfig(tempDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
 	cfg.Symbols = []string{"BTCUSDC", "ETHUSDC"}
 	cfg.EntryOffsetBps = 7.5
 	ring := engine.NewSPSCRing(1024)
@@ -1224,6 +1227,7 @@ func TestUSDCMarketMakingAndVolatilityAdaptiveQuoting(t *testing.T) {
 func TestAgileZeroFeeMakerQuotingAndTrailingProfitRatchet(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
 	cfg.ZeroFeeMaker = true
 	cfg.SpotOnly = true
 	cfg.EntryOffsetBps = 1.75
@@ -1310,6 +1314,7 @@ func TestAgileZeroFeeMakerQuotingAndTrailingProfitRatchet(t *testing.T) {
 func TestPageHinkleyConceptDriftQuoteWidening(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
 	cfg.Symbols = []string{"BTCUSDT"}
 
 	ring := engine.NewSPSCRing(1024)
