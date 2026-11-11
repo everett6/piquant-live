@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2307,24 +2308,27 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		high15m := midPrice
 		low15m := midPrice
 
-		for i := len(sm.MidHistory) - 1; i >= 0; i-- {
-			pt := sm.MidHistory[i]
-			if pt.Mid > high15m {
-				high15m = pt.Mid
-			}
-			if pt.Mid < low15m {
-				low15m = pt.Mid
-			}
-			if p1m == 0 && !pt.Time.After(t1m) {
-				p1m = pt.Mid
-			}
-			if p5m == 0 && !pt.Time.After(t5m) {
-				p5m = pt.Mid
-			}
-			if p15m == 0 && !pt.Time.After(t15m) {
-				p15m = pt.Mid
+		// MidHistory is strictly time-ordered (appends need now >= last+500ms), so
+		// lookback prices come from a binary search; the high/low range is a
+		// tight scan over the whole retained window (as before).
+		hist := sm.MidHistory
+		for i := range hist {
+			if m := hist[i].Mid; m > high15m {
+				high15m = m
+			} else if m < low15m {
+				low15m = m
 			}
 		}
+		lookback := func(t time.Time) float64 {
+			i := sort.Search(len(hist), func(j int) bool { return hist[j].Time.After(t) })
+			if i == 0 {
+				return 0
+			}
+			return hist[i-1].Mid
+		}
+		p1m = lookback(t1m)
+		p5m = lookback(t5m)
+		p15m = lookback(t15m)
 
 		if p1m > 0 {
 			sm.Ret1mBps = (midPrice - p1m) / p1m * 1e4

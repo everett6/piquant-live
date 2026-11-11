@@ -2,6 +2,7 @@ package alpha
 
 import (
 	"math"
+	"sort"
 	"time"
 )
 
@@ -192,31 +193,29 @@ func (mt *MomentumTracker) Update(rawPrice float64, now time.Time) MultiHorizonM
 	high15m := filteredPrice
 	low15m := filteredPrice
 
-	for i := len(mt.History) - 1; i >= 0; i-- {
-		pt := mt.History[i]
-		if !pt.Time.Before(t15m) {
-			if pt.Price > high15m {
-				high15m = pt.Price
-			}
-			if pt.Price < low15m {
-				low15m = pt.Price
-			}
+	// History is strictly time-ordered (a point is only appended when now is at
+	// least 250ms past the last one), so each lookback price is the latest
+	// point at or before the cutoff, found by binary search; the 15m
+	// high/low scan only touches the 15m window.
+	hist := mt.History
+	atOrBefore := func(t time.Time) float64 {
+		i := sort.Search(len(hist), func(j int) bool { return hist[j].Time.After(t) })
+		if i == 0 {
+			return 0
 		}
-
-		if p30s == 0 && !pt.Time.After(t30s) {
-			p30s = pt.Price
-		}
-		if p5m == 0 && !pt.Time.After(t5m) {
-			p5m = pt.Price
-		}
-		if p15m == 0 && !pt.Time.After(t15m) {
-			p15m = pt.Price
-		}
-		if p1h == 0 && !pt.Time.After(t1h) {
-			p1h = pt.Price
-		}
-		if p1d == 0 && !pt.Time.After(t1d) {
-			p1d = pt.Price
+		return hist[i-1].Price
+	}
+	p30s = atOrBefore(t30s)
+	p5m = atOrBefore(t5m)
+	p15m = atOrBefore(t15m)
+	p1h = atOrBefore(t1h)
+	p1d = atOrBefore(t1d)
+	start := sort.Search(len(hist), func(j int) bool { return !hist[j].Time.Before(t15m) })
+	for i := start; i < len(hist); i++ {
+		if pr := hist[i].Price; pr > high15m {
+			high15m = pr
+		} else if pr < low15m {
+			low15m = pr
 		}
 	}
 
