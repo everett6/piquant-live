@@ -85,3 +85,27 @@ within 5 points of the floor (S2/S3), losing months, worst month, months ≥ 7%,
 - I expect S2 or S3 to pass. None will reach 7%/month: the earlier rounds show 7% has needed −73% or worse.
 - **Caveat:** the design was informed by the full sample, so a pass here is not out-of-sample evidence. Forward
   paper trading is the real test.
+
+## Result (run once, 2026-11-11): all three FAIL. No ledger change.
+
+| Variant | Full %/mo | Max DD | Stress DD | Stress %/mo | Worst day | Stops |
+|---|---|---|---|---|---|---|
+| P1 (comparator, rebuilt in the new simulator) | +8.50 | −84% | −98% | +1.18 | −32.5% | 0 |
+| S1 stop | +2.23 | −97% | −100% | −4.76 | −96.5% | 318 |
+| S2 stop + Grossman–Zhou | −0.41 | −56% | −32% | −0.27 | −46.4% | 52 |
+| S3 stop + GZ + ensemble | −0.26 | −58% | −33% | −0.26 | −49.4% | 57 |
+
+The simulator reproduces P1's published +8.50%/month and −84% exactly.
+
+**Why, diagnosed after the run:**
+- **A bad price print.** The Coinbase 1m file has one BTC bar at $0.06 on 2017-04-15 23:02 UTC (o=h=l=c, 0.78
+  BTC volume; BTC traded at ~$1,175). S1's stop "filled" there: −96.5% in one day. It is the only bar in either
+  file below 50% of the prior daily close, apart from the two real ETH GDAX flash-crash bars of 2017-06-21.
+  Those filled at the stop level, since their bars opened above it.
+- **Cash lock.** That one day pushed S2/S3 through the 70% floor. The Grossman–Zhou cap is then 0, and with an
+  all-time peak it stays 0 forever. Both sat in cash from 2017-04-15 on, so C, B, discovery and A show 0.00%.
+  This weakness is structural: any gap through the floor does it, not only a bad print.
+- **Even without the bad bar, S1's cap allows −24% days.** In Dec 2017 both coins stopped at the 12% cap, and
+  2x × 12% = 24%.
+
+Trials charged: 720.
