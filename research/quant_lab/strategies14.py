@@ -124,3 +124,11 @@ def build_sleeve(daily: pd.DataFrame, min1: pd.DataFrame, index: pd.DatetimeInde
     level = np.full(len(index), np.nan)
     level[1:] = d["c"].to_numpy()[:-1] * (1 - s[:-1])  # set at close i-1, live during day i
     return {"daily": d, "signal": sig, "stopfill": first_touch(min1, index, level)}
+
+
+def drop_bad_prints(min1: pd.DataFrame) -> pd.DataFrame:
+    """PREREG15 data rule: drop 1m bars with o == h == l == c below 50% of the prior daily close."""
+    prev = lab.resample(min1, "1D")["c"].shift(1).reindex(min1.index.floor("D")).to_numpy()
+    flat = (min1["o"] == min1["h"]) & (min1["h"] == min1["l"]) & (min1["l"] == min1["c"])
+    bad = flat.to_numpy() & (min1["c"].to_numpy() < 0.5 * prev)
+    return min1[~bad]

@@ -91,6 +91,15 @@ def test_costs_charged_on_entry_and_stop():
     assert abs(out["r"].iloc[2] + 2 * 1e-3 + 2 * 1e-3) < 1e-12  # stop exit + re-entry at close
 
 
+def test_drop_bad_prints_only_flat_impossible_bars():
+    idx = pd.date_range("2023-01-01", periods=2 * 1440, freq="min", tz="UTC")
+    m = pd.DataFrame({"o": 100.0, "h": 100.0, "l": 100.0, "c": 100.0, "v": 1.0}, index=idx)
+    m.iloc[1500] = [0.06, 0.06, 0.06, 0.06, 1.0]      # flat impossible print: dropped
+    m.iloc[1600] = [100.0, 100.0, 0.1, 100.0, 1.0]     # real wick (flash crash): kept
+    out = S.drop_bad_prints(m)
+    assert len(out) == len(m) - 1 and idx[1500] not in out.index and idx[1600] in out.index
+
+
 if __name__ == "__main__":
     for k, f in list(globals().items()):
         if k.startswith("test_"):
