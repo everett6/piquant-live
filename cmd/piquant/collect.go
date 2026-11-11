@@ -25,7 +25,9 @@ func runCollect(ctx context.Context, args []string) error {
 	gdeltDays := fs.Int("gdelt-days", 90, "days of GDELT headlines to backfill")
 	noBackfill := fs.Bool("no-backfill", false, "skip historical backfill")
 	minFree := fs.Float64("min-free-gb", 20, "pause writing below this much free disk")
-	ticks := fs.Bool("ticks", true, "record every Coinbase trade and 1s top-10 order-book snapshots (ticks/, book/)")
+	ticks := fs.Bool("ticks", true, "record every trade and 1s top-10 order-book snapshots (ticks/, book/)")
+	tickVenues := fs.String("tick-venues", "coinbase,binanceus,kraken", "venues for tick recording")
+	tickBases := fs.String("tick-bases", "BTC,ETH,SOL", "coins for tick recording on every venue")
 	gdeltSpacing := fs.Duration("gdelt-spacing", 20*time.Second, "delay between GDELT requests (their limit is ~1 per 5s, enforced strictly)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -93,8 +95,23 @@ func runCollect(ctx context.Context, args []string) error {
 			}
 		}()
 	}
-	if *ticks && len(cbProds) > 0 {
-		rec, err := collect.NewTickRecorder(collect.TickConfig{Dir: *dir, Products: cbProds, MinFreeGB: *minFree})
+	if *ticks {
+		tc := collect.TickConfig{Dir: *dir, MinFreeGB: *minFree}
+		venues := strings.Split(*tickVenues, ",")
+		for _, b := range strings.Split(*tickBases, ",") {
+			b = strings.ToUpper(strings.TrimSpace(b))
+			for _, v := range venues {
+				switch strings.TrimSpace(v) {
+				case "coinbase":
+					tc.Products = append(tc.Products, b+"-USD")
+				case "binanceus":
+					tc.BinanceUS = append(tc.BinanceUS, b+"USDT")
+				case "kraken":
+					tc.Kraken = append(tc.Kraken, b+"/USD")
+				}
+			}
+		}
+		rec, err := collect.NewTickRecorder(tc)
 		if err != nil {
 			return err
 		}

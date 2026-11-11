@@ -137,3 +137,81 @@ func TestReadFrameFragmentsAndSizes(t *testing.T) {
 		t.Fatal(len(p), err)
 	}
 }
+
+func newMultiRecorder(t *testing.T) *TickRecorder {
+	t.Helper()
+	r, err := NewTickRecorder(TickConfig{Dir: t.TempDir(), BinanceUS: []string{"BTCUSDT"}, Kraken: []string{"BTC/USD"},
+		Depth: 2, MinFreeGB: 0.001})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestBinanceTradeAndDepth(t *testing.T) {
+	r := newMultiRecorder(t)
+	now := time.Now()
+	msgs := []string{
+		`{"stream":"btcusdt@trade","data":{"e":"trade","p":"100.5","q":"0.2","T":1700000000000,"m":true,"t":7}}`,
+		`{"stream":"btcusdt@trade","data":{"e":"trade","p":"100.6","q":"0.1","T":1700000000100,"m":false,"t":9}}`,
+		`{"stream":"btcusdt@depth10@1000ms","data":{"bids":[["100.4","1"],["100.3","2"],["100.2","3"]],"asks":[["100.6","1"],["100.7","2"]]}}`,
+	}
+	for _, m := range msgs {
+		if err := r.handleBinance([]byte(m), now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	k := "binanceus-BTCUSDT"
+	if r.status.Trades[k] != 2 || r.status.TradeGaps[k] != 1 {
+		t.Fatalf("status %+v", r.status)
+	}
+	r.snapshotBooks(time.Unix(1700000000, 0))
+	r.flush()
+	var trades, books [][]byte
+	_ = ReadRows(filepath.Join(r.cfg.Dir, "ticks", k, "2023-11-14.jsonl.gz"), func(l []byte) error {
+		trades = append(trades, append([]byte(nil), l...))
+		return nil
+	})
+	_ = ReadRows(filepath.Join(r.cfg.Dir, "book", k, "2023-11-14.jsonl.gz"), func(l []byte) error {
+		books = append(books, append([]byte(nil), l...))
+		return nil
+	})
+	if len(trades) != 2 || !bytes.Contains(trades[0], []byte(`"side":"s"`)) || !bytes.Contains(trades[1], []byte(`"side":"b"`)) {
+		t.Fatalf("trades %s", trades)
+	}
+	if len(books) != 1 || !bytes.Contains(books[0], []byte(`"b":[[100.4,1],[100.3,2]]`)) || !bytes.Contains(books[0], []byte(`"upd":1`)) {
+		t.Fatalf("books %s", books)
+	}
+}
+
+func TestKrakenTradeAndBookTruncation(t *testing.T) {
+	r := newMultiRecorder(t)
+	now := time.Now()
+	msgs := []string{
+		`{"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"sell","price":100.1,"qty":0.5,"trade_id":11,"timestamp":"2023-11-14T22:13:20Z"},{"symbol":"BTC/USD","side":"buy","price":100.2,"qty":0.1,"trade_id":12,"timestamp":"2023-11-14T22:13:21Z"}]}`,
+		`{"channel":"book","type":"snapshot","data":[{"symbol":"BTC/USD","bids":[{"price":100.0,"qty":1},{"price":99.9,"qty":2}],"asks":[{"price":100.2,"qty":1},{"price":100.3,"qty":2}]}]}`,
+		// a better bid pushes 99.9 past depth 2 (Kraken does not send its delete); then 100.05 is removed
+		`{"channel":"book","type":"update","data":[{"symbol":"BTC/USD","bids":[{"price":100.05,"qty":3}],"asks":[]}]}`,
+		`{"channel":"book","type":"update","data":[{"symbol":"BTC/USD","bids":[{"price":100.05,"qty":0},{"price":99.8,"qty":4}],"asks":[]}]}`,
+	}
+	for _, m := range msgs {
+		if err := r.handleKraken([]byte(m), now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	k := "kraken-BTC-USD"
+	b := r.book[k]
+	if _, stale := b.bids[99.9]; stale {
+		t.Fatal("level beyond depth was kept")
+	}
+	top := topN(b.bids, 2, true)
+	if len(top) != 2 || top[0][0] != 100.0 || top[1][0] != 99.8 {
+		t.Fatalf("bids %v", top)
+	}
+	if r.status.Trades[k] != 2 {
+		t.Fatalf("trades %d", r.status.Trades[k])
+	}
+	if err := r.handleKraken([]byte(`{"method":"subscribe","success":false,"error":"bad symbol"}`), now); err == nil {
+		t.Fatal("subscribe failure ignored")
+	}
+}
