@@ -72,8 +72,8 @@
   (internal/backtest/auto_recalibrate.go:38), but the collector writes daily `*.jsonl.gz` files. It logs
   "no tick partitions found" every hour.
 - **There is no email sender anywhere.** Alerts must be built.
-- **Coinbase futures paper fills are priced off the Binance.US spot book** (internal/paper/region.go:47). They
-  should use Coinbase's own book.
+- **Futures paper fills use the Coinbase spot feed as a stand-in for the futures book.** The review said
+  Binance.US, from a stale comment (fixed). Basis and depth still differ from real nano futures fills.
 - **No Kraken order connector exists.** Only market data has been recorded, since 2026-11-11.
 - **The engine has no "needs a human restart" lock.** Only the PAPER50 trend profile has `--reset`.
 - **Disk:** at 50–100 MB/day, 110 GB free lasts about 3–5 years, minus other desktop use.
