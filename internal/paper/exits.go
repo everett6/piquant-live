@@ -28,7 +28,8 @@ func resetPositionLifecycle(pos *Position) {
 // recordCloseOutcomeLocked classifies a round-trip close as win, loss or scratch and
 // updates the loss streak and win rate. roundTripPnL must include entry and exit fees.
 // Caller must hold e.mu.
-func (e *DryRunEngine) recordCloseOutcomeLocked(symbol string, roundTripPnL float64, evaluateViability bool) {
+func (e *DryRunEngine) recordCloseOutcomeLocked(symbol string, roundTripPnL, notionalUSDT float64, reason string, evaluateViability bool) {
+	e.state.Expectancy.Record(reason, roundTripPnL, notionalUSDT)
 	sm := e.symMicro[strings.ToUpper(symbol)]
 	switch {
 	case roundTripPnL > winLossEpsilon:
@@ -137,7 +138,7 @@ func (e *DryRunEngine) takerExitLocked(symbol string, bestBid, bestAsk, midPrice
 	if e.riskSafeguard != nil {
 		e.riskSafeguard.OnFill(net, 0)
 	}
-	e.recordCloseOutcomeLocked(symbol, roundTrip, true)
+	e.recordCloseOutcomeLocked(symbol, roundTrip, valUSDT, reason, true)
 	e.updateTaxReservesLocked()
 
 	slippageVsMidBps := 0.0

@@ -53,6 +53,7 @@ type dryRunFlags struct {
 	enableCoinbase    bool
 	coinbaseWS        string
 	feedVenue         string
+	expBreaker        int
 	enableNews        bool
 	region            string
 	makerFeeBps       float64
@@ -103,6 +104,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.StringVar(&f.wsURL, "ws-url", "", "custom Binance public WebSocket URL (default auto)")
 	fs.BoolVar(&f.enableCoinbase, "coinbase", true, "enable Coinbase institutional USD lead-lag signal ingestor (default true)")
 	fs.StringVar(&f.coinbaseWS, "coinbase-ws", "", "custom Coinbase public WebSocket URL (default auto)")
+	fs.IntVar(&f.expBreaker, "expectancy-breaker", 0, "stop new entries after N closed trades if mean net bps/trade is < 0 at the upper 95% bound (0 = off)")
 	fs.StringVar(&f.feedVenue, "feed-venue", "auto", "primary market feed for fills and flow features: 'auto' (coinbase for us-futures, else binance), 'binance' or 'coinbase'")
 	fs.StringVar(&f.region, "region", paper.RegionUS, "trading region rules: 'us' (Binance.US spot, 1x, long-only), 'us-futures' (US regulated nano futures, up to 5x, long/short) or 'global'")
 	fs.Float64Var(&f.makerFeeBps, "maker-fee", -1, "override maker fee in bps (default: region schedule)")
@@ -245,6 +247,7 @@ func runDryRun(ctx context.Context, args []string) error {
 		}
 	}
 	paperCfg.MaxDrawdownPct = f.maxDD
+	paperCfg.ExpectancyBreakerMinTrades = f.expBreaker
 	if f.baseLev > 0 {
 		paperCfg.BaseLeverage = f.baseLev
 	}

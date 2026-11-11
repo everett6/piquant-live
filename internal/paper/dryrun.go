@@ -70,6 +70,9 @@ type DryRunConfig struct {
 	FundingBpsPerHour float64            // Futures funding cost charged on open notional per hour (default: 0)
 	MonthlyTargetPct  float64            // Goal controller monthly return target in % (default: 7)
 	TargetWinRatePct  float64            // Goal controller win-rate target in % (default: 60)
+	// ExpectancyBreakerMinTrades > 0 stops new entries (exits still run) once at least this many round trips
+	// have closed and the upper 95% bound of mean net bps per trade is below zero. 0 disables it.
+	ExpectancyBreakerMinTrades int
 	DisableCloudParams bool              // Ignore optimal_params.json hot-reloads (cloud/backtest-tuned overrides)
 }
 
@@ -215,6 +218,8 @@ type DryRunState struct {
 	AfterTaxReturnPct      float64                       `json:"after_tax_return_pct"`      // Post-tax return percentage
 	QuantOrchestrator      *orchestrator.OrchestratorReport `json:"quant_orchestrator,omitempty"` // Latency-adaptive multi-strategy orchestration
 	Goal                   GoalState                     `json:"goal"`                     // Self-adjusting monthly-target controller
+	Expectancy             ExpectancyState               `json:"expectancy"`               // Net bps per trade by exit reason vs breakeven
+	ExpectancyBreakerOn    bool                          `json:"expectancy_breaker_on"`    // New entries stopped: negative edge confirmed
 	Latency                LatencySnapshot               `json:"latency"`                  // Measured venue latency and chosen strategy regime
 	MFTDiagnostics         map[string]MFTDiagnosticSnapshot `json:"mft_diagnostics,omitempty"` // Real-time MFT decision telemetry per symbol
 }
@@ -984,7 +989,7 @@ func (e *DryRunEngine) emergencyFlattenLocked(reason string) {
 
 			e.state.RealizedPnL += netRealizedPnL
 			e.state.TotalTrades++
-			e.recordCloseOutcomeLocked(sym, roundTripPnL, false)
+			e.recordCloseOutcomeLocked(sym, roundTripPnL, valUSDT, "LIQUIDATION", false)
 			fillRec := TradeRecord{
 				Timestamp:   time.Now().UTC(),
 				Symbol:      sym,
@@ -2420,6 +2425,25 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		return
 	}
 
+	// Negative-expectancy breaker (opt-in): when flat, stop opening new trades once the run's own closed
+	// trades show mean net bps < 0 even at the upper 95% bound. Open positions keep their normal exits.
+	if e.cfg.ExpectancyBreakerMinTrades > 0 {
+		e.mu.Lock()
+		pos := e.state.Positions[symbol]
+		flat := pos == nil || math.Abs(pos.Size) < 1e-8
+		if flat && e.state.Expectancy.NegativeEdgeConfirmed(e.cfg.ExpectancyBreakerMinTrades) {
+			if !e.state.ExpectancyBreakerOn {
+				e.state.ExpectancyBreakerOn = true
+				fmt.Printf("[EXPECTANCY] negative edge confirmed after %d trades (mean %.1f bps, upper95 %.1f bps): new entries stopped\n",
+					e.state.Expectancy.All.N, e.state.Expectancy.All.MeanBps, e.state.Expectancy.Upper95Bps)
+			}
+			e.activeOrders[symbol] = nil
+			e.mu.Unlock()
+			return
+		}
+		e.mu.Unlock()
+	}
+
 	// Check Macro Event Shield (Zero-cost economic release defense)
 	var macroSt macro.MacroState
 	if e.macroGuardian != nil {
@@ -3710,7 +3734,7 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 	e.state.RealizedPnL += netRealizedPnL
 	e.state.TotalTrades++
 	if isClosing { // Round-trip closing fill
-		e.recordCloseOutcomeLocked(symbol, roundTripPnL, true)
+		e.recordCloseOutcomeLocked(symbol, roundTripPnL, closeQty*orderPrice, "MAKER_EXIT", true)
 	}
 	e.updateTaxReservesLocked()
 
