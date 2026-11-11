@@ -63,3 +63,23 @@ Also reported: win rate, trades per month, gross bps, and the leverage (≤ 5x) 
 - I expect both to fail.
 
 One run. No variants of failed tests.
+
+## Result (run once, 2026-11-11): both FAIL
+
+### T1 session × regime drift
+- **Selected on discovery:** Europe/UP (+11.8 bps, t 2.91) and Late/DOWN (+10.1 bps, t 2.28). Both long.
+- **Holdouts, net bps per trade:** A −11.9, B −1.5, C −9.2, D −14.1.
+- **Pooled:** −8.9 net, +3.6 gross, t −3.0, −3.0%/mo at 1x.
+- The discovery drifts mostly did not carry over: pooled gross +3.6 bps vs 14 bps cost.
+
+### T2 US opening-range breakout
+- **Holdouts, net bps per trade:** A −6.7, B −11.2, C −4.6, D +11.4.
+- **Pooled:** −2.7 net, **+9.7 gross**, t −0.8, win 36%, about 20 trades/month, −0.8%/mo at 1x.
+
+### Notes
+- T2 is the first intraday entry with positive gross edge on every holdout (+1.2 to +23.8 bps), but that is
+  below the 14 bps taker round trip.
+- Under the rules it failed. It is not retested with different costs or parameters.
+- The recorded tick data may later show whether cheaper execution exists for breakouts. That would need a
+  new mechanism, pre-registered on new data.
+- No engine change.
