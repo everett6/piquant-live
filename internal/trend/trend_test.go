@@ -183,3 +183,26 @@ func TestLoadAddsMissingVariants(t *testing.T) {
 		t.Fatalf("%v %+v", err, got)
 	}
 }
+
+func TestFastExitSleeveLeavesBelowSMA20(t *testing.T) {
+	v := Variant{Lev: 2, SMA: 50, ExitSMA: 20}
+	up := days("2024-01-01", rising(80, 100, 1)...) // close well above both SMAs
+	if _, tgt := v.sleeve(0, 0, up); tgt != 2 {
+		t.Fatalf("enter: %v", tgt)
+	}
+	// drop below SMA20 but stay above SMA50: P1 rule holds, fast exit leaves
+	h := append(append([]Day{}, up...), Day{Date: "2024-03-21", Close: 168})
+	if m20, _ := sma(h, 20); !(168 < m20) {
+		t.Fatalf("setup: sma20 %v", m20)
+	}
+	if m50, _ := sma(h, 50); !(168 > m50) {
+		t.Fatalf("setup: sma50 %v", m50)
+	}
+	if _, tgt := v.sleeve(2, 0, h); tgt != 0 {
+		t.Fatalf("fast exit kept %v", tgt)
+	}
+	p1 := Variant{Lev: 2, SMA: 50}
+	if _, tgt := p1.sleeve(2, 0, h); tgt != 2 {
+		t.Fatalf("P1 should hold, got %v", tgt)
+	}
+}

@@ -71,3 +71,12 @@ One run. No variants after results.
   | 2x | −84% | 8.5%/mo |
 
   No tested rule has ≥7%/month with a drawdown better than about −73%.
+
+## Post-hoc decision (user, 2026-11-11): track R3 forward on paper
+- **The decision:** at the user's request, R3 (fast exit) is added to the trend ledger as
+  `R3_btc_eth_fastexit_2x`. It starts flat on 2026-11-11, beside P1.
+- **What this is:** a post-hoc choice made after seeing the results, not a pass. It is a forward comparison on
+  unseen prices.
+- **What it does not change:** P1 remains the variant that passed a pre-registered rule.
+- **What would make R3 the recommended core:** forward results only, scored the same way as PREREG6. The scoring
+  comes when 12 complete months of forward data exist.

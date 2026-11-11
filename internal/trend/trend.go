@@ -16,13 +16,14 @@ import (
 // Variant is a frozen PREREG6 strategy definition.
 type Variant struct {
 	Name        string  `json:"name"`
-	Lev         float64 `json:"lev"`            // position when trend holds (0 when not); BH holds Lev always
-	FeeBps      float64 `json:"fee_bps"`        // per unit of turnover
-	SlipBps     float64 `json:"slip_bps"`       // per unit of turnover
-	FundingBpsH float64 `json:"funding_bps_h"`  // per hour per unit of |position|
-	SMA         int     `json:"sma"`            // 0 = always hold (benchmark)
-	KillDD      float64 `json:"kill_dd"`        // stop the variant at this drawdown from peak (0 = never)
-	Pair        bool    `json:"pair,omitempty"` // PREREG11: half BTC, half ETH sleeve, each Lev when above its own SMA
+	Lev         float64 `json:"lev"`                // position when trend holds (0 when not); BH holds Lev always
+	FeeBps      float64 `json:"fee_bps"`            // per unit of turnover
+	SlipBps     float64 `json:"slip_bps"`           // per unit of turnover
+	FundingBpsH float64 `json:"funding_bps_h"`      // per hour per unit of |position|
+	SMA         int     `json:"sma"`                // 0 = always hold (benchmark)
+	KillDD      float64 `json:"kill_dd"`            // stop the variant at this drawdown from peak (0 = never)
+	Pair        bool    `json:"pair,omitempty"`     // PREREG11: half BTC, half ETH sleeve, each Lev when above its own SMA
+	ExitSMA     int     `json:"exit_sma,omitempty"` // PREREG13 R3: also exit below SMA(ExitSMA); enter only at/above it
 }
 
 // Variants are frozen by PREREG6.
@@ -32,6 +33,9 @@ var Variants = []Variant{
 	{Name: "BH", Lev: 1, SMA: 0},
 	// PREREG11 P1 (passed 2026-11-11, research/quant_lab/PREREG11.md): stepped by AdvanceETH, not Advance.
 	{Name: "P1_btc_eth_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true},
+	// PREREG13 R3 fast exit: failed that round's -50% drawdown bar but beat P1 on return and drawdown in the
+	// backtest; tracked forward on paper at the user's request (2026-11-11), post hoc, for comparison only.
+	{Name: "R3_btc_eth_fastexit_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, ExitSMA: 20, Pair: true},
 }
 
 // Day is one completed UTC daily candle.
@@ -208,8 +212,20 @@ func (st *State) AdvanceETH(days []Day) int {
 // sleeve returns one leg's day return (held position, funding, rebalancing cost) and its new target.
 func (v Variant) sleeve(pos, bar float64, hist []Day) (ret, target float64) {
 	ret = pos*bar - math.Abs(pos)*v.FundingBpsH*24*1e-4
-	if m, ok := sma(hist, v.SMA); ok && hist[len(hist)-1].Close > m {
-		target = v.Lev
+	c := hist[len(hist)-1].Close
+	if m, ok := sma(hist, v.SMA); ok {
+		switch {
+		case v.ExitSMA <= 0:
+			if c > m {
+				target = v.Lev
+			}
+		default:
+			if f, ok2 := sma(hist, v.ExitSMA); ok2 {
+				if (pos > 0 && c >= f && c >= m) || (pos <= 0 && c > m && c >= f) {
+					target = v.Lev
+				}
+			}
+		}
 	}
 	ret -= math.Abs(target-pos) * (v.FeeBps + v.SlipBps) * 1e-4
 	return ret, target
