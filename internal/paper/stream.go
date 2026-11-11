@@ -187,6 +187,18 @@ func (m *MarketStreamIngestor) Stats() (total, depths, trades, gaps, reconnects,
 }
 
 // GetL2Book returns a clone of the current in-memory L2 book for a symbol.
+// SymbolForID returns the symbol a ring event's SymbolID refers to ("" if unknown).
+func (m *MarketStreamIngestor) SymbolForID(id uint16) string {
+	m.booksMu.RLock()
+	defer m.booksMu.RUnlock()
+	for sym, sid := range m.symbolIDs {
+		if sid == id {
+			return sym
+		}
+	}
+	return ""
+}
+
 func (m *MarketStreamIngestor) GetL2Book(symbol string) (*marketdata.L2OrderBook, bool) {
 	m.booksMu.RLock()
 	defer m.booksMu.RUnlock()
