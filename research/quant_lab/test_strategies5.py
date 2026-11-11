@@ -64,6 +64,25 @@ def test_regime_months():
     assert S5.regime_months(m).tolist() == ["bear", "flat", "bull"]
 
 
+def test_vt_positions_scale_with_vol_and_gate():
+    rng = np.random.default_rng(0)
+    calm = 100 * np.exp(np.cumsum(np.r_[rng.normal(0.002, 0.01, 60)]))
+    d = _daily(calm)
+    pos = S5.vt_positions(d, 20, 1.4, 3.0)
+    assert pos[:29].sum() == 0
+    vol = d["c"].pct_change().rolling(30).std().iloc[-1] * np.sqrt(365)
+    if d["c"].iloc[-1] > d["c"].iloc[-20:].mean():
+        assert abs(pos[-1] - min(3.0, 1.4 / vol)) < 1e-12
+
+
+def test_two_sleeve_cash_before_listing():
+    idx = pd.date_range("2016-01-01", periods=4, freq="D", tz="UTC")
+    a = pd.Series([0.02, 0.02, 0.02, 0.02], index=idx)
+    b = pd.Series([0.04, 0.04], index=idx[2:])
+    r = S5.two_sleeve(a, b)
+    assert r.tolist() == [0.01, 0.01, 0.03, 0.03]
+
+
 if __name__ == "__main__":
     for k, f in list(globals().items()):
         if k.startswith("test_"):

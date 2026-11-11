@@ -57,3 +57,18 @@ def regime_months(bh_monthly: pd.Series, thr: float = 0.05) -> pd.Series:
     """'bear' if buy-and-hold month < -thr, 'bull' if > thr, else 'flat'."""
     return pd.Series(np.where(bh_monthly < -thr, "bear", np.where(bh_monthly > thr, "bull", "flat")),
                      index=bh_monthly.index)
+
+
+def vt_positions(daily: pd.DataFrame, n: int, target_vol: float, cap: float) -> np.ndarray:
+    """PREREG11 P2: long min(cap, target_vol / trailing-30d annualised vol) when close > SMA(n), else flat."""
+    c = daily["c"]
+    sma = c.rolling(n, min_periods=n).mean()
+    vol = c.pct_change().rolling(30, min_periods=30).std() * np.sqrt(365)
+    lev = np.minimum(cap, target_vol / vol.to_numpy())
+    ok = (c > sma).to_numpy() & sma.notna().to_numpy() & np.isfinite(lev)
+    return np.where(ok, lev, 0.0)
+
+
+def two_sleeve(r_a: pd.Series, r_b: pd.Series) -> pd.Series:
+    """Equal halves, rebalanced daily; days where sleeve b has no data earn 0 on its half (cash)."""
+    return 0.5 * r_a + 0.5 * r_b.reindex(r_a.index).fillna(0.0)
