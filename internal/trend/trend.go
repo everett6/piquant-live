@@ -16,12 +16,13 @@ import (
 // Variant is a frozen PREREG6 strategy definition.
 type Variant struct {
 	Name        string  `json:"name"`
-	Lev         float64 `json:"lev"`           // position when trend holds (0 when not); BH holds Lev always
-	FeeBps      float64 `json:"fee_bps"`       // per unit of turnover
-	SlipBps     float64 `json:"slip_bps"`      // per unit of turnover
-	FundingBpsH float64 `json:"funding_bps_h"` // per hour per unit of |position|
-	SMA         int     `json:"sma"`           // 0 = always hold (benchmark)
-	KillDD      float64 `json:"kill_dd"`       // stop the variant at this drawdown from peak (0 = never)
+	Lev         float64 `json:"lev"`            // position when trend holds (0 when not); BH holds Lev always
+	FeeBps      float64 `json:"fee_bps"`        // per unit of turnover
+	SlipBps     float64 `json:"slip_bps"`       // per unit of turnover
+	FundingBpsH float64 `json:"funding_bps_h"`  // per hour per unit of |position|
+	SMA         int     `json:"sma"`            // 0 = always hold (benchmark)
+	KillDD      float64 `json:"kill_dd"`        // stop the variant at this drawdown from peak (0 = never)
+	Pair        bool    `json:"pair,omitempty"` // PREREG11: half BTC, half ETH sleeve, each Lev when above its own SMA
 }
 
 // Variants are frozen by PREREG6.
@@ -29,6 +30,8 @@ var Variants = []Variant{
 	{Name: "T1_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50},
 	{Name: "T2_futures_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, KillDD: 0.5},
 	{Name: "BH", Lev: 1, SMA: 0},
+	// PREREG11 P1 (passed 2026-11-11, research/quant_lab/PREREG11.md): stepped by AdvanceETH, not Advance.
+	{Name: "P1_btc_eth_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true},
 }
 
 // Day is one completed UTC daily candle.
@@ -52,6 +55,7 @@ type Ledger struct {
 	Peak    float64  `json:"peak"`
 	MaxDD   float64  `json:"max_dd"`
 	Pos     float64  `json:"pos"`
+	PosAlt  float64  `json:"pos_alt,omitempty"` // ETH sleeve position (pair variants)
 	Killed  bool     `json:"killed"`
 	Days    []DayRec `json:"days"`
 }
@@ -62,6 +66,8 @@ type State struct {
 	LastDate   string             `json:"last_date"`
 	History    []Day              `json:"history"` // closes used for the SMA (capped)
 	Ledgers    map[string]*Ledger `json:"ledgers"`
+	ETHHistory []Day              `json:"eth_history,omitempty"` // ETH closes for pair variants (capped)
+	ETHLast    string             `json:"eth_last,omitempty"`
 }
 
 const historyCap = 400
@@ -69,10 +75,20 @@ const historyCap = 400
 // NewState starts a forward test.
 func NewState(registered string) *State {
 	st := &State{Registered: registered, Ledgers: map[string]*Ledger{}}
-	for _, v := range Variants {
-		st.Ledgers[v.Name] = &Ledger{Variant: v, Equity: 1, Peak: 1}
-	}
+	st.ensureLedgers()
 	return st
+}
+
+// ensureLedgers adds variants missing from an older state file; they start flat at equity 1.
+func (st *State) ensureLedgers() {
+	if st.Ledgers == nil {
+		st.Ledgers = map[string]*Ledger{}
+	}
+	for _, v := range Variants {
+		if _, ok := st.Ledgers[v.Name]; !ok {
+			st.Ledgers[v.Name] = &Ledger{Variant: v, Equity: 1, Peak: 1}
+		}
+	}
 }
 
 func sma(h []Day, n int) (float64, bool) {
@@ -123,11 +139,95 @@ func (st *State) Advance(days []Day) int {
 		}
 		bar := d.Close/prev - 1
 		for _, name := range sortedKeys(st.Ledgers) {
-			st.Ledgers[name].step(d.Date, bar, st.History)
+			if l := st.Ledgers[name]; !l.Variant.Pair {
+				l.step(d.Date, bar, st.History)
+			}
 		}
 		n++
 	}
 	return n
+}
+
+func capDays(h []Day) []Day {
+	if len(h) > historyCap {
+		return h[len(h)-historyCap:]
+	}
+	return h
+}
+
+// SeedETH loads pre-registration ETH closes without touching any ledger.
+func (st *State) SeedETH(days []Day) {
+	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
+	for _, d := range days {
+		if d.Close > 0 && d.Date > st.ETHLast {
+			st.ETHHistory = append(st.ETHHistory, d)
+			st.ETHLast = d.Date
+		}
+	}
+	st.ETHHistory = capDays(st.ETHHistory)
+}
+
+// AdvanceETH steps pair variants for ETH days newer than ETHLast whose BTC day has already been applied by
+// Advance (so both sleeves see the same completed day). Idempotent like Advance.
+func (st *State) AdvanceETH(days []Day) int {
+	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
+	n := 0
+	for _, d := range days {
+		if d.Close <= 0 || d.Date <= st.ETHLast || d.Date > st.LastDate {
+			continue
+		}
+		bi := -1
+		for i := len(st.History) - 1; i > 0; i-- {
+			if st.History[i].Date == d.Date {
+				bi = i
+				break
+			}
+		}
+		var prevE float64
+		if len(st.ETHHistory) > 0 {
+			prevE = st.ETHHistory[len(st.ETHHistory)-1].Close
+		}
+		st.ETHHistory = capDays(append(st.ETHHistory, d))
+		st.ETHLast = d.Date
+		if prevE <= 0 || bi < 1 {
+			continue // seed only, or the BTC day is missing
+		}
+		btcHist := st.History[:bi+1]
+		barB := btcHist[bi].Close/btcHist[bi-1].Close - 1
+		barE := d.Close/prevE - 1
+		for _, name := range sortedKeys(st.Ledgers) {
+			if l := st.Ledgers[name]; l.Variant.Pair {
+				l.stepPair(d.Date, barB, barE, btcHist, st.ETHHistory)
+			}
+		}
+		n++
+	}
+	return n
+}
+
+// sleeve returns one leg's day return (held position, funding, rebalancing cost) and its new target.
+func (v Variant) sleeve(pos, bar float64, hist []Day) (ret, target float64) {
+	ret = pos*bar - math.Abs(pos)*v.FundingBpsH*24*1e-4
+	if m, ok := sma(hist, v.SMA); ok && hist[len(hist)-1].Close > m {
+		target = v.Lev
+	}
+	ret -= math.Abs(target-pos) * (v.FeeBps + v.SlipBps) * 1e-4
+	return ret, target
+}
+
+func (l *Ledger) stepPair(date string, barB, barE float64, histB, histE []Day) {
+	rb, tb := l.Variant.sleeve(l.Pos, barB, histB)
+	re, te := l.Variant.sleeve(l.PosAlt, barE, histE)
+	ret := 0.5*rb + 0.5*re // equal halves, rebalanced daily (as in the PREREG11 backtest)
+	l.Equity *= 1 + ret
+	if l.Equity > l.Peak {
+		l.Peak = l.Equity
+	}
+	if dd := 1 - l.Equity/l.Peak; dd > l.MaxDD {
+		l.MaxDD = dd
+	}
+	l.Pos, l.PosAlt = tb, te
+	l.Days = append(l.Days, DayRec{Date: date, Ret: ret, PosOut: 0.5*tb + 0.5*te, Equity: l.Equity})
 }
 
 func (l *Ledger) step(date string, bar float64, hist []Day) {
@@ -270,6 +370,7 @@ func Load(path string) (*State, error) {
 	if err := json.Unmarshal(b, &st); err != nil {
 		return nil, err
 	}
+	st.ensureLedgers()
 	return &st, nil
 }
 

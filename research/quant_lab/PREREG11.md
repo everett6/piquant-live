@@ -54,3 +54,26 @@ it, on paper.
 - I'd guess at most one of them passes.
 
 One run. No variants after results.
+
+## Result (run once, 2026-11-11): P1 PASSES, P2 fails (drawdown check)
+
+| | full geo %/mo | max DD | losing months | months ≥7% | worst month | D | C | B | discovery | A | stress |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| P1 BTC+ETH 2x | **+8.50** | −84% | 43% | 39% | −49% | +27.99 | +6.24 | +0.77 | +6.25 | +3.32 | +1.19 |
+| P2 vol-target | +8.75 | −88% | 45% | 41% | −46% | +25.08 | +9.16 | −1.30 | +7.67 | +3.10 | +0.72 |
+| core BTC 2x | +7.29 | −86% | 43% | 36% | −43% | +22.08 | +6.67 | −1.57 | +8.58 | −0.24 | −0.41 |
+
+- **Regime months (mean %/mo):**
+
+  | | Bear | Flat | Bull |
+  |---|---|---|---|
+  | P1 | −8.0 | −3.9 | +38.2 |
+  | Core | −12.7 | −7.1 | +37.0 |
+
+- **Honest reading:**
+  - P1 raises returns and turns A positive.
+  - The drawdown improvement is marginal: −84% vs −86%.
+  - Bear months still lose.
+  - D (2016–17) contributes much of the average.
+- **Action (per the rule):** P1 is added to the trend ledger as `P1_btc_eth_2x`. It starts flat on 2026-11-11
+  and runs in-process on the Pi once deployed. Paper only.

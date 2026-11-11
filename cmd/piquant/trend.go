@@ -77,7 +77,31 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 	if err != nil {
 		return st, fmt.Errorf("fetch daily candles: %w", err)
 	}
-	var pre, post []trend.Day
+	pre, post := splitDays(rows, now)
+	if st == nil {
+		st = trend.NewState(prereg6Date)
+	}
+	st.Seed(pre) // idempotent; also picks up the registration day once its candle completes
+	n := st.Advance(post)
+	// PREREG11 pair variant: ETH sleeve, stepped after the BTC day it shares.
+	ethRows, ethErr := collect.FetchCoinbaseDailyCandles(ctx, client, "ETH-USD", now.AddDate(0, 0, -150), now)
+	if ethErr == nil {
+		epre, epost := splitDays(ethRows, now)
+		st.SeedETH(epre)
+		st.AdvanceETH(epost)
+	}
+	if err := st.Save(path); err != nil {
+		return st, err
+	}
+	fmt.Printf("[TREND] %s advanced %d day(s), last %s (eth last %s)\n", now.Format(time.RFC3339), n, st.LastDate, st.ETHLast)
+	if ethErr != nil {
+		return st, fmt.Errorf("fetch ETH daily candles: %w", ethErr)
+	}
+	return st, nil
+}
+
+// splitDays keeps completed daily candles and splits them at the registration date (seed vs forward days).
+func splitDays(rows []collect.CandleRow, now time.Time) (pre, post []trend.Day) {
 	for _, r := range rows {
 		if time.Unix(r.T, 0).Add(24 * time.Hour).After(now) {
 			continue // today's candle is not complete
@@ -89,16 +113,7 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 			post = append(post, d)
 		}
 	}
-	if st == nil {
-		st = trend.NewState(prereg6Date)
-	}
-	st.Seed(pre) // idempotent; also picks up the registration day once its candle completes
-	n := st.Advance(post)
-	if err := st.Save(path); err != nil {
-		return st, err
-	}
-	fmt.Printf("[TREND] %s advanced %d day(s), last %s\n", now.Format(time.RFC3339), n, st.LastDate)
-	return st, nil
+	return pre, post
 }
 
 // runTrendCore keeps the 2x/1x trend ledger current and pushes the daily regime into the engine's trend gate,

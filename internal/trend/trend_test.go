@@ -135,3 +135,51 @@ func TestRegime(t *testing.T) {
 		t.Fatal("close below SMA must be DOWN")
 	}
 }
+
+func TestPairVariantHalvesSleevesAndWaitsForBTCDay(t *testing.T) {
+	st := NewState("2024-01-01")
+	btc := days("2023-11-01", rising(62, 100, 1)...)   // 2023-11-01 .. 2024-01-01, rising: above SMA50
+	eth := days("2023-11-01", rising(62, 50, -0.1)...) // falling: below SMA50
+	st.Seed(btc)
+	st.SeedETH(eth)
+	fwdB := days("2024-01-02", 162, 170)
+	fwdE := days("2024-01-02", 43.8, 40)
+	// ETH day before BTC has applied it: ignored for now
+	if n := st.AdvanceETH(fwdE); n != 0 || st.ETHLast != "2024-01-01" {
+		t.Fatalf("n=%d last=%s", n, st.ETHLast)
+	}
+	st.Advance(fwdB)
+	if n := st.AdvanceETH(fwdE); n != 2 {
+		t.Fatalf("pair steps %d", n)
+	}
+	p := st.Ledgers["P1_btc_eth_2x"]
+	cost := 7e-4
+	day1 := 0.5 * (-2 * cost) // BTC enters 2x (ETH stays flat), no position held during day 1
+	barB := 170.0/162 - 1
+	day2 := 0.5 * (2*barB - 2*0.1*24*1e-4)
+	if len(p.Days) != 2 || math.Abs(p.Days[0].Ret-day1) > 1e-12 || math.Abs(p.Days[1].Ret-day2) > 1e-12 {
+		t.Fatalf("days %+v want %v %v", p.Days, day1, day2)
+	}
+	if p.Pos != 2 || p.PosAlt != 0 {
+		t.Fatalf("pos %v alt %v", p.Pos, p.PosAlt)
+	}
+	if got := len(st.Ledgers["T2_futures_2x"].Days); got != 2 {
+		t.Fatalf("T2 days %d", got)
+	}
+	// idempotent
+	if n := st.AdvanceETH(fwdE); n != 0 {
+		t.Fatal("re-applied")
+	}
+}
+
+func TestLoadAddsMissingVariants(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.json")
+	st := &State{Registered: "2024-01-01", Ledgers: map[string]*Ledger{"BH": {Variant: Variants[2], Equity: 1.5, Peak: 1.5}}}
+	if err := st.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil || got.Ledgers["P1_btc_eth_2x"] == nil || got.Ledgers["BH"].Equity != 1.5 || len(got.Ledgers) != len(Variants) {
+		t.Fatalf("%v %+v", err, got)
+	}
+}
