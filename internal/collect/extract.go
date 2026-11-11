@@ -39,22 +39,26 @@ type ExtractRow struct {
 }
 
 // PromptVersion changes whenever extractionSystem or the examples change.
-const PromptVersion = "v1"
+const PromptVersion = "v2"
 
 var eventTypes = []string{"regulation", "enforcement", "hack_exploit", "etf_flows", "macro_rates",
 	"macro_inflation", "macro_trade", "adoption", "exchange_ops", "market_move", "other"}
 
-const extractionSystem = "You score crypto market news for a BTC/ETH trading model. Return JSON only. " +
-	"direction: -1 very bearish .. +1 very bullish for the listed assets. magnitude: 0 trivial .. 1 market-moving. " +
+const extractionSystem = "You score crypto market news for a BTC/ETH trading model. Return JSON only.\n" +
+	"event_type decision tests: regulation = a binding rule, rule proposal, final guidance, exemptive relief or agency approval. " +
+	"enforcement = lawsuits, charges, fines, arrests. hack_exploit = hacks, exploits, stolen funds, hijacked sites. " +
+	"etf_flows = ETF inflows/outflows/filings/approvals. macro_rates = a central bank rate decision, minutes or policy statement. " +
+	"macro_inflation = CPI/PCE/jobs data releases. macro_trade = tariffs, sanctions, trade policy. " +
+	"adoption = companies or governments buying, listing for clients, or integrating crypto. exchange_ops = exchange listings, outages, withdrawals. " +
+	"market_move = reports of price moves or liquidations. other = meetings, roundtables, statistics, surveys, MOUs, personnel, PR, opinion, analysis, predictions.\n" +
+	"assets: tickers the news is about (BTC, ETH, SOL...). Use ALL only when it touches crypto markets broadly. " +
+	"Name the token when the headline names one. Non-crypto enforcement or routine bank actions get assets [], direction 0, magnitude <= 0.1.\n" +
+	"direction (-1..+1, effect on the listed assets' price, not the topic's tone) is 0 unless the headline states a concrete change " +
+	"(a decision outcome, a flow, a price move, a hack). Minutes or statements without content, roundtables, scheduled releases and routine approvals get direction 0.\n" +
+	"magnitude anchors: 0 admin; 0.1 routine enforcement or approval; 0.2 single-protocol or small-cap news (hard cap, assets = that token); " +
+	"0.3-0.4 notable firm adoption or rule proposals; 0.5-0.7 major rule, ETF flows over $500M, central bank decision; 0.8-1.0 systemic shock.\n" +
 	"confidence: how sure you are about direction, 0..1. novelty: 0 rehash/opinion .. 1 genuinely new fact. " +
-	"assets: tickers like BTC, ETH, or ALL for broad market; empty if none.\n" +
-	"event_type definitions: regulation=new laws/rules/approvals; enforcement=lawsuits, fines, arrests; " +
-	"hack_exploit=hacks, exploits, stolen funds, hijacked sites; etf_flows=ETF inflows/outflows/filings; " +
-	"macro_rates=central bank rate decisions or guidance; macro_inflation=CPI/PCE/jobs data; " +
-	"macro_trade=tariffs, sanctions, trade policy; adoption=companies/governments buying or integrating crypto; " +
-	"exchange_ops=exchange listings, outages, withdrawals; market_move=reports of price moves or liquidations; " +
-	"other=opinion, analysis, predictions, anything else. Opinion/prediction pieces get novelty<=0.2, " +
-	"magnitude<=0.2, confidence<=0.3. Small-cap or single-protocol news about tokens other than BTC/ETH gets magnitude<=0.2."
+	"Opinion/prediction pieces get novelty <= 0.2, magnitude <= 0.2, confidence <= 0.3."
 
 var extractionExamples = []struct {
 	in  string
@@ -64,6 +68,14 @@ var extractionExamples = []struct {
 		Signal{"enforcement", []string{"ALL"}, -0.6, 0.6, 0.7, 0.9, "days"}},
 	{"Bitcoin could reach $200k, says fund manager",
 		Signal{"other", []string{"BTC"}, 0.2, 0.05, 0.2, 0.1, "weeks"}},
+	{"Federal Reserve announces enforcement action against regional bank holding company",
+		Signal{"enforcement", []string{}, 0, 0.05, 0.6, 0.5, "days"}},
+	{"SEC to host roundtable on crypto custody next month",
+		Signal{"other", []string{"ALL"}, 0, 0.05, 0.5, 0.3, "weeks"}},
+	{"Payments giant integrates stablecoin settlement on Monad network",
+		Signal{"adoption", []string{"MON"}, 0.2, 0.2, 0.5, 0.7, "days"}},
+	{"Spot bitcoin ETFs see $1.1B daily outflows as price slides",
+		Signal{"etf_flows", []string{"BTC"}, -0.6, 0.6, 0.7, 0.8, "days"}},
 }
 
 func signalSchema() map[string]any {
@@ -204,9 +216,10 @@ func loadDone(outDir string) map[string]bool {
 	for _, f := range files {
 		_ = ReadRows(f, func(b []byte) error {
 			var r struct {
-				ID string `json:"id"`
+				ID     string `json:"id"`
+				Prompt string `json:"prompt_ver"`
 			}
-			if json.Unmarshal(b, &r) == nil && r.ID != "" {
+			if json.Unmarshal(b, &r) == nil && r.ID != "" && r.Prompt == PromptVersion {
 				done[r.ID] = true
 			}
 			return nil

@@ -25,12 +25,14 @@ func runCollect(ctx context.Context, args []string) error {
 	gdeltDays := fs.Int("gdelt-days", 90, "days of GDELT headlines to backfill")
 	noBackfill := fs.Bool("no-backfill", false, "skip historical backfill")
 	minFree := fs.Float64("min-free-gb", 20, "pause writing below this much free disk")
+	gdeltSpacing := fs.Duration("gdelt-spacing", 20*time.Second, "delay between GDELT requests (their limit is ~1 per 5s, enforced strictly)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(*dir, 0o755); err != nil {
 		return err
 	}
+	collect.GDELTSpacing = *gdeltSpacing
 	symList := strings.Split(*symbols, ",")
 	cbProds := []string{}
 	for i := range symList {
