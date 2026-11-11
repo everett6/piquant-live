@@ -202,6 +202,7 @@ type DryRunState struct {
 	WindowPreset      string               `json:"window_preset"`            // "7d" (last week), "30d" (last month), "14d" (2 weeks)
 	HoursRemaining    float64              `json:"hours_remaining"`
 	DataSource             string               `json:"data_source"`              // "live" or "fallback"
+	RejectedTicks          int64                `json:"rejected_ticks"`           // Impossible prints dropped by the bad-tick guard
 	FeedDownSeconds        float64              `json:"feed_down_seconds"`        // Cumulative duration market feed was disconnected
 	QuotingPaused          bool                 `json:"quoting_paused"`           // True when quoting/matching paused due to feed down
 	OfflineDowntimeSeconds float64              `json:"offline_downtime_seconds"` // Cumulative time system was shut down / offline
@@ -434,6 +435,7 @@ type AutonomousRecalibrator func(ctx context.Context, symbol string, currentCapi
 
 // DryRunEngine orchestrates the 14-day autonomous dry run.
 type DryRunEngine struct {
+	tickFilters map[string]*tickFilter // bad-print guard per symbol (guarded by mu)
 	cfg       DryRunConfig
 	ring      *engine.SPSCRing
 	stream    MarketFeed
@@ -2014,6 +2016,10 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 	}
 
 	e.mu.Lock()
+	if !isFallback && !e.tickOKLocked(symbol, price, now) {
+		e.mu.Unlock()
+		return
+	}
 	if isFallback {
 		e.state.DataSource = "fallback"
 		e.state.QuotingPaused = true
