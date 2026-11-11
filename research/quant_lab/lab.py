@@ -150,11 +150,11 @@ def position_returns(df: pd.DataFrame, pos: np.ndarray, costs: Costs) -> pd.Seri
 # Metrics
 # ----------------------------------------------------------------------------------------------------------
 def daily_from_trades(tr: pd.DataFrame, start, end) -> pd.Series:
-    idx = pd.date_range(pd.Timestamp(start).floor("D"), pd.Timestamp(end).floor("D"), freq="D", tz="UTC")
+    idx = pd.date_range(pd.Timestamp(start).floor("D"), pd.Timestamp(end).floor("D"), freq="D", tz="UTC").as_unit("ns")
     if tr.empty:
         return pd.Series(0.0, index=idx)
-    d = pd.to_datetime(tr["exit_ns"], utc=True).dt.floor("D")
-    g = np.log1p(tr["net"]).groupby(d).sum()
+    d = pd.DatetimeIndex(pd.to_datetime(tr["exit_ns"].to_numpy(), unit="ns", utc=True)).floor("D").as_unit("ns")
+    g = pd.Series(np.log1p(tr["net"].to_numpy()), index=d).groupby(level=0).sum()
     return np.expm1(g.reindex(idx, fill_value=0.0))
 
 

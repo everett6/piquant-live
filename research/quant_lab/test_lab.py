@@ -60,6 +60,13 @@ def test_deflated_sharpe_penalizes_trials():
     assert lab.deflated_sharpe(d, 2) > lab.deflated_sharpe(d, 400)
 
 
+def test_daily_from_trades_sums_by_exit_day():
+    t0 = pd.Timestamp("2024-01-01 10:00", tz="UTC").value
+    tr = pd.DataFrame({"entry_ns": [t0, t0], "exit_ns": [t0, t0 + 86400 * 10**9], "net": [0.01, -0.02]})
+    d = lab.daily_from_trades(tr, pd.Timestamp("2024-01-01", tz="UTC"), pd.Timestamp("2024-01-03", tz="UTC"))
+    assert np.allclose(d.to_numpy(), [0.01, -0.02, 0.0]), d
+
+
 if __name__ == "__main__":
     n = 0
     for name, fn in list(globals().items()):
