@@ -50,3 +50,30 @@ unchanged.
 - D2: fewer trades, mixed.
 - D3: negative in bear periods (falling knives), fails check 3.
 - I expect none to pass.
+
+## Result (run once, 2026-11-11): all three FAIL. No ledger change.
+
+| Variant | Trades | Net/trade | t | Win rate | Periods > 0 | Stress net | Overlay on P1 (%/mo, DD) |
+|---|---|---|---|---|---|---|---|
+| D1 uptrend dip | 79 | +200 bps | 1.34 | 48% | 3/5 (C −373, A −94) | +92 | +8.74, −83% |
+| D2 uptrend pullback | 108 | +162 bps | 1.30 | 65% | **4/5** (C −368) | +27 | +8.89, −87% |
+| D3 any dip | 167 | −14 bps | −0.15 | 46% | 1/5 | −122 | +7.84, −90% |
+
+P1 alone: +8.50%/month, −84% max drawdown.
+
+**Reading:**
+- **Buying any big drop does not work.** D3 earned +12 bps gross before costs and lost in every period
+  after 2017. In crypto a big daily drop is as likely to continue as to bounce, consistent with Caporale &
+  Plastun (2019).
+- **Buying dips only inside an uptrend looks better, but is not statistically significant.**
+  - D1 and D2 averaged +160 to +200 bps per trade.
+  - With ~80–110 trades and very noisy outcomes (worst trades −32% and −52%), t ≈ 1.3, well short of 2.
+  - Both lost in the 2018–20 bear.
+- **As an overlay on P1** (dip trades only while P1 is flat):
+  - return rises slightly (+0.2 to +0.4%/month);
+  - the drawdown gets worse for D2 (−84% → −87%) and D3, and is about the same for D1 (−83%).
+  - Dip-buying does not reduce the losses; it adds a little return for a little more risk.
+- **D2 is the best candidate.** It is positive in 4/5 periods with a 65% win rate. Under this rule it still
+  fails, and any adoption would be post hoc (forward paper only).
+
+Trials charged: 726.
