@@ -27,3 +27,22 @@ func TestVPIN_UsesNotionalBucketsOnThinVenue(t *testing.T) {
 		t.Fatalf("notional conversion: got %v want 0.7 ($k)", got)
 	}
 }
+
+func TestVPINBucketPerVenue(t *testing.T) {
+	cfg := DefaultDryRunConfig(t.TempDir())
+	if got := vpinBucketFor(cfg, "BTCUSDT"); got != vpinBucketUSDK {
+		t.Fatalf("default bucket = %v", got)
+	}
+	cfg.VPINBucketUSDK = CoinbaseVPINBucketsUSDK
+	if vpinBucketFor(cfg, "btcusdt") != 1000 || vpinBucketFor(cfg, "ETHUSDT") != 250 || vpinBucketFor(cfg, "XRPUSDT") != vpinBucketUSDK {
+		t.Fatal("coinbase bucket mapping wrong")
+	}
+	cfg.Symbols = []string{"BTCUSDT"}
+	e, err := NewDryRunEngine(cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bv := e.symMicro["BTCUSDT"].VpinCalc.BucketVol; bv != 1000 {
+		t.Fatalf("engine BTC VPIN bucket = %v, want 1000", bv)
+	}
+}

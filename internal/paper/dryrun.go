@@ -67,6 +67,7 @@ type DryRunConfig struct {
 	TargetFloorFrac   float64            // Take-profit decays to this fraction of the target, never lower (default: 0.80)
 	MaxHoldMinutes    float64            // Time stop: exit a losing position held longer than this (default: 45; <0 disables)
 	ContractSizes     map[string]float64 // Futures contract size per symbol (e.g. BTC nano = 0.01); empty = spot lots
+	VPINBucketUSDK    map[string]float64 // Per-symbol-prefix VPIN bucket in $k (venue-dependent); empty = vpinBucketUSDK
 	FundingBpsPerHour float64            // Futures funding cost charged on open notional per hour (default: 0)
 	MonthlyTargetPct  float64            // Goal controller monthly return target in % (default: 7)
 	TargetWinRatePct  float64            // Goal controller win-rate target in % (default: 60)
@@ -685,6 +686,7 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	for _, s := range cfg.Symbols {
 		upper := strings.ToUpper(s)
 		symMicro[upper] = newSymbolMicrostructure(upper, cfg.KylesLambda)
+		symMicro[upper].VpinCalc = common.NewVPINCalculator(vpinBucketFor(cfg, upper), 50)
 	}
 
 	e := &DryRunEngine{
@@ -1925,6 +1927,7 @@ func (e *DryRunEngine) getOrCreateSymbolMicro(symbol string) *SymbolMicrostructu
 	sm, ok := e.symMicro[symbol]
 	if !ok || sm == nil {
 		sm = newSymbolMicrostructure(symbol, e.cfg.KylesLambda)
+		sm.VpinCalc = common.NewVPINCalculator(vpinBucketFor(e.cfg, symbol), 50)
 		e.symMicro[symbol] = sm
 	}
 	return sm
@@ -1935,6 +1938,23 @@ func (e *DryRunEngine) getOrCreateSymbolMicro(symbol string) *SymbolMicrostructu
 // (25 BTC), which on Binance.US (~1.3 BTC/hour) needed ~40 days to fill 50 buckets, so the toxicity filter
 // never engaged; $10k buckets fill in ~5 h (BTC) / ~15 h (ETH) at observed Binance.US volume.
 const vpinBucketUSDK = 10.0
+
+// CoinbaseVPINBucketsUSDK sizes VPIN buckets for Coinbase spot flow. Measured 2026-11-11 over 3 min of ticker
+// trades: BTC-USD ~$70M/h, ETH-USD ~$10M/h. $10k buckets held 1-3 trades each, so VPIN read 0.81 (BTC) and 0.74
+// (ETH) on ordinary flow, tripped TOXIC_DEFENSE and cut leverage below one BTC nano contract. These sizes give
+// 50 buckets ~ 45 min (BTC) and ~ 75 min (ETH), with VPIN ~0.2-0.4 on the same trades.
+var CoinbaseVPINBucketsUSDK = map[string]float64{"BTC": 1000, "ETH": 250, "SOL": 250}
+
+// vpinBucketFor returns the VPIN bucket ($k) for symbol from cfg.VPINBucketUSDK by prefix, else the default.
+func vpinBucketFor(cfg DryRunConfig, symbol string) float64 {
+	u := strings.ToUpper(symbol)
+	for prefix, v := range cfg.VPINBucketUSDK {
+		if v > 0 && strings.HasPrefix(u, strings.ToUpper(prefix)) {
+			return v
+		}
+	}
+	return vpinBucketUSDK
+}
 
 // vpinNotionalK converts a trade to thousands of USD so VPIN buckets are venue- and asset-comparable.
 func vpinNotionalK(price, size float64) float64 { return price * size / 1000 }

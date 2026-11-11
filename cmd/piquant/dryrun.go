@@ -248,6 +248,9 @@ func runDryRun(ctx context.Context, args []string) error {
 	}
 	paperCfg.MaxDrawdownPct = f.maxDD
 	paperCfg.ExpectancyBreakerMinTrades = f.expBreaker
+	if coinbasePrimary {
+		paperCfg.VPINBucketUSDK = paper.CoinbaseVPINBucketsUSDK // Binance.US-sized buckets read Coinbase flow as toxic
+	}
 	if f.baseLev > 0 {
 		paperCfg.BaseLeverage = f.baseLev
 	}
