@@ -46,3 +46,8 @@ share of calendar months with return >= 7%.
 ## Pass rule (to recommend a strategy for paper deployment)
 All of: holdout net Sharpe > 1.0 at unit leverage; DSR > 0.95; PBO < 0.30; >= 100 holdout trades;
 positive holdout return in the `us-futures` cost profile. Anything else is reported as FAIL, with numbers.
+
+## Amendment 1 (2026-11-11, before any backtest ran)
+The 1 bp/hour funding figure is the region profile's cap-style example (0.01%/hr = ~88%/yr), several times
+typical perpetual funding. It is kept as a STRESS case. Base case: 0.1 bp/hour (~9%/yr), charged either side.
+Both are reported for every strategy that holds for hours or longer. Nothing else changes.
