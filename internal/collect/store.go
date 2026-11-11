@@ -6,6 +6,7 @@ package collect
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -20,11 +21,15 @@ import (
 
 // dailyStore buffers JSON rows and appends them to <dir>/<YYYY-MM-DD>.jsonl.gz (UTC days).
 type dailyStore struct {
-	dir   string
-	mu    sync.Mutex
-	buf   map[string][]byte // day -> pending lines
-	total uint64
+	dir     string
+	mu      sync.Mutex
+	buf     map[string][]byte // day -> pending lines
+	total   uint64
+	dropped uint64 // rows discarded after repeated flush failures
 }
+
+// maxPendingBytes bounds the unflushed bytes kept per day when writes keep failing.
+const maxPendingBytes = 64 << 20
 
 func newDailyStore(dir string) (*dailyStore, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -55,14 +60,28 @@ func (s *dailyStore) Flush() error {
 	s.mu.Unlock()
 	var firstErr error
 	for day, data := range pending {
-		if err := appendGzip(filepath.Join(s.dir, day+".jsonl.gz"), data); err != nil && firstErr == nil {
+		err := appendGzip(filepath.Join(s.dir, day+".jsonl.gz"), data)
+		if err != nil && firstErr == nil {
 			firstErr = err
-			s.mu.Lock() // keep the data for the next flush attempt
-			s.buf[day] = append(data, s.buf[day]...)
+		}
+		if err != nil {
+			s.mu.Lock() // keep the data for the next flush attempt, bounded so a dead disk cannot exhaust RAM
+			if kept := append(data, s.buf[day]...); len(kept) <= maxPendingBytes {
+				s.buf[day] = kept
+			} else {
+				s.dropped += uint64(bytes.Count(data, []byte{'\n'})) // newer rows already in s.buf are kept
+			}
 			s.mu.Unlock()
 		}
 	}
 	return firstErr
+}
+
+// Dropped returns rows discarded because a day's pending buffer exceeded its cap.
+func (s *dailyStore) Dropped() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dropped
 }
 
 // Total returns the number of rows accepted since start.
@@ -73,16 +92,29 @@ func (s *dailyStore) Total() uint64 {
 }
 
 func appendGzip(path string, data []byte) error {
+	// Compress in memory first so the file sees a single write: a failure then
+	// cannot leave a half-written member in the middle of the file, and any
+	// partial write is rolled back by truncating to the original size.
+	var mem bytes.Buffer
+	zw := gzip.NewWriter(&mem)
+	if _, err := zw.Write(data); err != nil {
+		return err
+	}
+	if err := zw.Close(); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
-	zw := gzip.NewWriter(f)
-	if _, err := zw.Write(data); err != nil {
-		_ = f.Close()
-		return err
+	var before int64 = -1
+	if fi, err := f.Stat(); err == nil {
+		before = fi.Size()
 	}
-	if err := zw.Close(); err != nil {
+	if _, err := f.Write(mem.Bytes()); err != nil {
+		if before >= 0 {
+			_ = f.Truncate(before)
+		}
 		_ = f.Close()
 		return err
 	}

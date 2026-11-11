@@ -174,7 +174,12 @@ func BackfillGDELT(ctx context.Context, client *http.Client, dir, label, query s
 			}
 			done[w.Format(time.RFC3339)] = true
 			if b, err := json.Marshal(done); err == nil {
-				_ = os.WriteFile(progPath, b, 0o644)
+				// Atomic replace: a crash mid-write must not corrupt the resume state
+				// (a bad progress.json would re-fetch and duplicate every window).
+				tmp := progPath + ".tmp"
+				if os.WriteFile(tmp, b, 0o644) == nil {
+					_ = os.Rename(tmp, progPath)
+				}
 			}
 		}
 		if progress != nil && (i%10 == 0 || i == len(windows)-1) {

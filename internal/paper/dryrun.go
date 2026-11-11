@@ -2453,8 +2453,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	peakEq := e.state.PeakEquity
 	currEq := e.state.Equity
 	isHalted := e.state.CircuitHalted
-	posSnapshot := make(map[string]float64)
-	marksSnapshot := make(map[string]float64)
+	posSnapshot := make(map[string]float64, len(e.state.Positions)+1)
+	marksSnapshot := make(map[string]float64, len(e.state.Positions)+1)
 	for s, p := range e.state.Positions {
 		if p != nil {
 			posSnapshot[s] = p.Size

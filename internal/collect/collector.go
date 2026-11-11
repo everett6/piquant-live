@@ -132,27 +132,45 @@ func (c *Collector) SetBackfillStatus(job, text string) {
 // Run blocks until ctx is cancelled, then flushes.
 func (c *Collector) Run(ctx context.Context) {
 	go c.drainTrades(ctx)
-	tracker := newNewsTracker(filepath.Join(c.cfg.Dir, "news"))
-	c.pollNews(ctx, tracker)
+	// News polling runs on its own goroutine: slow or dead feeds (15s timeout each) must
+	// never delay the 1-second price snapshots.
+	var newsDone sync.WaitGroup
+	newsDone.Add(1)
+	go func() {
+		defer newsDone.Done()
+		c.newsLoop(ctx)
+	}()
 
 	snap := time.NewTicker(c.cfg.SnapshotEvery)
-	newsT := time.NewTicker(c.cfg.NewsEvery)
 	flush := time.NewTicker(c.cfg.FlushEvery)
 	defer snap.Stop()
-	defer newsT.Stop()
 	defer flush.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			newsDone.Wait()
 			c.flushAll()
 			return
 		case now := <-snap.C:
 			c.snapshot(now)
-		case <-newsT.C:
-			c.pollNews(ctx, tracker)
-			tracker.prune(time.Now())
 		case <-flush.C:
 			c.flushAll()
+		}
+	}
+}
+
+func (c *Collector) newsLoop(ctx context.Context) {
+	tracker := newNewsTracker(filepath.Join(c.cfg.Dir, "news"))
+	c.pollNews(ctx, tracker)
+	t := time.NewTicker(c.cfg.NewsEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.pollNews(ctx, tracker)
+			tracker.prune(time.Now())
 		}
 	}
 }
@@ -205,6 +223,7 @@ func (c *Collector) snapshot(now time.Time) {
 		return
 	}
 	last := map[string]float64{}
+	_, _, _, _, _, _, lastEventNs := c.ing.Stats()
 	for _, sym := range c.cfg.Symbols {
 		row := PriceRow{T: now.UnixMilli(), Sym: sym}
 		if book, ok := c.ing.GetL2Book(sym); ok && book != nil {
@@ -218,7 +237,7 @@ func (c *Collector) snapshot(now time.Time) {
 				}
 			}
 		}
-		if _, _, _, _, _, _, lastNs := c.ing.Stats(); lastNs > 0 && now.Sub(time.Unix(0, lastNs)) > 5*time.Second {
+		if lastEventNs > 0 && now.Sub(time.Unix(0, lastEventNs)) > 5*time.Second {
 			row.BookStale = true
 		}
 		if a := c.agg[sym]; a != nil {

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -92,6 +93,27 @@ func signalSchema() map[string]any {
 	}
 }
 
+var (
+	prefixOnce sync.Once
+	prefixMsgs []map[string]string
+	schemaVal  map[string]any
+)
+
+// extractionPrefix returns the constant system + few-shot messages, built once.
+// Callers must not mutate the returned messages.
+func extractionPrefix() []map[string]string {
+	prefixOnce.Do(func() {
+		prefixMsgs = []map[string]string{{"role": "system", "content": extractionSystem}}
+		for _, ex := range extractionExamples {
+			out, _ := json.Marshal(ex.out)
+			prefixMsgs = append(prefixMsgs, map[string]string{"role": "user", "content": ex.in},
+				map[string]string{"role": "assistant", "content": string(out)})
+		}
+		schemaVal = signalSchema()
+	})
+	return prefixMsgs
+}
+
 func clamp(v, lo, hi float64) float64 {
 	if v < lo {
 		return lo
@@ -129,15 +151,11 @@ type Extractor struct {
 
 // Extract returns the structured signal for one headline.
 func (x *Extractor) Extract(ctx context.Context, title string) (Signal, error) {
-	msgs := []map[string]string{{"role": "system", "content": extractionSystem}}
-	for _, ex := range extractionExamples {
-		out, _ := json.Marshal(ex.out)
-		msgs = append(msgs, map[string]string{"role": "user", "content": ex.in},
-			map[string]string{"role": "assistant", "content": string(out)})
-	}
-	msgs = append(msgs, map[string]string{"role": "user", "content": title})
+	prefix := extractionPrefix()
+	msgs := make([]map[string]string, 0, len(prefix)+1)
+	msgs = append(append(msgs, prefix...), map[string]string{"role": "user", "content": title})
 	body, _ := json.Marshal(map[string]any{
-		"model": x.Model, "stream": false, "think": false, "format": signalSchema(),
+		"model": x.Model, "stream": false, "think": false, "format": schemaVal,
 		"options": map[string]any{"temperature": 0}, "messages": msgs,
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(x.Endpoint, "/")+"/api/chat", bytes.NewReader(body))

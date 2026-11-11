@@ -146,7 +146,11 @@ func (g *PreTradeGuard) UpdatePortfolioState(equity, peakEquity float64, positio
 	}
 
 	// Update positions copy
-	g.positions = make(map[string]float64, len(positions))
+	if g.positions == nil {
+		g.positions = make(map[string]float64, len(positions))
+	} else {
+		clear(g.positions)
+	}
 	for k, v := range positions {
 		if !math.IsNaN(v) && !math.IsInf(v, 0) {
 			g.positions[k] = v
@@ -154,7 +158,11 @@ func (g *PreTradeGuard) UpdatePortfolioState(equity, peakEquity float64, positio
 	}
 
 	// Update mark prices copy
-	g.markPrices = make(map[string]float64, len(marks))
+	if g.markPrices == nil {
+		g.markPrices = make(map[string]float64, len(marks))
+	} else {
+		clear(g.markPrices)
+	}
 	for k, v := range marks {
 		if !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0 {
 			g.markPrices[k] = v
