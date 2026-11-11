@@ -80,3 +80,22 @@ ratchet.
 - I expect all three to fail.
 
 One run. No variants of failed tests.
+
+## Result (run once, 2026-11-11): all three FAIL
+
+| Variant | A | B | C | D | Pooled net / gross bps | Win rate | Exits SL / TP / time | 1x %/mo |
+|---|---|---|---|---|---|---|---|---|
+| A-maker | −10.1 | −8.7 | −14.3 | −12.7 | −11.5 / −5.1 (t −65) | 36% | 58 / 40 / 1 | −37.4 |
+| A-taker | −13.3 | −11.4 | −11.5 | −4.9 | −11.1 / −0.9 (t −61) | 38% | 55 / 43 / 2 | −39.6 |
+| B rally fade | −9.8 | −9.1 | −12.8 | −10.1 | −10.6 / −3.3 (t −22) | 30% | 62 / 17 / 21 | −8.9 |
+
+Holdout columns are net bps per trade.
+
+- No leverage up to 5x reaches 7%/month.
+- **The blueprint's assumptions didn't hold.**
+  - Maker shorts after a drop fill mainly when the bounce keeps going, so 58% of trades hit the stop.
+  - The taker variant shows about zero gross edge, not the +50–75 bps the blueprint claimed. D (2016–17)
+    alone was +5 bps gross.
+  - Rally fades in downtrends keep rallying: 62% hit their stop.
+- **What happens next:** no engine change. Bear-regime shorts stay blocked. The OBI/VPIN/lead-lag filters wait
+  for ≥ 4 weeks of the tick data recorded since ec03842.
