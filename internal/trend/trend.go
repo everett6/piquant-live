@@ -26,6 +26,7 @@ type Variant struct {
 	ExitSMA     int     `json:"exit_sma,omitempty"`   // PREREG13 R3: also exit below SMA(ExitSMA); enter only at/above it
 	DailyStop   float64 `json:"daily_stop,omitempty"` // flatten at the close of a day losing this fraction (re-enter next close)
 	Capital     float64 `json:"capital,omitempty"`    // display only: starting dollars for equity_usd
+	Pullback    bool    `json:"pullback,omitempty"`   // PREREG16 D2: 15% pullback above SMA200; exit > SMA20 or day 10
 }
 
 // Variants are frozen by PREREG6.
@@ -41,6 +42,9 @@ var Variants = []Variant{
 	// Paper-only $50 profile (user request 2026-11-11): P1 rule on spot at 20% of NAV in total ($5 per sleeve),
 	// Coinbase retail spot taker fee (1.2%) + 5 bps slippage, 2% daily loss stop, 5% drawdown kill switch
 	// (manual restart: piquant trend --reset PAPER50_btc_eth_0p2x). Not tested by any pre-registration.
+	// PREREG16 D2 uptrend pullback (failed: +162 bps/trade, t 1.30): BTC and ETH halves at 1x, tracked forward on
+	// paper at the user's request (2026-11-11), post hoc, for comparison only. SMA is unused (rule is fixed).
+	{Name: "D2_btc_eth_pullback_1x", Lev: 1, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 200, Pair: true, Pullback: true},
 	{Name: "PAPER50_btc_eth_0p2x", Lev: 0.2, FeeBps: 120, SlipBps: 5, SMA: 50, Pair: true, DailyStop: 0.02, KillDD: 0.05, Capital: 50},
 }
 
@@ -67,6 +71,8 @@ type Ledger struct {
 	Pos     float64  `json:"pos"`
 	PosAlt  float64  `json:"pos_alt,omitempty"`     // ETH sleeve position (pair variants)
 	Stops   int      `json:"daily_stops,omitempty"` // days the daily loss stop flattened the book
+	HoldB   int      `json:"hold_b,omitempty"`      // pullback variants: closes held so far (BTC, ETH sleeves)
+	HoldE   int      `json:"hold_e,omitempty"`
 	Killed  bool     `json:"killed"`
 	Days    []DayRec `json:"days"`
 }
@@ -166,6 +172,29 @@ func capDays(h []Day) []Day {
 	return h
 }
 
+// Backfill prepends closes older than the stored history (for long SMAs) without touching any ledger.
+func (st *State) Backfill(btc, eth []Day) {
+	st.History = prependOlder(st.History, btc)
+	st.ETHHistory = prependOlder(st.ETHHistory, eth)
+}
+
+func prependOlder(h, days []Day) []Day {
+	if len(h) == 0 {
+		return h
+	}
+	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
+	var old []Day
+	for _, d := range days {
+		if d.Close > 0 && d.Date < h[0].Date {
+			old = append(old, d)
+		}
+	}
+	if len(old) == 0 {
+		return h
+	}
+	return capDays(append(old, h...))
+}
+
 // SeedETH loads pre-registration ETH closes without touching any ledger.
 func (st *State) SeedETH(days []Day) {
 	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
@@ -238,14 +267,47 @@ func (v Variant) sleeve(pos, bar float64, hist []Day) (ret, target float64) {
 	return ret, target
 }
 
+// pullbackTarget is PREREG16 D2 for one sleeve: enter at a close above SMA200 and at or below 85% of the highest
+// close of the last 20 days; exit at the first later close above SMA20, or at the 10th close after entry.
+func (v Variant) pullbackTarget(pos float64, hold *int, hist []Day) float64 {
+	c := hist[len(hist)-1].Close
+	if pos > 0 {
+		*hold++
+		if m, ok := sma(hist, 20); (ok && c > m) || *hold >= 10 {
+			*hold = 0
+			return 0
+		}
+		return v.Lev
+	}
+	*hold = 0
+	m200, ok := sma(hist, 200)
+	if !ok || len(hist) < 20 || c <= m200 {
+		return 0
+	}
+	hi := 0.0
+	for _, d := range hist[len(hist)-20:] {
+		hi = math.Max(hi, d.Close)
+	}
+	if c <= 0.85*hi {
+		return v.Lev
+	}
+	return 0
+}
+
 func (l *Ledger) stepPair(date string, barB, barE float64, histB, histE []Day) {
 	v := l.Variant
 	c := (v.FeeBps + v.SlipBps) * 1e-4
 	f := v.FundingBpsH * 24 * 1e-4
 	// equal halves, rebalanced daily (as in the PREREG11 backtest)
 	held := 0.5*(l.Pos*barB-math.Abs(l.Pos)*f) + 0.5*(l.PosAlt*barE-math.Abs(l.PosAlt)*f)
-	_, tb := v.sleeve(l.Pos, barB, histB)
-	_, te := v.sleeve(l.PosAlt, barE, histE)
+	var tb, te float64
+	if v.Pullback {
+		tb = v.pullbackTarget(l.Pos, &l.HoldB, histB)
+		te = v.pullbackTarget(l.PosAlt, &l.HoldE, histE)
+	} else {
+		_, tb = v.sleeve(l.Pos, barB, histB)
+		_, te = v.sleeve(l.PosAlt, barE, histE)
+	}
 	if l.Killed {
 		tb, te = 0, 0
 	} else if v.DailyStop > 0 && held <= -v.DailyStop {

@@ -86,7 +86,7 @@ func runTrend(args []string) error {
 
 func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, path string) (*trend.State, error) {
 	now := time.Now().UTC()
-	rows, err := collect.FetchCoinbaseDailyCandles(ctx, client, "BTC-USD", now.AddDate(0, 0, -150), now)
+	rows, err := collect.FetchCoinbaseDailyCandles(ctx, client, "BTC-USD", now.AddDate(0, 0, -299), now)
 	if err != nil {
 		return st, fmt.Errorf("fetch daily candles: %w", err)
 	}
@@ -97,11 +97,13 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 	st.Seed(pre) // idempotent; also picks up the registration day once its candle completes
 	n := st.Advance(post)
 	// PREREG11 pair variant: ETH sleeve, stepped after the BTC day it shares.
-	ethRows, ethErr := collect.FetchCoinbaseDailyCandles(ctx, client, "ETH-USD", now.AddDate(0, 0, -150), now)
+	ethRows, ethErr := collect.FetchCoinbaseDailyCandles(ctx, client, "ETH-USD", now.AddDate(0, 0, -299), now)
 	if ethErr == nil {
 		epre, epost := splitDays(ethRows, now)
 		st.SeedETH(epre)
 		st.AdvanceETH(epost)
+		// PREREG16 D2 needs SMA200: extend both histories backwards (no ledger is touched).
+		st.Backfill(append(pre, post...), append(epre, epost...))
 	}
 	if err := st.Save(path); err != nil {
 		return st, err

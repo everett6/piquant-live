@@ -1,6 +1,7 @@
 package trend
 
 import (
+	"fmt"
 	"math"
 	"path/filepath"
 	"testing"
@@ -246,5 +247,60 @@ func TestPaper50KillSwitchAndReset(t *testing.T) {
 	}
 	if st.Reset("nope") == nil {
 		t.Fatal("unknown variant accepted")
+	}
+}
+
+func TestPullbackTargetEntersExitsAndCaps(t *testing.T) {
+	v := Variant{Lev: 1, Pullback: true}
+	up := days("2023-01-01", rising(230, 100, 1)...) // long uptrend, last close 329
+	hold := 0
+	if v.pullbackTarget(0, &hold, up) != 0 {
+		t.Fatal("entered without a pullback")
+	}
+	h := append(append([]Day{}, up...), Day{Date: "2023-08-19", Close: 270}) // 270 <= 0.85*329, > SMA200
+	if m, _ := sma(h, 200); !(270 > m) {
+		t.Fatalf("setup sma200 %v", m)
+	}
+	if v.pullbackTarget(0, &hold, h) != 1 {
+		t.Fatal("did not enter the pullback")
+	}
+	// Held, still below SMA20: stays in, counting closes, and leaves on the 10th.
+	for i := 1; i <= 10; i++ {
+		h = append(h, Day{Date: fmt.Sprintf("2023-09-%02d", i), Close: 270})
+		got := v.pullbackTarget(1, &hold, h)
+		if (i < 10 && got != 1) || (i == 10 && (got != 0 || hold != 0)) {
+			t.Fatalf("close %d: target %v hold %d", i, got, hold)
+		}
+	}
+	// Exit early on a close above SMA20.
+	hold = 0
+	h2 := append(append([]Day{}, up...), Day{Date: "2023-08-19", Close: 270}, Day{Date: "2023-08-20", Close: 400})
+	if v.pullbackTarget(1, &hold, h2) != 0 {
+		t.Fatal("did not exit above SMA20")
+	}
+	// Below SMA200: no entry even after a 15% drop.
+	down := days("2023-01-01", rising(230, 400, -1)...)
+	down = append(down, Day{Date: "2023-08-19", Close: 100})
+	if v.pullbackTarget(0, &hold, down) != 0 {
+		t.Fatal("entered below SMA200")
+	}
+}
+
+func TestBackfillPrependsOlderOnly(t *testing.T) {
+	st := NewState("2024-01-01")
+	st.Seed(days("2023-12-01", rising(31, 100, 1)...))
+	st.SeedETH(days("2023-12-01", rising(31, 50, 1)...))
+	older := days("2023-06-01", rising(214, 10, 0.1)...) // overlaps the stored range
+	st.Backfill(older, older)
+	if st.History[0].Date != "2023-06-01" || st.History[len(st.History)-1].Date != "2023-12-31" {
+		t.Fatalf("range %s..%s", st.History[0].Date, st.History[len(st.History)-1].Date)
+	}
+	for i := 1; i < len(st.History); i++ {
+		if st.History[i].Date <= st.History[i-1].Date {
+			t.Fatalf("not strictly increasing at %d", i)
+		}
+	}
+	if st.History[len(st.History)-1].Close != 130 || len(st.ETHHistory) != len(st.History) {
+		t.Fatal("stored closes changed or ETH not backfilled")
 	}
 }

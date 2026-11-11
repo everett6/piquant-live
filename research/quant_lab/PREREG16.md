@@ -77,3 +77,11 @@ P1 alone: +8.50%/month, −84% max drawdown.
   fails, and any adoption would be post hoc (forward paper only).
 
 Trials charged: 726.
+
+## Post-hoc decision (user, 2026-11-11): track D2 forward on paper
+- **What this is:** a forward comparison on paper, chosen after seeing the results. It is not a pass.
+- **Ledger:** `D2_btc_eth_pullback_1x` in the trend ledger (BTC and ETH halves at 1x, us-futures costs), beside
+  P1 and R3.
+- **History:** the trend state now keeps ~300 days of closes, enough for the SMA200.
+- **Adoption:** it would need a fresh pre-registered test, or a long forward record. One month of paper results
+  is noise at ~10 trades a year per coin.
