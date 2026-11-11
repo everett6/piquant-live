@@ -94,3 +94,31 @@ func runCollect(ctx context.Context, args []string) error {
 	fmt.Println("[COLLECT] stopped, buffers flushed")
 	return nil
 }
+
+// runExtract turns stored headlines into structured signals with a local Ollama model.
+func runExtract(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("extract", flag.ExitOnError)
+	home, _ := os.UserHomeDir()
+	dir := fs.String("dir", filepath.Join(home, "piquant-collect"), "collector data directory")
+	model := fs.String("model", "hf.co/janhq/Jan-v1-4B-GGUF:Q4_K_M", "Ollama model")
+	endpoint := fs.String("endpoint", "http://127.0.0.1:11434", "Ollama base URL")
+	every := fs.Duration("every", 10*time.Minute, "re-scan interval for new headlines")
+	once := fs.Bool("once", false, "process the current backlog once and exit")
+	limit := fs.Int("limit", 0, "max headlines per pass (0 = all)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	x := &collect.Extractor{Endpoint: *endpoint, Model: *model, Client: &http.Client{Timeout: 5 * time.Minute}}
+	for {
+		n, err := collect.RunExtraction(ctx, x, *dir, *limit, func(s string) { fmt.Println("[EXTRACT]", s) })
+		fmt.Printf("[EXTRACT] pass done: %d headlines (err=%v)\n", n, err)
+		if *once || ctx.Err() != nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(*every):
+		}
+	}
+}

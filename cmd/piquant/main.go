@@ -68,6 +68,8 @@ func main() {
 		err = runTax(ctx, args)
 	case "collect":
 		err = runCollect(ctx, args)
+	case "extract":
+		err = runExtract(ctx, args)
 	case "news":
 		err = runNews(ctx, args)
 	case "version", "-v", "--version":
@@ -103,6 +105,7 @@ func usage() {
   piquant secrets     manage the local credential store
   piquant tax         crypto capital gains, IRS Form 8949 CSV export & CA tax reserve
   piquant collect     record live prices + news and backfill history (dev PC)
+  piquant extract     score stored headlines with a local LLM (Ollama)
   piquant news        macro & micro news intelligence oracle with exploit defense
   piquant version     print build information
 
