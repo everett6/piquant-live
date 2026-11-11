@@ -74,6 +74,8 @@ type DryRunConfig struct {
 	// ExpectancyBreakerMinTrades > 0 stops new entries (exits still run) once at least this many round trips
 	// have closed and the upper 95% bound of mean net bps per trade is below zero. 0 disables it.
 	ExpectancyBreakerMinTrades int
+	// MFTEntriesOff stops all new medium-frequency entries (exits still run); the trend core ledger is unaffected.
+	MFTEntriesOff bool
 	DisableCloudParams bool              // Ignore optimal_params.json hot-reloads (cloud/backtest-tuned overrides)
 }
 
@@ -598,6 +600,9 @@ func (e *DryRunEngine) SetTrendGate(g *TrendGate) {
 
 // trendEntryAllowed is the single trend-gate decision for opening/adding orders (exits never call it).
 func (e *DryRunEngine) trendEntryAllowed(side string, now time.Time) bool {
+	if e.cfg.MFTEntriesOff {
+		return false
+	}
 	if e.trendGate == nil {
 		return true
 	}

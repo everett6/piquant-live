@@ -55,6 +55,7 @@ type dryRunFlags struct {
 	feedVenue         string
 	expBreaker        int
 	trendGate         bool
+	mftEntries        bool
 	trendDir          string
 	enableNews        bool
 	region            string
@@ -107,6 +108,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.BoolVar(&f.enableCoinbase, "coinbase", true, "enable Coinbase institutional USD lead-lag signal ingestor (default true)")
 	fs.StringVar(&f.coinbaseWS, "coinbase-ws", "", "custom Coinbase public WebSocket URL (default auto)")
 	fs.BoolVar(&f.trendGate, "trend-gate", true, "gate new entries by the daily BTC SMA50 trend (long only above it, no new entries below) and run the 2x/1x trend core ledger in-process")
+	fs.BoolVar(&f.mftEntries, "mft-entries", true, "allow new medium-frequency entries (false = trend core only; the 1-minute replay shows the MFT layer loses ~14 bps/trade)")
 	fs.StringVar(&f.trendDir, "trend-dir", "", "trend core ledger directory (default <data dir>/trend)")
 	fs.IntVar(&f.expBreaker, "expectancy-breaker", 50, "stop new entries after N closed trades if mean net bps/trade is < 0 at the upper 95% bound (0 = off; default 50: round 4 showed the live entry loses ~its cost per trade)")
 	fs.StringVar(&f.feedVenue, "feed-venue", "auto", "primary market feed for fills and flow features: 'auto' (coinbase for us-futures, else binance), 'binance' or 'coinbase'")
@@ -252,6 +254,7 @@ func runDryRun(ctx context.Context, args []string) error {
 	}
 	paperCfg.MaxDrawdownPct = f.maxDD
 	paperCfg.ExpectancyBreakerMinTrades = f.expBreaker
+	paperCfg.MFTEntriesOff = !f.mftEntries
 	if coinbasePrimary {
 		paperCfg.VPINBucketUSDK = paper.CoinbaseVPINBucketsUSDK // Binance.US-sized buckets read Coinbase flow as toxic
 	}

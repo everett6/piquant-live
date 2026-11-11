@@ -50,4 +50,9 @@ func TestEngineTrendEntryAllowed(t *testing.T) {
 	if e.trendEntryAllowed("BUY", now) || e.trendEntryAllowed("SELL", now) {
 		t.Fatal("DOWN: no entries")
 	}
+	g.Set(true, 2, 1, now)
+	e.cfg.MFTEntriesOff = true
+	if e.trendEntryAllowed("BUY", now) {
+		t.Fatal("MFT entries off must block even in an UP regime")
+	}
 }
