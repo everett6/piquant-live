@@ -451,4 +451,93 @@ func TestSpotOnlyModeAndTaxReserveAccounting(t *testing.T) {
 	eng.mu.Unlock()
 }
 
+func TestHoles36_41_42_45_AdversarialAudit(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.InitialCapital = 50.0
+	cfg.MaxDrawdownPct = 2.0
+	cfg.SpotOnly = true
+	cfg.Symbols = []string{"BTCUSDT"}
+	ring := engine.NewSPSCRing(1024)
+	eng, err := NewDryRunEngine(cfg, ring, nil)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine failed: %v", err)
+	}
+
+	// 1. Process market event with NaN price should be rejected without corrupting equity
+	eng.processMarketEvent(&engine.MarketEvent{
+		SymbolID: 0,
+		Price:    math.NaN(),
+		Size:     1.0,
+	})
+	eng.mu.Lock()
+	if math.IsNaN(eng.state.Equity) || eng.state.Equity <= 0 {
+		t.Fatalf("Hole 36 failed: NaN market event poisoned engine equity: %v", eng.state.Equity)
+	}
+	eng.mu.Unlock()
+
+	// 2. matchMakerOrders with NaN tradePrice or tradeSize
+	eng.matchMakerOrders("BTCUSDT", math.NaN(), 1.0, 1, time.Now())
+	eng.matchMakerOrders("BTCUSDT", 60000.0, math.NaN(), 1, time.Now())
+	eng.matchMakerOrders("BTCUSDT", math.Inf(1), 1.0, 1, time.Now())
+
+	// Hole 41: Circuit Breaker NaN Protection
+	cb := NewCircuitBreaker(DefaultCircuitBreakerConfig())
+	cb.Reset(math.NaN()) // should fallback to 1000.0
+	if math.IsNaN(cb.PeakEquity) || cb.PeakEquity <= 0 {
+		t.Fatalf("Hole 41 failed: Reset(NaN) corrupted PeakEquity: %v", cb.PeakEquity)
+	}
+
+	state, reason := cb.OnTick(math.NaN(), math.NaN(), math.NaN(), time.Now())
+	if state == StateTripped {
+		t.Fatalf("OnTick(NaN) unexpectedly tripped: %v", reason)
+	}
+	if math.IsNaN(cb.CurrentEquity) || math.IsNaN(cb.CurrentDrawdownPct) {
+		t.Fatalf("Hole 41 failed: OnTick(NaN) poisoned equity/drawdown: eq=%v dd=%v", cb.CurrentEquity, cb.CurrentDrawdownPct)
+	}
+
+	cb.OnFill(math.NaN(), math.NaN())
+	if math.IsNaN(cb.CurrentInventory) {
+		t.Fatalf("Hole 41 failed: OnFill(NaN) corrupted CurrentInventory")
+	}
+
+	// Hole 42: Leverage Controller NaN Protection
+	levCtrl := NewDynamicLeverageController(DefaultDynamicLeverageConfig())
+	levState := levCtrl.Compute(math.NaN(), math.NaN(), math.NaN(), math.NaN(), false)
+	if math.IsNaN(levState.EffectiveLeverage) || math.IsInf(levState.EffectiveLeverage, 0) || levState.EffectiveLeverage <= 0 {
+		t.Fatalf("Hole 42 failed: Compute(NaN) returned non-finite leverage: %v", levState.EffectiveLeverage)
+	}
+
+	orderSize := levCtrl.ComputeOrderSizeForSymbol("BTCUSDT", math.NaN(), 1.0, 60000.0, 1)
+	if math.IsNaN(orderSize) || math.IsInf(orderSize, 0) || orderSize != 0 {
+		t.Fatalf("Hole 42 failed: ComputeOrderSizeForSymbol(NaN) expected 0, got %v", orderSize)
+	}
+
+	clipQty, maxInv := levCtrl.ComputeClipSizeForSymbol("BTCUSDT", math.NaN(), 1.0, 60000.0, 1)
+	if math.IsNaN(clipQty) || math.IsNaN(maxInv) || clipQty != 0 || maxInv != 0 {
+		t.Fatalf("Hole 42 failed: ComputeClipSizeForSymbol(NaN) expected 0, 0, got %v, %v", clipQty, maxInv)
+	}
+
+	vClip, vInv := levCtrl.ComputeVolatilityKellySize("BTCUSDT", math.NaN(), 60000.0, 35.0, 60.0, 1)
+	if math.IsNaN(vClip) || math.IsNaN(vInv) || vClip != 0 || vInv != 0 {
+		t.Fatalf("Hole 42 failed: ComputeVolatilityKellySize(NaN) expected 0, 0, got %v, %v", vClip, vInv)
+	}
+
+	// Hole 45: Tearsheet NaN Protection
+	ts := ComputeDryRunTearSheet(DryRunState{
+		InitialCapital: math.NaN(),
+		Equity:         math.NaN(),
+		TotalReturnPct: math.NaN(),
+		MaxDrawdownPct: math.NaN(),
+		SharpeRatio:    math.NaN(),
+		DailyReturns:   []float64{0.01, math.NaN(), -0.005, math.Inf(1)},
+	})
+	if math.IsNaN(ts.InitialCapital) || math.IsNaN(ts.CurrentEquity) || math.IsNaN(ts.TotalReturnPct) ||
+		math.IsNaN(ts.MaxDrawdownPct) || math.IsNaN(ts.SharpeRatio) || math.IsNaN(ts.SortinoRatio) ||
+		math.IsNaN(ts.CalmarRatio) {
+		t.Fatalf("Hole 45 failed: ComputeDryRunTearSheet produced NaNs: %+v", ts)
+	}
+}
+
+
 

@@ -84,17 +84,23 @@ type LatencyAdaptiveOrchestrator struct {
 
 // NewLatencyAdaptiveOrchestrator creates a new adaptive orchestrator.
 func NewLatencyAdaptiveOrchestrator(cfg OrchestratorConfig) *LatencyAdaptiveOrchestrator {
-	if cfg.LowLatencyThresholdMs <= 0 {
+	if math.IsNaN(cfg.LowLatencyThresholdMs) || math.IsInf(cfg.LowLatencyThresholdMs, 0) || cfg.LowLatencyThresholdMs <= 0 {
 		cfg.LowLatencyThresholdMs = 15.0
 	}
-	if cfg.HighLatencyThresholdMs <= 0 {
+	if math.IsNaN(cfg.HighLatencyThresholdMs) || math.IsInf(cfg.HighLatencyThresholdMs, 0) || cfg.HighLatencyThresholdMs <= 0 {
 		cfg.HighLatencyThresholdMs = 150.0
 	}
-	if cfg.LatencyAlpha <= 0 || cfg.LatencyAlpha > 1.0 {
+	if math.IsNaN(cfg.LatencyAlpha) || math.IsInf(cfg.LatencyAlpha, 0) || cfg.LatencyAlpha <= 0 || cfg.LatencyAlpha > 1.0 {
 		cfg.LatencyAlpha = 0.10
 	}
-	if cfg.HighFundingThresholdAPR <= 0 {
+	if math.IsNaN(cfg.HighFundingThresholdAPR) || math.IsInf(cfg.HighFundingThresholdAPR, 0) || cfg.HighFundingThresholdAPR <= 0 {
 		cfg.HighFundingThresholdAPR = 12.0
+	}
+	if math.IsNaN(cfg.ExitFundingThresholdAPR) || math.IsInf(cfg.ExitFundingThresholdAPR, 0) || cfg.ExitFundingThresholdAPR <= 0 {
+		cfg.ExitFundingThresholdAPR = 8.0
+	}
+	if math.IsNaN(cfg.HysteresisBandPct) || math.IsInf(cfg.HysteresisBandPct, 0) || cfg.HysteresisBandPct <= 0 {
+		cfg.HysteresisBandPct = 0.20
 	}
 
 	o := &LatencyAdaptiveOrchestrator{
@@ -124,7 +130,10 @@ func (o *LatencyAdaptiveOrchestrator) RecordLatencyUpdate(latency time.Duration,
 
 	// EWMA latency smoothing
 	alpha := o.cfg.LatencyAlpha
-	if o.smoothedLatencyMs <= 0 {
+	if math.IsNaN(alpha) || math.IsInf(alpha, 0) || alpha <= 0 || alpha > 1.0 {
+		alpha = 0.10
+	}
+	if math.IsNaN(o.smoothedLatencyMs) || math.IsInf(o.smoothedLatencyMs, 0) || o.smoothedLatencyMs <= 0 {
 		o.smoothedLatencyMs = latMs
 	} else {
 		o.smoothedLatencyMs = (1.0-alpha)*o.smoothedLatencyMs + alpha*latMs

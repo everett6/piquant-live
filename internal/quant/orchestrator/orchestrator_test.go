@@ -120,3 +120,27 @@ func TestLatencyAdaptiveOrchestrator_ConcurrentSafety(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestHole40_OrchestratorNaNProtection(t *testing.T) {
+	badCfg := OrchestratorConfig{
+		LowLatencyThresholdMs:   math.NaN(),
+		HighLatencyThresholdMs:  math.NaN(),
+		HighFundingThresholdAPR: math.NaN(),
+		LatencyAlpha:            math.NaN(),
+	}
+	orch := NewLatencyAdaptiveOrchestrator(badCfg)
+	if orch.cfg.LowLatencyThresholdMs <= 0 || orch.cfg.HighLatencyThresholdMs <= 0 || orch.cfg.LatencyAlpha <= 0 {
+		t.Fatalf("expected valid default config from NaN initialization, got %+v", orch.cfg)
+	}
+
+	mode := orch.RecordLatencyUpdate(10*time.Millisecond, math.NaN(), time.Now())
+	if mode == "" {
+		t.Fatalf("RecordLatencyUpdate returned empty mode")
+	}
+
+	rep := orch.Report(time.Now())
+	if math.IsNaN(rep.SmoothedLatencyMs) || math.IsNaN(rep.FundingAPR) {
+		t.Fatalf("Report contained NaN metrics: %+v", rep)
+	}
+}
+

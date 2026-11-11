@@ -114,6 +114,19 @@ func (c *DynamicLeverageController) Compute(volBps float64, vpin float64, hawkes
 		}
 	}
 
+	if math.IsNaN(volBps) || math.IsInf(volBps, 0) || volBps <= 0 {
+		volBps = cfg.TargetVolBps
+	}
+	if math.IsNaN(vpin) || math.IsInf(vpin, 0) || vpin < 0 {
+		vpin = 0.30
+	}
+	if math.IsNaN(hawkesBranching) || math.IsInf(hawkesBranching, 0) || hawkesBranching < 0 {
+		hawkesBranching = 0.20
+	}
+	if math.IsNaN(currentDDPct) || math.IsInf(currentDDPct, 0) || currentDDPct < 0 {
+		currentDDPct = 0.0
+	}
+
 	// 1. Volatility Scaling (Inverse volatility parity)
 	vol := math.Max(1.0, volBps)
 	volFactor := cfg.TargetVolBps / vol
@@ -219,8 +232,10 @@ func (c *DynamicLeverageController) ComputeOrderSize(equity float64, effectiveLe
 // Higher-volatility assets (SOL, DOGE, AVAX) receive smaller fractional sizing to equate
 // dollar variance risk, while preserving wider spread capture and fee rebates.
 func (c *DynamicLeverageController) ComputeOrderSizeForSymbol(symbol string, equity float64, effectiveLev float64, price float64, numSymbols int) float64 {
-	if equity <= 0 || price <= 0 || effectiveLev <= 0 {
-		return 0.001
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 ||
+		math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 ||
+		math.IsNaN(effectiveLev) || math.IsInf(effectiveLev, 0) || effectiveLev <= 0 {
+		return 0
 	}
 	if numSymbols <= 0 {
 		numSymbols = 2
@@ -252,9 +267,14 @@ func (c *DynamicLeverageController) ComputeOrderSizeForSymbol(symbol string, equ
 // ComputeClipSizeForSymbol returns both the individual passive quote clip size (20% of max symbol allocation,
 // floored above Binance's $5.00 USDT minimum notional) and the maximum inventory limit for that symbol.
 func (c *DynamicLeverageController) ComputeClipSizeForSymbol(symbol string, equity float64, effectiveLev float64, price float64, numSymbols int) (clipQty float64, maxInvQty float64) {
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 ||
+		math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 ||
+		math.IsNaN(effectiveLev) || math.IsInf(effectiveLev, 0) || effectiveLev <= 0 {
+		return 0, 0
+	}
 	maxInvQty = c.ComputeOrderSizeForSymbol(symbol, equity, effectiveLev, price, numSymbols)
 	if price <= 0 || maxInvQty <= 0 {
-		return 0.001, 0.005
+		return 0, 0
 	}
 
 	uSym := strings.ToUpper(symbol)
@@ -300,16 +320,17 @@ func (c *DynamicLeverageController) ComputeClipSizeForSymbol(symbol string, equi
 // Sizes the order so portfolio risk is strictly bounded to a fractional risk budget (1.5% of equity)
 // over the structural stop-loss distance, modulated inversely by realized ATR volatility.
 func (c *DynamicLeverageController) ComputeVolatilityKellySize(symbol string, equity float64, price float64, atrBps float64, stopLossBps float64, numSymbols int) (clipQty float64, maxInvQty float64) {
-	if equity <= 0 || price <= 0 {
-		return 0.001, 0.005
+	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 ||
+		math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 {
+		return 0, 0
 	}
 	if numSymbols <= 0 {
 		numSymbols = 1
 	}
-	if stopLossBps <= 0 {
+	if math.IsNaN(stopLossBps) || math.IsInf(stopLossBps, 0) || stopLossBps <= 0 {
 		stopLossBps = 60.0
 	}
-	if atrBps <= 0 {
+	if math.IsNaN(atrBps) || math.IsInf(atrBps, 0) || atrBps <= 0 {
 		atrBps = 35.0
 	}
 
@@ -367,5 +388,11 @@ func (c *DynamicLeverageController) ComputeVolatilityKellySize(symbol string, eq
 		clipQty = 1.0 / p
 	}
 	maxInvQty = math.Round(maxInvQty*p) / p
+	if math.IsNaN(clipQty) || math.IsInf(clipQty, 0) || clipQty < 0 {
+		clipQty = 0
+	}
+	if math.IsNaN(maxInvQty) || math.IsInf(maxInvQty, 0) || maxInvQty < 0 {
+		maxInvQty = 0
+	}
 	return clipQty, maxInvQty
 }

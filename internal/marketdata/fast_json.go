@@ -114,11 +114,13 @@ func parseFastFloat(b []byte) (float64, bool) {
 		return 0, false
 	}
 
+	hasDigits := false
 	var intPart uint64
 	i := 0
 	for i < len(b) && b[i] >= '0' && b[i] <= '9' {
 		intPart = intPart*10 + uint64(b[i]-'0')
 		i++
+		hasDigits = true
 	}
 
 	var fracPart uint64
@@ -131,7 +133,12 @@ func parseFastFloat(b []byte) (float64, bool) {
 				fracDiv *= 10
 			}
 			i++
+			hasDigits = true
 		}
+	}
+
+	if !hasDigits {
+		return 0, false
 	}
 
 	var exp int
@@ -144,21 +151,40 @@ func parseFastFloat(b []byte) (float64, bool) {
 		} else if i < len(b) && b[i] == '+' {
 			i++
 		}
+		expDigits := false
 		for i < len(b) && b[i] >= '0' && b[i] <= '9' {
 			exp = exp*10 + int(b[i]-'0')
 			i++
+			expDigits = true
+		}
+		if !expDigits {
+			return 0, false
 		}
 		if expNeg {
 			exp = -exp
 		}
 	}
 
+	// Any trailing characters must be whitespace
+	for i < len(b) && (b[i] == ' ' || b[i] == '\t' || b[i] == '\r' || b[i] == '\n') {
+		i++
+	}
+	if i < len(b) {
+		return 0, false
+	}
+
 	val := float64(intPart) + float64(fracPart)/float64(fracDiv)
 	if exp != 0 {
+		if exp < -324 || exp > 308 {
+			return 0, false
+		}
 		val *= math.Pow10(exp)
 	}
 	if negative {
 		val = -val
+	}
+	if math.IsNaN(val) || math.IsInf(val, 0) {
+		return 0, false
 	}
 	return val, true
 }

@@ -32,7 +32,7 @@ func NewTWAPRouter(interval time.Duration) *TWAPRouter {
 
 // ScheduleSlices divides totalQuantity into equal slices across totalDuration.
 func (tw *TWAPRouter) ScheduleSlices(totalQuantity float64, totalDuration time.Duration, startTime time.Time) ([]ChildOrderSlice, error) {
-	if totalQuantity <= 0 || totalDuration <= 0 {
+	if math.IsNaN(totalQuantity) || math.IsInf(totalQuantity, 0) || totalQuantity <= 0 || totalDuration <= 0 {
 		return nil, errors.New("twap: invalid quantity or duration")
 	}
 	if tw.SliceInterval <= 0 {
@@ -111,7 +111,7 @@ func NewVWAPRouter(profile VWAPProfile, interval time.Duration) *VWAPRouter {
 
 // ScheduleSlices sizes each child slice proportional to expected intraday market volume.
 func (vw *VWAPRouter) ScheduleSlices(totalQuantity float64, totalDuration time.Duration, startTime time.Time) ([]ChildOrderSlice, error) {
-	if totalQuantity <= 0 || totalDuration <= 0 {
+	if math.IsNaN(totalQuantity) || math.IsInf(totalQuantity, 0) || totalQuantity <= 0 || totalDuration <= 0 {
 		return nil, errors.New("vwap: invalid quantity or duration")
 	}
 	if vw.SliceInterval <= 0 {
@@ -173,10 +173,10 @@ type AdaptiveShortfallRouter struct {
 
 // NewAdaptiveShortfallRouter creates an adaptive Implementation Shortfall router.
 func NewAdaptiveShortfallRouter(lambda, eta float64) *AdaptiveShortfallRouter {
-	if lambda <= 0 {
+	if math.IsNaN(lambda) || math.IsInf(lambda, 0) || lambda <= 0 {
 		lambda = 1e-4
 	}
-	if eta <= 0 {
+	if math.IsNaN(eta) || math.IsInf(eta, 0) || eta <= 0 {
 		eta = 0.05
 	}
 	return &AdaptiveShortfallRouter{
@@ -193,8 +193,17 @@ func (is *AdaptiveShortfallRouter) ComputeSchedule(
 	top5Depth float64,
 	liveVpin float64,
 ) []ChildOrderSlice {
-	if numSlices <= 0 || totalQuantity <= 0 {
+	if numSlices <= 0 || math.IsNaN(totalQuantity) || math.IsInf(totalQuantity, 0) || totalQuantity <= 0 {
 		return nil
+	}
+	if math.IsNaN(volatilityBps) || math.IsInf(volatilityBps, 0) || volatilityBps <= 0 {
+		volatilityBps = 35.0
+	}
+	if math.IsNaN(top5Depth) || math.IsInf(top5Depth, 0) || top5Depth < 0 {
+		top5Depth = 100000.0
+	}
+	if math.IsNaN(liveVpin) || math.IsInf(liveVpin, 0) {
+		liveVpin = 0.30
 	}
 
 	// 1. Dynamic Liquidity Adaptation:

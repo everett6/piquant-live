@@ -147,13 +147,13 @@ type DynamicKellySizer struct {
 
 // NewDynamicKellySizer creates a Kelly position sizing controller.
 func NewDynamicKellySizer(fraction, maxGrossAlloc, minNotional float64) *DynamicKellySizer {
-	if fraction <= 0 {
+	if math.IsNaN(fraction) || math.IsInf(fraction, 0) || fraction <= 0 {
 		fraction = 0.5 // Half-Kelly default
 	}
-	if maxGrossAlloc <= 0 {
+	if math.IsNaN(maxGrossAlloc) || math.IsInf(maxGrossAlloc, 0) || maxGrossAlloc <= 0 {
 		maxGrossAlloc = 0.85
 	}
-	if minNotional <= 0 {
+	if math.IsNaN(minNotional) || math.IsInf(minNotional, 0) || minNotional <= 0 {
 		minNotional = 5.0
 	}
 	return &DynamicKellySizer{
@@ -174,7 +174,8 @@ func (ks *DynamicKellySizer) ComputeBetSize(
 	winRate float64, payoffRatio float64, stopLossBps float64,
 ) (orderQty float64, notionalUSD float64) {
 	if math.IsNaN(equity) || math.IsInf(equity, 0) || equity <= 0 ||
-		math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 {
+		math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 ||
+		equity < ks.MinNotional {
 		return 0, 0
 	}
 	if math.IsNaN(atrBps) || math.IsInf(atrBps, 0) || atrBps <= 0 {
@@ -245,8 +246,15 @@ func (ks *DynamicKellySizer) ComputeBetSize(
 		rawQty = rawNotional / price
 	}
 	if rawNotional < ks.MinNotional {
-		rawNotional = ks.MinNotional
-		rawQty = rawNotional / price
+		if ks.MinNotional <= equity {
+			rawNotional = ks.MinNotional
+			rawQty = rawNotional / price
+		} else {
+			return 0, 0
+		}
+	}
+	if rawNotional > equity {
+		return 0, 0
 	}
 
 	if math.IsNaN(rawQty) || math.IsInf(rawQty, 0) || rawQty <= 0 {

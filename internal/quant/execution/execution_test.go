@@ -155,3 +155,36 @@ func TestTWAPRouter_ZeroIntervalProtection(t *testing.T) {
 	}
 }
 
+func TestHole38_ExecutionNaNProtection(t *testing.T) {
+	tw := NewTWAPRouter(10 * time.Second)
+	if _, err := tw.ScheduleSlices(math.NaN(), 10*time.Minute, time.Now()); err == nil {
+		t.Fatalf("expected error for TWAP ScheduleSlices(NaN)")
+	}
+
+	vw := NewVWAPRouter(DefaultCryptoVWAPProfile(), 10*time.Minute)
+	if _, err := vw.ScheduleSlices(math.NaN(), 10*time.Hour, time.Now()); err == nil {
+		t.Fatalf("expected error for VWAP ScheduleSlices(NaN)")
+	}
+
+	as := NewAdaptiveShortfallRouter(math.NaN(), math.NaN())
+	if as.RiskAversionLambda <= 0 || as.TempImpactEta <= 0 {
+		t.Fatalf("expected valid default parameters from NewAdaptiveShortfallRouter(NaN, NaN)")
+	}
+
+	slices := as.ComputeSchedule(10.0, 5, math.NaN(), math.NaN(), math.NaN())
+	if len(slices) != 5 {
+		t.Fatalf("expected 5 slices from ComputeSchedule with NaNs, got %d", len(slices))
+	}
+	var sum float64
+	for _, s := range slices {
+		if math.IsNaN(s.Quantity) || math.IsInf(s.Quantity, 0) || s.Quantity < 0 {
+			t.Fatalf("slice quantity is non-finite: %v", s.Quantity)
+		}
+		sum += s.Quantity
+	}
+	if math.Abs(sum-10.0) > 1e-6 {
+		t.Fatalf("expected sum 10.0, got %v", sum)
+	}
+}
+
+

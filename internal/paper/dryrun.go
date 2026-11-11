@@ -1742,7 +1742,7 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 	}
 
 	price := ev.Price
-	if price <= 0 {
+	if math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 {
 		return
 	}
 
@@ -1895,6 +1895,10 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 // matchMakerOrders matches active resting maker orders against observed trade prints.
 // A maker order fills only when trades at or through its price deplete the queue ahead.
 func (e *DryRunEngine) matchMakerOrders(symbol string, tradePrice float64, tradeSize float64, tradeSide uint8, now time.Time) {
+	if math.IsNaN(tradePrice) || math.IsInf(tradePrice, 0) || tradePrice <= 0 ||
+		math.IsNaN(tradeSize) || math.IsInf(tradeSize, 0) || tradeSize <= 0 {
+		return
+	}
 	e.mu.Lock()
 	if e.state.QuotingPaused || (!e.lastTickTime.IsZero() && now.Sub(e.lastTickTime) > 1500*time.Millisecond) {
 		e.activeOrders[symbol] = nil

@@ -333,3 +333,44 @@ func TestPreTradeGuard_NaNPortfolioStateRejection(t *testing.T) {
 	}
 }
 
+func TestHole39_GuardrailNaNMarksAndExposure(t *testing.T) {
+	cfg := DefaultGuardrailConfig()
+	cfg.Exposure.MaxGrossUSD = 1000.0
+	guard := NewPreTradeGuard(cfg)
+	now := time.Now()
+
+	// Update portfolio with NaN marks and positions
+	positions := map[string]float64{
+		"BTCUSDT": math.NaN(),
+		"ETHUSDT": 0.5,
+	}
+	marks := map[string]float64{
+		"BTCUSDT": math.NaN(),
+		"ETHUSDT": 2500.0,
+	}
+	guard.UpdatePortfolioState(10000.0, 10000.0, positions, marks, now)
+
+	// Verify that NaN positions and marks were filtered out
+	guard.mu.RLock()
+	if _, exists := guard.positions["BTCUSDT"]; exists {
+		t.Fatalf("Hole 39 failed: NaN position was retained in positions map")
+	}
+	if _, exists := guard.markPrices["BTCUSDT"]; exists {
+		t.Fatalf("Hole 39 failed: NaN mark price was retained in markPrices map")
+	}
+	guard.mu.RUnlock()
+
+	// Order that exceeds gross limit ($1,250 existing ETH + $1,000 BTC order = $2,250 > $1,000 limit)
+	ord := OrderRequest{
+		Symbol:   "BTCUSDT",
+		Side:     "BUY",
+		Price:    60000.0,
+		Quantity: 0.02, // $1,200 notional
+	}
+	err := guard.ValidateOrder(ord, 60000.0, 60005.0, now)
+	if err == nil {
+		t.Fatalf("Hole 39 failed: order exceeding gross exposure should have been rejected")
+	}
+}
+
+

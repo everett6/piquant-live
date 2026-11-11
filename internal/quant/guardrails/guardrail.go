@@ -148,13 +148,17 @@ func (g *PreTradeGuard) UpdatePortfolioState(equity, peakEquity float64, positio
 	// Update positions copy
 	g.positions = make(map[string]float64, len(positions))
 	for k, v := range positions {
-		g.positions[k] = v
+		if !math.IsNaN(v) && !math.IsInf(v, 0) {
+			g.positions[k] = v
+		}
 	}
 
 	// Update mark prices copy
 	g.markPrices = make(map[string]float64, len(marks))
 	for k, v := range marks {
-		g.markPrices[k] = v
+		if !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0 {
+			g.markPrices[k] = v
+		}
 	}
 
 	// Check Kill-Switch Drawdown
@@ -293,7 +297,7 @@ func (g *PreTradeGuard) validateExposureLimits(ord OrderRequest) error {
 	}
 
 	mark := g.markPrices[ord.Symbol]
-	if mark <= 0 {
+	if math.IsNaN(mark) || math.IsInf(mark, 0) || mark <= 0 {
 		mark = ord.Price
 	}
 
@@ -302,9 +306,16 @@ func (g *PreTradeGuard) validateExposureLimits(ord OrderRequest) error {
 	var candidateAssetGrossUSD float64
 
 	for sym, pos := range g.positions {
+		if math.IsNaN(pos) || math.IsInf(pos, 0) {
+			continue
+		}
 		pMark := g.markPrices[sym]
-		if pMark <= 0 {
-			pMark = ord.Price
+		if math.IsNaN(pMark) || math.IsInf(pMark, 0) || pMark <= 0 {
+			if sym == ord.Symbol {
+				pMark = ord.Price
+			} else {
+				continue
+			}
 		}
 		posSize := pos
 		if sym == ord.Symbol {
@@ -322,6 +333,13 @@ func (g *PreTradeGuard) validateExposureLimits(ord OrderRequest) error {
 		totalGrossUSD += math.Abs(notional)
 		totalNetUSD += notional
 		candidateAssetGrossUSD = math.Abs(notional)
+	}
+
+	if math.IsNaN(totalGrossUSD) || math.IsInf(totalGrossUSD, 0) {
+		return fmt.Errorf("%w: gross exposure calculation produced NaN/Inf", ErrGrossExposureLimit)
+	}
+	if math.IsNaN(totalNetUSD) || math.IsInf(totalNetUSD, 0) {
+		return fmt.Errorf("%w: net exposure calculation produced NaN/Inf", ErrNetExposureLimit)
 	}
 
 	// A) Gross Exposure Limit

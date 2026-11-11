@@ -2,6 +2,7 @@ package marketdata
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 )
 
@@ -206,3 +207,47 @@ func BenchmarkStdlibJSONTrade(b *testing.B) {
 		}
 	}
 }
+
+func TestHole44_ParseFastFloatInvalidStrings(t *testing.T) {
+	invalidInputs := [][]byte{
+		[]byte(""),
+		[]byte("null"),
+		[]byte("NaN"),
+		[]byte("Infinity"),
+		[]byte("+Inf"),
+		[]byte("abc"),
+		[]byte("."),
+		[]byte("123.45xyz"),
+		[]byte("1e99999999"),
+		[]byte("-"),
+		[]byte("+"),
+		[]byte("\"abc\""),
+	}
+
+	for _, in := range invalidInputs {
+		v, ok := ParseFastFloat(in)
+		if ok {
+			t.Fatalf("ParseFastFloat(%q) expected ok=false, got v=%v ok=true", string(in), v)
+		}
+	}
+
+	// Valid inputs should still parse accurately
+	validInputs := map[string]float64{
+		"0":        0.0,
+		"123":      123.0,
+		"123.45":   123.45,
+		"-45.67":   -45.67,
+		"1e-3":     0.001,
+		"\"99.5\"": 99.5,
+	}
+	for s, expected := range validInputs {
+		v, ok := ParseFastFloat([]byte(s))
+		if !ok {
+			t.Fatalf("ParseFastFloat(%q) failed unexpectedly", s)
+		}
+		if math.Abs(v-expected) > 1e-6 {
+			t.Fatalf("ParseFastFloat(%q) expected %v, got %v", s, expected, v)
+		}
+	}
+}
+

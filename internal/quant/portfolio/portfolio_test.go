@@ -70,3 +70,23 @@ func TestDynamicHalfKellySizer(t *testing.T) {
 		t.Errorf("expected volatile notional (%f) < calm notional (%f)", notionalVolatile, notionalCalm)
 	}
 }
+
+func TestHole37_KellySizerUnderfundedProtection(t *testing.T) {
+	ks := NewDynamicKellySizer(math.NaN(), math.NaN(), math.NaN()) // should fallback to 0.5, 0.85, 5.0
+	if ks.MinNotional != 5.0 || ks.KellyFraction != 0.5 {
+		t.Fatalf("expected defaults for NaN initialization, got %+v", ks)
+	}
+
+	// Account equity below MinNotional ($3.00 < $5.00)
+	qty, notional := ks.ComputeBetSize(3.0, 60000.0, 35.0, 0.55, 0.833, 60.0)
+	if qty != 0 || notional != 0 {
+		t.Fatalf("expected 0, 0 for underfunded account, got qty=%v notional=%v", qty, notional)
+	}
+
+	// NaN inputs
+	qtyNaN, notionalNaN := ks.ComputeBetSize(math.NaN(), math.NaN(), math.NaN(), math.NaN(), math.NaN(), math.NaN())
+	if qtyNaN != 0 || notionalNaN != 0 {
+		t.Fatalf("expected 0, 0 for NaN inputs, got qty=%v notional=%v", qtyNaN, notionalNaN)
+	}
+}
+
