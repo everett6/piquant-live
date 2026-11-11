@@ -25,6 +25,7 @@ func runCollect(ctx context.Context, args []string) error {
 	gdeltDays := fs.Int("gdelt-days", 90, "days of GDELT headlines to backfill")
 	noBackfill := fs.Bool("no-backfill", false, "skip historical backfill")
 	minFree := fs.Float64("min-free-gb", 20, "pause writing below this much free disk")
+	ticks := fs.Bool("ticks", true, "record every Coinbase trade and 1s top-10 order-book snapshots (ticks/, book/)")
 	gdeltSpacing := fs.Duration("gdelt-spacing", 20*time.Second, "delay between GDELT requests (their limit is ~1 per 5s, enforced strictly)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -91,6 +92,15 @@ func runCollect(ctx context.Context, args []string) error {
 				}
 			}
 		}()
+	}
+	if *ticks && len(cbProds) > 0 {
+		rec, err := collect.NewTickRecorder(collect.TickConfig{Dir: *dir, Products: cbProds, MinFreeGB: *minFree})
+		if err != nil {
+			return err
+		}
+		tickDone := make(chan struct{})
+		go func() { rec.Run(ctx); close(tickDone) }()
+		defer func() { <-tickDone }() // let the recorder flush its buffers on shutdown
 	}
 	fmt.Printf("[COLLECT] writing to %s (symbols %v, coinbase %v); status in status.json\n", *dir, symList, cbProds)
 	col.Run(ctx)
