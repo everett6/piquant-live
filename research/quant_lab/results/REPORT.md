@@ -232,3 +232,32 @@ Pick {"th": 0.75, "tp": 20, "sl": 40} vs live comparator {"th": 0.75, "tp": 39, 
 H-win (>=55% on A, B, C): True; net bps better on 0/3; return better on 2/3 -> adopt: **False**; H-profit pass: **False**
 Trials charged in total: 675
 
+## Round 5 (PREREG5.md) — M1 trend-gated leverage: monthly beat rate vs BTC buy-and-hold
+
+| SMA n | Lev | Disc. beat rate | Beats/months | Disc. Sharpe | Disc. ret % |
+| --- | --- | --- | --- | --- | --- |
+| 20 | 1.0 | 0.233 | 7/30 | 0.99 | 110.3 |
+| 20 | 1.5 | 0.333 | 10/30 | 0.99 | 170.2 |
+| 20 | 2.0 | 0.433 | 13/30 | 0.99 | 220.4 |
+| 50 | 1.0 | 0.233 | 7/30 | 1.64 | 304.1 |
+| 50 | 1.5 | 0.400 | 12/30 | 1.64 | 611.1 |
+| 50 | 2.0 | 0.467 | 14/30 | 1.64 | 1046.7 |
+| 100 | 1.0 | 0.167 | 5/30 | 1.23 | 186.9 |
+| 100 | 1.5 | 0.433 | 13/30 | 1.23 | 317.6 |
+| 100 | 2.0 | 0.433 | 13/30 | 1.23 | 450.0 |
+| 200 | 1.0 | 0.067 | 2/30 | 1.10 | 163.5 |
+| 200 | 1.5 | 0.367 | 11/30 | 1.10 | 259.3 |
+| 200 | 2.0 | 0.433 | 13/30 | 1.10 | 336.6 |
+
+Pick {"n": 50, "lev": 2.0}; PBO (monthly excess) nan
+
+| Holdout | Beat rate | Beats/months | Ret % | B&H ret % | Sharpe | B&H Sharpe | Max DD % | B&H max DD % | DSR |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| holdout_A | 0.562 | 9/16 | -3.8 | -31.2 | 0.19 | -0.45 | -46.8 | -53.1 | 0.25 |
+| holdout_B | 0.522 | 12/23 | -30.4 | -42.6 | 0.28 | -0.01 | -84.6 | -76.7 | 0.24 |
+| holdout_C | 0.639 | 23/36 | 920.7 | 109.1 | 1.27 | 0.71 | -79.5 | -81.4 | 0.81 |
+| holdout_D | 0.625 | 15/24 | 11905.4 | 3121.4 | 2.52 | 2.67 | -60.3 | -36.3 | 0.99 |
+
+Pooled holdout beat rate 0.596 (59/99), one-sided binomial p = 0.0350; D sufficient True -> **FAIL**
+Trials charged in total: 687
+
