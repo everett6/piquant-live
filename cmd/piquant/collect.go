@@ -69,11 +69,10 @@ func runCollect(ctx context.Context, args []string) error {
 		go func() {
 			for _, prod := range cbProds {
 				job := "candles_" + prod
-				err := collect.BackfillCoinbaseCandles(ctx, client, *dir, prod, now.AddDate(0, 0, -*candleDays), now,
-					func(s string) { col.SetBackfillStatus(job, s) })
-				if err != nil && ctx.Err() == nil {
-					col.SetBackfillStatus(job, "error: "+err.Error())
-				}
+				retryUntilDone(ctx, func() error {
+					return collect.BackfillCoinbaseCandles(ctx, client, *dir, prod, now.AddDate(0, 0, -*candleDays), now,
+						func(s string) { col.SetBackfillStatus(job, s) })
+				}, func(err error) { col.SetBackfillStatus(job, "error, retrying in 5m: "+err.Error()) })
 			}
 		}()
 		go func() {
@@ -83,10 +82,12 @@ func runCollect(ctx context.Context, args []string) error {
 			}
 			for _, q := range queries { // sequential: GDELT allows one request per 5s per client
 				job := "gdelt_" + q.label
-				err := collect.BackfillGDELT(ctx, client, *dir, q.label, q.q, now.AddDate(0, 0, -*gdeltDays), now,
-					3*time.Hour, func(s string) { col.SetBackfillStatus(job, s) })
-				if err != nil && ctx.Err() == nil {
-					col.SetBackfillStatus(job, "error: "+err.Error())
+				// Windows that fail (throttling, network down) are retried on the next pass.
+				for pass := 0; pass < 6 && ctx.Err() == nil; pass++ {
+					retryUntilDone(ctx, func() error {
+						return collect.BackfillGDELT(ctx, client, *dir, q.label, q.q, now.AddDate(0, 0, -*gdeltDays), now,
+							3*time.Hour, func(s string) { col.SetBackfillStatus(job, s) })
+					}, func(err error) { col.SetBackfillStatus(job, "error, retrying in 5m: "+err.Error()) })
 				}
 			}
 		}()
@@ -95,6 +96,23 @@ func runCollect(ctx context.Context, args []string) error {
 	col.Run(ctx)
 	fmt.Println("[COLLECT] stopped, buffers flushed")
 	return nil
+}
+
+// retryUntilDone reruns fn every 5 minutes until it succeeds or ctx ends, so backfills
+// survive network outages without a restart (completed days/windows are skipped on rerun).
+func retryUntilDone(ctx context.Context, fn func() error, onErr func(error)) {
+	for ctx.Err() == nil {
+		err := fn()
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+		onErr(err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Minute):
+		}
+	}
 }
 
 // runExtract turns stored headlines into structured signals with a local Ollama model.

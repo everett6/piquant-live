@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // NewsScope differentiates broad macroeconomic news from asset-specific micro news.
@@ -65,10 +66,10 @@ type NewsItem struct {
 	Summary          string       `json:"summary,omitempty"`
 	Source           string       `json:"source"`
 	URL              string       `json:"url,omitempty"`
-	AffectedSymbols  []string     `json:"affected_symbols"` // Empty means market-wide
-	SentimentScore   float64      `json:"sentiment_score"`  // [-1.0, +1.0]: positive = bullish, negative = bearish
-	UrgencyScore     float64      `json:"urgency_score"`    // [0.0, 1.0]: how fast market prices in the news
-	ConfidenceScore  float64      `json:"confidence_score"` // [0.0, 1.0]: NLP classification confidence
+	AffectedSymbols  []string     `json:"affected_symbols"`   // Empty means market-wide
+	SentimentScore   float64      `json:"sentiment_score"`    // [-1.0, +1.0]: positive = bullish, negative = bearish
+	UrgencyScore     float64      `json:"urgency_score"`      // [0.0, 1.0]: how fast market prices in the news
+	ConfidenceScore  float64      `json:"confidence_score"`   // [0.0, 1.0]: NLP classification confidence
 	IsAdverseExploit bool         `json:"is_adverse_exploit"` // True if hack/exploit/critical vulnerability
 }
 
@@ -82,9 +83,9 @@ type NewsSentimentReport struct {
 	SpreadMultipliers map[string]float64 `json:"spread_multipliers"` // Dynamic spread expansion multiplier
 	ActiveAlerts      []NewsItem         `json:"active_alerts"`      // Breaking news in active decay window
 	LastUpdated       time.Time          `json:"last_updated"`
-	FeedsOK           int                `json:"feeds_ok"`          // feeds fetched successfully in the last sync
-	FeedsFailed       int                `json:"feeds_failed"`      // feeds that failed in the last sync
-	LastSyncItems     int                `json:"last_sync_items"`   // headlines parsed in the last sync
+	FeedsOK           int                `json:"feeds_ok"`        // feeds fetched successfully in the last sync
+	FeedsFailed       int                `json:"feeds_failed"`    // feeds that failed in the last sync
+	LastSyncItems     int                `json:"last_sync_items"` // headlines parsed in the last sync
 	LastSync          time.Time          `json:"last_sync"`
 }
 
@@ -114,7 +115,7 @@ func NewNewsPipeline(dataDir, syncURL string) *NewsPipeline {
 		httpClient: &http.Client{Timeout: 6 * time.Second},
 		stopCh:     make(chan struct{}),
 		// Start empty: only real ingested headlines (or the on-disk cache) may influence trading.
-		items:      nil,
+		items: nil,
 	}
 
 	_ = p.loadCache()
@@ -166,6 +167,11 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 	}
 
 	text := strings.ToLower(title + " " + summary)
+	norm := normalizeWords(text)
+	// kw matches whole words or phrases only ("hack" must not match "hackathon", "ada" not "canada").
+	kw := func(term string) bool { return containsWord(norm, term) }
+	// stem matches a word prefix ("liquidat" matches "liquidation", "liquidated").
+	stem := func(prefix string) bool { return strings.Contains(norm, " "+strings.TrimSpace(normalizeWords(prefix))) }
 	scope := ScopeMacro
 	category := CatGeneralCrypto
 	impact := ImpactUrgentLow
@@ -176,14 +182,14 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 
 	// 1. Entity & Symbol Extraction
 	var affectedSymbols []string
-	hasBTC := strings.Contains(text, "btc") || strings.Contains(text, "bitcoin") || strings.Contains(text, "satoshi")
-	hasETH := strings.Contains(text, "eth") || strings.Contains(text, "ethereum") || strings.Contains(text, "vitalik") || strings.Contains(text, "erc20")
-	hasSOL := strings.Contains(text, "sol") || strings.Contains(text, "solana")
-	hasBNB := strings.Contains(text, "bnb") || strings.Contains(text, "binance coin") || strings.Contains(text, " cz ")
-	hasXRP := strings.Contains(text, "xrp") || strings.Contains(text, "ripple")
-	hasDOGE := strings.Contains(text, "doge") || strings.Contains(text, "dogecoin")
-	hasADA := strings.Contains(text, "ada") || strings.Contains(text, "cardano")
-	hasAVAX := strings.Contains(text, "avax") || strings.Contains(text, "avalanche")
+	hasBTC := kw("btc") || kw("bitcoin") || kw("satoshi")
+	hasETH := kw("eth") || kw("ethereum") || kw("vitalik") || kw("erc20")
+	hasSOL := kw("sol") || kw("solana")
+	hasBNB := kw("bnb") || kw("binance coin") || kw(" cz ")
+	hasXRP := kw("xrp") || kw("ripple")
+	hasDOGE := kw("doge") || kw("dogecoin")
+	hasADA := kw("ada") || kw("cardano")
+	hasAVAX := kw("avax") || kw("avalanche")
 
 	if hasBTC {
 		affectedSymbols = append(affectedSymbols, "BTCUSDT", "BTCUSDC")
@@ -211,41 +217,41 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 	}
 
 	// 2. Keyword Classification: Micro vs Macro & Taxonomy
-	isStableDepeg := (strings.Contains(text, "depeg") || strings.Contains(text, "lost peg") || strings.Contains(text, "below $1") || strings.Contains(text, "below 1$") || strings.Contains(text, "breaks peg")) &&
-		(strings.Contains(text, "usdt") || strings.Contains(text, "usdc") || strings.Contains(text, "dai") || strings.Contains(text, "stablecoin"))
+	isStableDepeg := (kw("depeg") || kw("lost peg") || kw("below $1") || kw("below 1$") || kw("breaks peg")) &&
+		(kw("usdt") || kw("usdc") || kw("dai") || kw("stablecoin"))
 
-	isMicroHack := strings.Contains(text, "hack") || strings.Contains(text, "exploit") ||
-		strings.Contains(text, "drained") || strings.Contains(text, "stolen") ||
-		strings.Contains(text, "theft") || strings.Contains(text, "vulnerability") ||
-		strings.Contains(text, "rugpull") || strings.Contains(text, "bridge attack") ||
-		strings.Contains(text, "flash loan attack") || strings.Contains(text, "private key compromise") ||
-		strings.Contains(text, "oracle manipulation") || strings.Contains(text, "sandwich attack")
+	isMicroHack := kw("hack") || kw("exploit") ||
+		kw("drained") || kw("stolen") ||
+		kw("theft") || kw("vulnerability") ||
+		kw("rugpull") || kw("bridge attack") ||
+		kw("flash loan attack") || kw("private key compromise") ||
+		kw("oracle manipulation") || kw("sandwich attack")
 
-	isMicroUpgrade := strings.Contains(text, "halving") || strings.Contains(text, "upgrade") ||
-		strings.Contains(text, "hard fork") || strings.Contains(text, "pectra") ||
-		strings.Contains(text, "dencun") || strings.Contains(text, "eip-") ||
-		strings.Contains(text, "mainnet launch")
+	isMicroUpgrade := kw("halving") || kw("upgrade") ||
+		kw("hard fork") || kw("pectra") ||
+		kw("dencun") || stem("eip-") ||
+		kw("mainnet launch")
 
-	isExchangeAction := strings.Contains(text, "delist") || strings.Contains(text, "delisting") ||
-		strings.Contains(text, "trading halted") || strings.Contains(text, "suspends withdrawal") ||
-		strings.Contains(text, "maintenance outage") || strings.Contains(text, "new listing")
+	isExchangeAction := kw("delist") || kw("delisting") ||
+		kw("trading halted") || kw("suspends withdrawal") ||
+		kw("maintenance outage") || kw("new listing")
 
-	isWhale := strings.Contains(text, "whale") || strings.Contains(text, "transferred to exchange") ||
-		strings.Contains(text, "dormant wallet") || strings.Contains(text, "large deposit")
+	isWhale := kw("whale") || kw("transferred to exchange") ||
+		kw("dormant wallet") || kw("large deposit")
 
-	isFedMonetary := strings.Contains(text, "fed ") || strings.Contains(text, "fomc") ||
-		strings.Contains(text, "powell") || strings.Contains(text, "interest rate") ||
-		strings.Contains(text, "rate hike") || strings.Contains(text, "rate cut") ||
-		strings.Contains(text, "central bank")
+	isFedMonetary := kw("fed ") || kw("fomc") ||
+		kw("powell") || kw("interest rate") ||
+		kw("rate hike") || kw("rate cut") ||
+		kw("central bank")
 
-	isInflation := strings.Contains(text, "cpi") || strings.Contains(text, "inflation") ||
-		strings.Contains(text, "ppi") || strings.Contains(text, "pce")
+	isInflation := kw("cpi") || kw("inflation") ||
+		kw("ppi") || kw("pce")
 
-	isRegulation := strings.Contains(text, "sec ") || strings.Contains(text, "cftc") ||
-		strings.Contains(text, "etf approval") || strings.Contains(text, "etf approved") ||
-		strings.Contains(text, "lawsuit") || strings.Contains(text, "wells notice") ||
-		strings.Contains(text, "subpoena") || strings.Contains(text, "gensler") ||
-		strings.Contains(text, "treasury")
+	isRegulation := kw("sec ") || kw("cftc") ||
+		kw("etf approval") || kw("etf approved") ||
+		kw("lawsuit") || kw("wells notice") ||
+		kw("subpoena") || kw("gensler") ||
+		kw("treasury")
 
 	// 3. Scope & Category Routing
 	if isStableDepeg {
@@ -271,7 +277,7 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 		impact = ImpactUrgentHigh
 		urgency = 0.85
 		confidence = 0.88
-		if strings.Contains(text, "delist") || strings.Contains(text, "halted") || strings.Contains(text, "suspend") {
+		if kw("delist") || kw("halted") || kw("suspend") {
 			sentiment = -0.75
 		} else {
 			sentiment = +0.60
@@ -288,7 +294,7 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 		category = CatWhaleAlert
 		impact = ImpactUrgentMedium
 		urgency = 0.70
-		if strings.Contains(text, "to exchange") || strings.Contains(text, "deposit") {
+		if kw("to exchange") || kw("deposit") {
 			sentiment = -0.55 // Selling pressure
 		} else {
 			sentiment = +0.50 // Outflow / accumulation
@@ -299,9 +305,9 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 		impact = ImpactUrgentHigh
 		urgency = 0.90
 		confidence = 0.90
-		if strings.Contains(text, "cut") || strings.Contains(text, "dovish") || strings.Contains(text, "ease") {
+		if kw("cut") || kw("dovish") || kw("ease") {
 			sentiment = +0.80
-		} else if strings.Contains(text, "hike") || strings.Contains(text, "hawkish") {
+		} else if kw("hike") || kw("hawkish") {
 			sentiment = -0.80
 		}
 	} else if isInflation {
@@ -310,9 +316,9 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 		impact = ImpactUrgentHigh
 		urgency = 0.88
 		confidence = 0.88
-		if strings.Contains(text, "cool") || strings.Contains(text, "lower") || strings.Contains(text, "fall") || strings.Contains(text, "disinflation") {
+		if kw("cool") || kw("lower") || kw("fall") || stem("disinflation") {
 			sentiment = +0.75
-		} else if strings.Contains(text, "hot") || strings.Contains(text, "rise") || strings.Contains(text, "surge") || strings.Contains(text, "higher") {
+		} else if kw("hot") || kw("rise") || kw("surge") || kw("higher") {
 			sentiment = -0.75
 		}
 	} else if isRegulation {
@@ -321,9 +327,9 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 		impact = ImpactUrgentHigh
 		urgency = 0.85
 		confidence = 0.85
-		if strings.Contains(text, "approved") || strings.Contains(text, "approval") || strings.Contains(text, "dismissed") || strings.Contains(text, "wins") {
+		if kw("approved") || kw("approval") || kw("dismissed") || kw("wins") {
 			sentiment = +0.85
-		} else if strings.Contains(text, "sues") || strings.Contains(text, "subpoena") || strings.Contains(text, "wells notice") || strings.Contains(text, "ban") {
+		} else if kw("sues") || kw("subpoena") || kw("wells notice") || kw("ban") {
 			sentiment = -0.80
 		}
 	} else {
@@ -333,14 +339,19 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 		posCount := 0
 		negCount := 0
 		for _, w := range posWords {
-			if strings.Contains(text, w) {
+			if kw(w) || (w == "liquidat" && stem(w)) {
 				posCount++
 			}
 		}
 		for _, w := range negWords {
-			if strings.Contains(text, w) {
+			if kw(w) || (w == "liquidat" && stem(w)) {
 				negCount++
 			}
+		}
+		cryptoRelevant := len(affectedSymbols) > 0 || hasBTC || hasETH || hasSOL || kw("crypto") || kw("cryptocurrency") ||
+			kw("stablecoin") || kw("token") || kw("blockchain") || kw("defi") || kw("altcoin")
+		if !cryptoRelevant {
+			posCount, negCount = 0, 0 // generic tone of non-crypto headlines is noise, not signal
 		}
 		if posCount > negCount {
 			sentiment = math.Min(0.70, float64(posCount)*0.25)
@@ -350,7 +361,7 @@ func (p *NewsPipeline) Analyze(title, summary, source, url string, eventTime tim
 	}
 
 	// Negation Reversal Check
-	if strings.Contains(text, " not ") || strings.Contains(text, " false ") || strings.Contains(text, " fake ") || strings.Contains(text, " denied ") {
+	if kw(" not ") || kw(" false ") || kw(" fake ") || kw(" denied ") {
 		sentiment = -sentiment * 0.85
 	}
 
@@ -826,4 +837,36 @@ func getEmbeddedFallbackNews() []NewsItem {
 			ConfidenceScore: 0.85,
 		},
 	}
+}
+
+// normalizeWords lowercases text and collapses every run of non-alphanumeric characters
+// into one space, padded with spaces at both ends for whole-word matching.
+func normalizeWords(text string) string {
+	var b strings.Builder
+	b.Grow(len(text) + 2)
+	b.WriteByte(' ')
+	space := true
+	for _, r := range strings.ToLower(text) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			space = false
+		} else if !space {
+			b.WriteByte(' ')
+			space = true
+		}
+	}
+	if !space {
+		b.WriteByte(' ')
+	}
+	return b.String()
+}
+
+// containsWord reports whether term (a word or phrase, punctuation ignored) occurs in
+// normalized text on word boundaries.
+func containsWord(norm, term string) bool {
+	t := strings.TrimSpace(normalizeWords(term))
+	if t == "" {
+		return false
+	}
+	return strings.Contains(norm, " "+t+" ")
 }
