@@ -3,6 +3,7 @@ package paper
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -418,8 +419,8 @@ func TestMultiAssetMicrostructureIsolationAndClipSizing(t *testing.T) {
 		NumAsks: 5,
 	}
 	for i := 0; i < 5; i++ {
-		btcBook.Bids[i] = marketdata.PriceLevel{Price: 71800.0 - float64(i), Size: 0.70} // ~$250k bid side
-		btcBook.Asks[i] = marketdata.PriceLevel{Price: 71801.0 + float64(i), Size: 0.70} // ~$250k ask side
+		btcBook.Bids[i] = marketdata.PriceLevel{Price: 71800.0 - float64(i), Size: 0.70}   // ~$250k bid side
+		btcBook.Asks[i] = marketdata.PriceLevel{Price: 71801.0 + float64(i), Size: 0.70}   // ~$250k ask side
 		ethBook.Bids[i] = marketdata.PriceLevel{Price: 2238.0 - float64(i)*0.1, Size: 2.5} // ~$28k bid side
 		ethBook.Asks[i] = marketdata.PriceLevel{Price: 2238.2 + float64(i)*0.1, Size: 2.5} // ~$28k ask side
 	}
@@ -947,7 +948,7 @@ func TestAdaptiveMicrostructureFormulasAndProfitDecayRatchet(t *testing.T) {
 	}
 
 	// Net edge must be >= 6.0 bps net and < 12.5 bps base target
-	netEdgeBps := (exitAsk.Price - 2200.00) / 2200.00 * 1e4 - 3.0 // subtracting 3.0 bps fee
+	netEdgeBps := (exitAsk.Price-2200.00)/2200.00*1e4 - 3.0 // subtracting 3.0 bps fee
 	if netEdgeBps < 6.0 {
 		t.Errorf("expected net edge >= 6.0 bps floor, got %f", netEdgeBps)
 	}
@@ -1553,3 +1554,50 @@ func TestTribecaTargetInventoryAndFairValueIntegration(t *testing.T) {
 	}
 }
 
+// A failed recalibration must back off for recalibFailureBackoff instead of
+// retrying on the 3-minute cooldown, and must not report HOT_RELOADED.
+func TestAutoRecalibrationFailureBacksOff(t *testing.T) {
+	cfg := DefaultDryRunConfig(t.TempDir())
+	ring := engine.NewSPSCRing(128)
+	eng, err := NewDryRunEngine(cfg, ring, NewMarketStreamIngestor(DefaultStreamConfig(), ring))
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	calls := make(chan struct{}, 4)
+	eng.SetAutonomousRecalibrator(func(ctx context.Context, symbol string, c float64, d string) error {
+		calls <- struct{}{}
+		return errors.New("no tick data")
+	})
+
+	eng.mu.Lock()
+	eng.maybeTriggerAutoRecalibrationLocked("BTCUSDT")
+	eng.mu.Unlock()
+	select {
+	case <-calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("recalibrator was not called")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for eng.recalibrating.Load() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	eng.mu.Lock()
+	status := eng.state.SelfAdaptation.Status
+	backoff := eng.recalibBackoff
+	eng.lastAutoRecalib = time.Now().Add(-10 * time.Minute) // 3-minute cooldown has passed
+	eng.maybeTriggerAutoRecalibrationLocked("BTCUSDT")
+	eng.mu.Unlock()
+
+	if !strings.HasPrefix(status, "RECALIB_ERROR") {
+		t.Errorf("expected RECALIB_ERROR status, got %q", status)
+	}
+	if time.Until(backoff) < recalibFailureBackoff-time.Minute {
+		t.Errorf("expected backoff ~%s, got %s", recalibFailureBackoff, time.Until(backoff))
+	}
+	select {
+	case <-calls:
+		t.Error("recalibrator retried during failure backoff")
+	case <-time.After(100 * time.Millisecond):
+	}
+}

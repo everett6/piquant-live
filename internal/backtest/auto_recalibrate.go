@@ -2,16 +2,19 @@ package backtest
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
-// RunAutonomousRecalibration executes an autonomous multi-core parallel grid search
-// over recent tick partitions to discover optimal parameters that eliminate leakage,
-// persisting the winning configuration for immediate hot-reloading by the live engine.
+// ErrNoTickData is returned when no tick partitions exist for the symbol, so no
+// recalibration can be run. Callers must treat this as "nothing changed".
+var ErrNoTickData = errors.New("no tick partitions found; recalibration skipped")
+
+// RunAutonomousRecalibration executes a parallel grid search over recent tick
+// partitions and persists the winning configuration for hot-reloading by the live
+// engine. It writes nothing and returns an error when it has no data to search on.
 func RunAutonomousRecalibration(ctx context.Context, symbol string, currentCapital float64, dataDir string) error {
 	if currentCapital <= 0 {
 		currentCapital = 200.00
@@ -22,82 +25,64 @@ func RunAutonomousRecalibration(ctx context.Context, symbol string, currentCapit
 	sym := strings.ToUpper(symbol)
 
 	// Search candidate data directories for binary tick partitions
-	candidates := []string{
-		dataDir,
-		"/home/everett/piquant-data/ticks",
-		"data/historical/ticks",
-		"../../data/historical/ticks",
+	candidates := []string{"data/historical/ticks", "../../data/historical/ticks"}
+	if dataDir != "" {
+		candidates = append([]string{filepath.Join(dataDir, "ticks"), dataDir}, candidates...)
 	}
 
 	var foundFiles []string
 	for _, dir := range candidates {
-		if dir == "" {
-			continue
-		}
 		matches, err := filepath.Glob(filepath.Join(dir, fmt.Sprintf("%s-*.pqbin", sym)))
 		if err == nil && len(matches) > 0 {
 			foundFiles = matches
 			break
 		}
 	}
-
-	outPaths := []string{
-		"/home/everett/piquant-data/config/optimal_params.json",
-		"data/reports/optimal_params.json",
+	if len(foundFiles) == 0 {
+		return fmt.Errorf("%s: %w", sym, ErrNoTickData)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
-	// 1. If partition files are found on disk, execute Walk-Forward Out-Of-Sample Grid Search
-	if len(foundFiles) > 0 {
-		// Use at most the latest 2-3 months for responsive and fast calibration
-		recalibFiles := foundFiles
-		if len(recalibFiles) > 3 {
-			recalibFiles = recalibFiles[len(recalibFiles)-3:]
-		}
-
-		partitions, err := LoadMonthlyPartitions(recalibFiles)
-		if err == nil && len(partitions) > 0 {
-			baseCfg := TickSimConfig{
-				Symbol:             sym,
-				InitialCapital:     currentCapital,
-				MakerFeeBps:        1.50,
-				TakerFeeBps:        4.0,
-				SimulatedLatencyMs: 10.0,
-				CancelLatencyMs:    5.0,
-				BaseSpreadBps:      1.50,
-				TargetProfitBps:    12.5,
-				StopLossBps:        60.0,
-				EnableMacroShield:  true,
-			}
-			gridCandidates := DefaultGridSearchCandidates(baseCfg)
-			leaderboard := RunParallelGridSearch(partitions, gridCandidates)
-			if len(leaderboard) > 0 {
-				winner := leaderboard[0]
-				for _, outPath := range outPaths {
-					_ = SaveOptimalParams(outPath, winner)
-				}
-				return nil
-			}
-		}
+	// Use at most the latest 3 months for responsive calibration
+	if len(foundFiles) > 3 {
+		foundFiles = foundFiles[len(foundFiles)-3:]
+	}
+	partitions, err := LoadMonthlyPartitions(foundFiles)
+	if err != nil {
+		return fmt.Errorf("%s: load tick partitions: %w", sym, err)
+	}
+	if len(partitions) == 0 {
+		return fmt.Errorf("%s: %w", sym, ErrNoTickData)
 	}
 
-	// 2. Analytical adaptive recalibration fallback if binary partitions are not on disk
-	analyticalConfig := OptimalParamsConfig{
-		Symbol:           sym,
-		Gamma:            0.0018,
-		MinHalfSpreadBps: 2.25, // Widen spread floor to stop money leakage
-		ClipFraction:     0.15, // Reduce clip size for capital defense
-		BaseLeverage:     1.50, // De-leverage during adverse regime
-		MaxLeverageCap:   2.50,
-		SharpeRatio:      15.20,
-		MaxDrawdownPct:   0.85,
-		TotalReturnPct:   6.40,
-		CompositeScore:   180.0,
-		UpdatedAt:        time.Now().UTC().Format(time.RFC3339),
+	baseCfg := TickSimConfig{
+		Symbol:             sym,
+		InitialCapital:     currentCapital,
+		MakerFeeBps:        1.50,
+		TakerFeeBps:        4.0,
+		SimulatedLatencyMs: 10.0,
+		CancelLatencyMs:    5.0,
+		BaseSpreadBps:      1.50,
+		TargetProfitBps:    12.5,
+		StopLossBps:        60.0,
+		EnableMacroShield:  true,
 	}
-	for _, outPath := range outPaths {
-		raw, _ := json.MarshalIndent(analyticalConfig, "", "  ")
-		_ = AtomicWriteFile(outPath, raw, 0644)
+	leaderboard := RunParallelGridSearch(partitions, DefaultGridSearchCandidates(baseCfg))
+	if len(leaderboard) == 0 {
+		return fmt.Errorf("%s: grid search produced no candidates", sym)
+	}
+	if err := ctx.Err(); err != nil {
+		return err // timed out: do not publish a result the caller has given up on
 	}
 
+	outPath := "data/reports/optimal_params.json"
+	if dataDir != "" {
+		outPath = filepath.Join(dataDir, "config", "optimal_params.json")
+	}
+	if err := SaveOptimalParams(outPath, leaderboard[0]); err != nil {
+		return fmt.Errorf("%s: save params: %w", sym, err)
+	}
 	return nil
 }

@@ -450,6 +450,7 @@ type DryRunEngine struct {
 	recalibrator    AutonomousRecalibrator
 	recalibrating   atomic.Bool
 	lastAutoRecalib time.Time
+	recalibBackoff  time.Time // no recalibration before this time (set after a failed run)
 
 	// Real-time Coinbase institutional lead-lag signal oracle
 	cbOracle *CoinbaseSignalOracle
@@ -1313,6 +1314,10 @@ func (e *DryRunEngine) SetCoinbaseOracle(oracle *CoinbaseSignalOracle) {
 	e.cbOracle = oracle
 }
 
+// recalibFailureBackoff is how long to wait before retrying after a failed recalibration
+// (e.g. no tick data on disk), so a persistent failure is not retried every 3 minutes.
+const recalibFailureBackoff = time.Hour
+
 // maybeTriggerAutoRecalibrationLocked asynchronously executes a fast walk-forward backtest grid search
 // and hot-reloads optimal parameters when money leakage or consecutive losses occur.
 // Caller must hold e.mu.
@@ -1324,8 +1329,8 @@ func (e *DryRunEngine) maybeTriggerAutoRecalibrationLocked(symbol string) {
 		return
 	}
 	now := time.Now()
-	if now.Sub(last) < 3*time.Minute {
-		return // Cooldown: at most once every 3 minutes
+	if now.Sub(last) < 3*time.Minute || now.Before(e.recalibBackoff) {
+		return // Cooldown: at most once every 3 minutes, and back off after failures
 	}
 
 	e.recalibrating.Store(true)
@@ -1342,9 +1347,11 @@ func (e *DryRunEngine) maybeTriggerAutoRecalibrationLocked(symbol string) {
 
 		err := recal(ctx, symbol, capVal, dDir)
 		if err != nil {
-			fmt.Printf("[AUTO-ADAPT] %s: Recalibration error: %v\n", symbol, err)
+			fmt.Printf("[AUTO-ADAPT] %s: Recalibration skipped, parameters unchanged (retry in %s): %v\n",
+				symbol, recalibFailureBackoff, err)
 			e.mu.Lock()
 			e.state.SelfAdaptation.Status = "RECALIB_ERROR: " + err.Error()
+			e.recalibBackoff = time.Now().Add(recalibFailureBackoff)
 			e.mu.Unlock()
 			return
 		}
