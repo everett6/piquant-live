@@ -75,5 +75,10 @@
 - **Futures paper fills use the Coinbase spot feed as a stand-in for the futures book.** The review said
   Binance.US, from a stale comment (fixed). Basis and depth still differ from real nano futures fills.
 - **No Kraken order connector exists.** Only market data has been recorded, since 2026-11-11.
-- **The engine has no "needs a human restart" lock.** Only the PAPER50 trend profile has `--reset`.
+- ~~The engine has no "needs a human restart" lock.~~ Fixed 2026-11-11: any circuit trip writes
+  `paper/KILL_LOCK`; the engine starts halted while it exists. Human restart: stop the service, run
+  `piquant unlock --data ~/piquant-data` (resets the drawdown peak), start it. `piquant unlock --status` shows it.
+- Nightly backup: the desktop collector (`--backup-host everett@raspberrypi.local`) pulls a tar.gz of the Pi's
+  paper/trend/config/reports/macro into ~/piquant-backups/pi after 03:00 local, keeping 30. The ledger push to a
+  private GitHub repo (`--backup-git-dir`) stays off until the owner creates that repo.
 - **Disk:** at 50–100 MB/day, 110 GB free lasts about 3–5 years, minus other desktop use.

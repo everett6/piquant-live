@@ -887,6 +887,8 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		e.state.Goal.BenchmarkSymbol = strings.ToUpper(cfg.Symbols[0])
 	}
 
+	e.enforceKillLock()
+
 	if stream != nil { // avoid a typed-nil interface
 		e.stream = stream
 	}
@@ -988,6 +990,9 @@ func (e *DryRunEngine) Stop() {
 // emergencyFlattenLocked liquidates all open inventory at current mark price and converts unrealized PnL to cash.
 // Caller MUST hold e.mu.
 func (e *DryRunEngine) emergencyFlattenLocked(reason string) {
+	if e.state.CircuitHalted {
+		e.writeKillLockLocked(reason)
+	}
 	for sym, pos := range e.state.Positions {
 		if pos != nil && pos.Size != 0 && pos.MarkPrice > 0 {
 			closePrice := pos.MarkPrice

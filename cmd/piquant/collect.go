@@ -28,6 +28,13 @@ func runCollect(ctx context.Context, args []string) error {
 	ticks := fs.Bool("ticks", true, "record every trade and 1s top-10 order-book snapshots (ticks/, book/)")
 	tickVenues := fs.String("tick-venues", "coinbase,binanceus,kraken", "venues for tick recording")
 	tickBases := fs.String("tick-bases", "BTC,ETH,SOL", "coins for tick recording on every venue")
+	backupHost := fs.String("backup-host", "", "ssh target for the nightly Pi state backup (empty = off)")
+	backupRemote := fs.String("backup-remote-dir", "piquant-data", "Pi data dir, relative to its home")
+	backupPaths := fs.String("backup-paths", "paper,trend,config,reports,macro", "Pi subdirs to back up")
+	backupDest := fs.String("backup-dest", filepath.Join(home, "piquant-backups", "pi"), "local backup folder")
+	backupKeep := fs.Int("backup-keep", 30, "nightly archives to keep")
+	backupHour := fs.Int("backup-hour", 3, "local hour after which the nightly backup runs")
+	backupGit := fs.String("backup-git-dir", "", "clone of a PRIVATE repo to push Pi ledgers to (empty = off)")
 	gdeltSpacing := fs.Duration("gdelt-spacing", 20*time.Second, "delay between GDELT requests (their limit is ~1 per 5s, enforced strictly)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -118,6 +125,16 @@ func runCollect(ctx context.Context, args []string) error {
 		tickDone := make(chan struct{})
 		go func() { rec.Run(ctx); close(tickDone) }()
 		defer func() { <-tickDone }() // let the recorder flush its buffers on shutdown
+	}
+	if *backupHost != "" {
+		bc := collect.BackupConfig{Host: *backupHost, RemoteDir: *backupRemote, Dest: *backupDest,
+			Keep: *backupKeep, Hour: *backupHour, GitDir: *backupGit}
+		for _, p := range strings.Split(*backupPaths, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				bc.Paths = append(bc.Paths, p)
+			}
+		}
+		go collect.RunBackups(ctx, bc, func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
 	}
 	fmt.Printf("[COLLECT] writing to %s (symbols %v, coinbase %v); status in status.json\n", *dir, symList, cbProds)
 	col.Run(ctx)
