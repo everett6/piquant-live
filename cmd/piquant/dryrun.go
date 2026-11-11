@@ -104,7 +104,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.StringVar(&f.wsURL, "ws-url", "", "custom Binance public WebSocket URL (default auto)")
 	fs.BoolVar(&f.enableCoinbase, "coinbase", true, "enable Coinbase institutional USD lead-lag signal ingestor (default true)")
 	fs.StringVar(&f.coinbaseWS, "coinbase-ws", "", "custom Coinbase public WebSocket URL (default auto)")
-	fs.IntVar(&f.expBreaker, "expectancy-breaker", 0, "stop new entries after N closed trades if mean net bps/trade is < 0 at the upper 95% bound (0 = off)")
+	fs.IntVar(&f.expBreaker, "expectancy-breaker", 50, "stop new entries after N closed trades if mean net bps/trade is < 0 at the upper 95% bound (0 = off; default 50: round 4 showed the live entry loses ~its cost per trade)")
 	fs.StringVar(&f.feedVenue, "feed-venue", "auto", "primary market feed for fills and flow features: 'auto' (coinbase for us-futures, else binance), 'binance' or 'coinbase'")
 	fs.StringVar(&f.region, "region", paper.RegionUS, "trading region rules: 'us' (Binance.US spot, 1x, long-only), 'us-futures' (US regulated nano futures, up to 5x, long/short) or 'global'")
 	fs.Float64Var(&f.makerFeeBps, "maker-fee", -1, "override maker fee in bps (default: region schedule)")
