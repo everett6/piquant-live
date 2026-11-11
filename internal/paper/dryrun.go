@@ -426,7 +426,7 @@ type AutonomousRecalibrator func(ctx context.Context, symbol string, currentCapi
 type DryRunEngine struct {
 	cfg       DryRunConfig
 	ring      *engine.SPSCRing
-	stream    *MarketStreamIngestor
+	stream    MarketFeed
 	journal   *os.File
 	journalCh chan []byte
 	journalWg sync.WaitGroup
@@ -571,6 +571,20 @@ func sanitizeJournalTail(path string) error {
 	return nil
 }
 
+// MarketFeed is the primary market-data source the engine reads book state and liveness from
+// (Binance ingestor or the Coinbase ingestor when Coinbase is the execution venue).
+type MarketFeed interface {
+	IsConnected() bool
+	IsFallback() bool
+	Stats() (total, depths, trades, gaps, reconnects, fallbacks uint64, lastNs int64)
+	GetL2Book(symbol string) (*marketdata.L2OrderBook, bool)
+}
+
+// SetMarketFeed replaces the primary market feed (call before Start).
+func (e *DryRunEngine) SetMarketFeed(f MarketFeed) {
+	e.stream = f
+}
+
 // NewDryRunEngine constructs and recovers or initializes the paper trading engine.
 func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStreamIngestor) (*DryRunEngine, error) {
 	if math.IsNaN(cfg.InitialCapital) || math.IsInf(cfg.InitialCapital, 0) || cfg.InitialCapital <= 0 {
@@ -665,7 +679,6 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	e := &DryRunEngine{
 		cfg:                   cfg,
 		ring:                  ring,
-		stream:                stream,
 		stopCh:                make(chan struct{}),
 		conformal:             common.NewSplitConformalCalibrator(0.10),
 		glftMM:                common.NewGLFTMarketMaker(1e-3, 0.05, cfg.MakerFeeBps),
@@ -838,6 +851,9 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		e.state.Goal.BenchmarkSymbol = strings.ToUpper(cfg.Symbols[0])
 	}
 
+	if stream != nil { // avoid a typed-nil interface
+		e.stream = stream
+	}
 	return e, nil
 }
 

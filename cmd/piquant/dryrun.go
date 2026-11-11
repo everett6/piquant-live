@@ -52,6 +52,7 @@ type dryRunFlags struct {
 	wsURL             string
 	enableCoinbase    bool
 	coinbaseWS        string
+	feedVenue         string
 	enableNews        bool
 	region            string
 	makerFeeBps       float64
@@ -102,6 +103,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.StringVar(&f.wsURL, "ws-url", "", "custom Binance public WebSocket URL (default auto)")
 	fs.BoolVar(&f.enableCoinbase, "coinbase", true, "enable Coinbase institutional USD lead-lag signal ingestor (default true)")
 	fs.StringVar(&f.coinbaseWS, "coinbase-ws", "", "custom Coinbase public WebSocket URL (default auto)")
+	fs.StringVar(&f.feedVenue, "feed-venue", "auto", "primary market feed for fills and flow features: 'auto' (coinbase for us-futures, else binance), 'binance' or 'coinbase'")
 	fs.StringVar(&f.region, "region", paper.RegionUS, "trading region rules: 'us' (Binance.US spot, 1x, long-only), 'us-futures' (US regulated nano futures, up to 5x, long/short) or 'global'")
 	fs.Float64Var(&f.makerFeeBps, "maker-fee", -1, "override maker fee in bps (default: region schedule)")
 	fs.Float64Var(&f.takerFeeBps, "taker-fee", -1, "override taker fee in bps (default: region schedule)")
@@ -191,20 +193,34 @@ func runDryRun(ctx context.Context, args []string) error {
 		return fmt.Errorf("unknown --region %q (want us, us-futures or global)", f.region)
 	}
 
-	streamCfg := paper.DefaultStreamConfig()
-	streamCfg.Symbols = symList
-	streamCfg.EnableFallback = f.enableFallback
-	switch {
-	case f.wsURL != "":
-		streamCfg.Endpoint = f.wsURL
-	case region == paper.RegionUS || region == paper.RegionUSFutures:
-		streamCfg.Endpoint = paper.BuildBinanceUSStreamURL(symList)
-	default:
-		streamCfg.Endpoint = paper.BuildBinanceStreamURL(symList)
+	feed, err := resolveFeedVenue(f.feedVenue, region, f.wsURL)
+	if err != nil {
+		return err
 	}
-	ingestor := paper.NewMarketStreamIngestor(streamCfg, ring)
-	ingestor.Start(ctx)
-	defer ingestor.Stop()
+	coinbasePrimary := feed == "coinbase"
+	var ingestor *paper.MarketStreamIngestor
+	feedEndpoint := paper.DefaultCoinbaseStreamConfig().Endpoint
+	if f.coinbaseWS != "" {
+		feedEndpoint = f.coinbaseWS
+	}
+	if !coinbasePrimary {
+		streamCfg := paper.DefaultStreamConfig()
+		streamCfg.Symbols = symList
+		streamCfg.EnableFallback = f.enableFallback
+		switch {
+		case f.wsURL != "":
+			streamCfg.Endpoint = f.wsURL
+		case region == paper.RegionUS || region == paper.RegionUSFutures:
+			streamCfg.Endpoint = paper.BuildBinanceUSStreamURL(symList)
+		default:
+			streamCfg.Endpoint = paper.BuildBinanceStreamURL(symList)
+		}
+		feedEndpoint = streamCfg.Endpoint
+		ingestor = paper.NewMarketStreamIngestor(streamCfg, ring)
+		ingestor.Start(ctx)
+		defer ingestor.Stop()
+	}
+	fmt.Printf("[FEED] primary market feed: %s\n", feed)
 
 	// Initialize dry run engine with selected window preset
 	paperCfg := paper.DefaultDryRunConfig(dDir)
@@ -289,7 +305,7 @@ func runDryRun(ctx context.Context, args []string) error {
 	dryRunEngine.SetAutonomousRecalibrator(backtest.RunAutonomousRecalibration)
 
 	// Live venue latency probe drives order timing and the HFT/MFT/LFT strategy regime
-	latMon := paper.NewLatencyMonitor(streamCfg.Endpoint, 15*time.Second)
+	latMon := paper.NewLatencyMonitor(feedEndpoint, 15*time.Second)
 	latMon.Start(ctx)
 	dryRunEngine.SetLatencyMonitor(latMon)
 	ordMon := paper.NewLatencyMonitor(paper.OrderEntryEndpoint(region), 15*time.Second)
@@ -297,7 +313,7 @@ func runDryRun(ctx context.Context, args []string) error {
 	dryRunEngine.SetOrderLatencyMonitor(ordMon)
 
 	// Initialize optional Coinbase institutional USD lead-lag signal ingestor
-	if f.enableCoinbase {
+	if f.enableCoinbase || coinbasePrimary {
 		cbCfg := paper.DefaultCoinbaseStreamConfig()
 		if f.coinbaseWS != "" {
 			cbCfg.Endpoint = f.coinbaseWS
@@ -316,9 +332,17 @@ func runDryRun(ctx context.Context, args []string) error {
 			cbCfg.Products = cbProds
 		}
 		cbOracle := paper.NewCoinbaseSignalOracle(symList)
-		// Decouple Coinbase from execution ring to preserve strict SPSC invariants (single producer).
-		// Coinbase is dedicated to cross-venue institutional lead-lag alpha oracle.
-		cbIngestor := paper.NewCoinbaseStreamIngestor(cbCfg, nil, cbOracle)
+		// Exactly one producer feeds the SPSC ring: Coinbase when it is the primary feed, otherwise the
+		// Binance ingestor (and Coinbase is only the cross-venue lead-lag oracle).
+		var cbRing *engine.SPSCRing
+		if coinbasePrimary {
+			cbRing = ring
+		}
+		cbIngestor := paper.NewCoinbaseStreamIngestor(cbCfg, cbRing, cbOracle)
+		if coinbasePrimary {
+			cbIngestor.SetSymbolOrder(symList)
+			dryRunEngine.SetMarketFeed(cbIngestor)
+		}
 		cbIngestor.Start(ctx)
 		defer cbIngestor.Stop()
 
@@ -401,7 +425,7 @@ func runDryRun(ctx context.Context, args []string) error {
 	fmt.Printf(" Initial Capital: $%.2f USDT\n", st.InitialCapital)
 	fmt.Printf(" Active Universe: %s\n", strings.Join(symList, ", "))
 	fmt.Printf(" Region:          %s (feed %s, leverage %.1fx, maker %.2f / taker %.2f bps, latency %s)\n",
-		strings.ToUpper(region), streamCfg.Endpoint[:strings.Index(streamCfg.Endpoint+"?", "?")], paperCfg.MaxLeverage,
+		strings.ToUpper(region), feedEndpoint[:strings.Index(feedEndpoint+"?", "?")], paperCfg.MaxLeverage,
 		paperCfg.MakerFeeBps, paperCfg.TakerFeeBps, paperCfg.OrderLatency)
 	fmt.Printf(" Max Drawdown Limit: %.2f%% (Circuit Breaker)\n", paperCfg.MaxDrawdownPct)
 	fmt.Printf(" State Checkpoint: %s\n", paperCfg.StateFile)
@@ -583,4 +607,20 @@ func printDailyReport(stateFile, dDir string) error {
 
 	fmt.Print(report)
 	return nil
+}
+
+// resolveFeedVenue picks the primary market feed. US futures execute on Coinbase Derivatives, so 'auto'
+// uses Coinbase spot (same venue family, deep USD flow) instead of Binance.US (<1% of US volume).
+func resolveFeedVenue(flag, region, wsURL string) (string, error) {
+	switch v := strings.ToLower(strings.TrimSpace(flag)); v {
+	case "binance", "coinbase":
+		return v, nil
+	case "", "auto":
+		if region == paper.RegionUSFutures && wsURL == "" {
+			return "coinbase", nil
+		}
+		return "binance", nil
+	default:
+		return "", fmt.Errorf("unknown --feed-venue %q (want auto, binance or coinbase)", flag)
+	}
 }

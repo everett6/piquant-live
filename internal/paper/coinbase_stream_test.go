@@ -141,9 +141,17 @@ func TestCoinbaseStreamIngestorPushToRing(t *testing.T) {
 	rawTicker := []byte(`{"type":"ticker","sequence":1001,"product_id":"BTC-USD","price":"75100.50","best_bid":"75100.00","best_ask":"75101.00","side":"buy","last_size":"0.25"}`)
 	ingestor.HandleStreamPayload(rawTicker)
 
+	// A ticker yields a top-of-book (depth) event at the mid first, then the trade print.
+	depth, ok := ring.Pop()
+	if !ok || depth.Kind != 1 || depth.Price != 75100.50 {
+		t.Fatalf("expected depth event at mid 75100.50 first, got %+v ok=%v", depth, ok)
+	}
 	ev, ok := ring.Pop()
 	if !ok {
 		t.Fatalf("expected MarketEvent popped from ring")
+	}
+	if ev.Kind != 0 {
+		t.Errorf("expected trade event, got kind %d", ev.Kind)
 	}
 	if ev.Price != 75100.50 {
 		t.Errorf("expected price 75100.50, got %f", ev.Price)

@@ -279,7 +279,7 @@ func (o *CoinbaseSignalOracle) EvaluateAgainstBinance(normSymbol string, binance
 	sig.LeadLagSkewBps = rawSkew
 
 	// Detect toxic adverse flow from US institutional aggressive buying/selling
-	sig.IsAdverseAsk = sig.Velocity1sBps > 3.0 || sig.BasisBps > 5.0  // Surging UP: shorting is dangerous
+	sig.IsAdverseAsk = sig.Velocity1sBps > 3.0 || sig.BasisBps > 5.0   // Surging UP: shorting is dangerous
 	sig.IsAdverseBid = sig.Velocity1sBps < -3.0 || sig.BasisBps < -5.0 // Dumping DOWN: buying is dangerous
 
 	return *sig
@@ -312,6 +312,11 @@ type CoinbaseStreamIngestor struct {
 	cfg    CoinbaseStreamConfig
 	ring   *engine.SPSCRing
 	oracle *CoinbaseSignalOracle
+	// symIndex maps a base currency (BTC, ETH, ...) to the engine's SymbolID (index in its symbol list).
+	symIndex map[string]uint16
+	symNames []string // engine symbol per SymbolID
+	booksMu  sync.RWMutex
+	books    map[string]*marketdata.L2OrderBook // level-1 book from ticker, keyed by engine symbol
 
 	stats StreamStats
 
@@ -346,6 +351,50 @@ func NewCoinbaseStreamIngestor(cfg CoinbaseStreamConfig, ring *engine.SPSCRing, 
 		ring:   ring,
 		oracle: oracle,
 	}
+}
+
+// SetSymbolOrder makes ring events use the engine's symbol order for SymbolID (index in symbols), so
+// Coinbase can be the primary execution feed. Call before Start.
+func (c *CoinbaseStreamIngestor) SetSymbolOrder(symbols []string) {
+	c.symIndex = make(map[string]uint16, len(symbols))
+	c.symNames = make([]string, len(symbols))
+	for i, s := range symbols {
+		c.symIndex[extractBaseCurrency(s)] = uint16(i)
+		c.symNames[i] = strings.ToUpper(s)
+	}
+}
+
+// GetL2Book returns the level-1 book (best bid/ask and sizes from the ticker) for an engine symbol.
+func (c *CoinbaseStreamIngestor) GetL2Book(symbol string) (*marketdata.L2OrderBook, bool) {
+	c.booksMu.RLock()
+	defer c.booksMu.RUnlock()
+	b, ok := c.books[strings.ToUpper(symbol)]
+	if !ok {
+		return nil, false
+	}
+	cp := *b
+	return &cp, true
+}
+
+// IsFallback is always false: the Coinbase ingestor has no REST fallback mode.
+func (c *CoinbaseStreamIngestor) IsFallback() bool { return false }
+
+func (c *CoinbaseStreamIngestor) updateBook(symbol string, bid, bidSz, ask, askSz float64, nowNs int64) {
+	c.booksMu.Lock()
+	defer c.booksMu.Unlock()
+	if c.books == nil {
+		c.books = make(map[string]*marketdata.L2OrderBook)
+	}
+	b := c.books[symbol]
+	if b == nil {
+		b = &marketdata.L2OrderBook{Symbol: symbol}
+		c.books[symbol] = b
+	}
+	b.Bids[0] = marketdata.PriceLevel{Price: bid, Size: bidSz}
+	b.Asks[0] = marketdata.PriceLevel{Price: ask, Size: askSz}
+	b.NumBids, b.NumAsks = 1, 1
+	b.Initialized = true
+	b.LastUpdateID = uint64(nowNs)
 }
 
 // Oracle returns the underlying CoinbaseSignalOracle.
@@ -603,29 +652,52 @@ func (c *CoinbaseStreamIngestor) HandleStreamPayload(payload []byte) {
 		if isBuy {
 			side = 1
 		}
-		var symID uint16
 		base := extractBaseCurrency(symbol)
-		switch base {
-		case "BTC":
-			symID = 0
-		case "ETH":
-			symID = 1
-		case "SOL":
-			symID = 2
-		default:
-			symID = 0
+		var symID uint16
+		if c.symIndex != nil {
+			id, known := c.symIndex[base]
+			if !known {
+				return
+			}
+			symID = id
+		} else {
+			switch base {
+			case "ETH":
+				symID = 1
+			case "SOL":
+				symID = 2
+			}
 		}
-
-		c.ring.Push(engine.MarketEvent{
+		// Top-of-book update first (mid), so quoting/gating sees the book before the trade print.
+		if bestBid > 0 && bestAsk >= bestBid {
+			if c.symNames != nil {
+				c.updateBook(c.symNames[symID], bestBid, nonNeg(fastExtractJSONFloat(payload, []byte(`"best_bid_size":`))),
+					bestAsk, nonNeg(fastExtractJSONFloat(payload, []byte(`"best_ask_size":`))), nowNs)
+			}
+			if !c.ring.Push(engine.MarketEvent{
+				Timestamp: nowNs,
+				Sequence:  uint64(nowNs),
+				Price:     (bestBid + bestAsk) / 2,
+				Kind:      1, // Depth
+				SymbolID:  symID,
+				Flags:     VenueCoinbase,
+			}) {
+				c.stats.RingDrops.Add(1)
+			}
+			c.stats.DepthUpdates.Add(1)
+		}
+		if !c.ring.Push(engine.MarketEvent{
 			Timestamp: nowNs,
-			Sequence:  uint64(nowNs),
+			Sequence:  uint64(nowNs) + 1,
 			Price:     price,
 			Size:      lastSize,
 			Side:      side,
 			Kind:      0, // Trade
 			SymbolID:  symID,
 			Flags:     VenueCoinbase,
-		})
+		}) {
+			c.stats.RingDrops.Add(1)
+		}
 	}
 }
 
@@ -683,6 +755,13 @@ func FastParseCoinbaseTicker(payload []byte) (symbol string, price, bestBid, bes
 	}
 
 	return symbol, price, bestBid, bestAsk, lastSize, isBuy, true
+}
+
+func nonNeg(x float64) float64 {
+	if math.IsNaN(x) || math.IsInf(x, 0) || x < 0 {
+		return 0
+	}
+	return x
 }
 
 func fastExtractJSONFloat(payload, key []byte) float64 {
