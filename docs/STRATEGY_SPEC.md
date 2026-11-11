@@ -56,7 +56,7 @@
 | Exchange outage | Keep trading the other venues; the gap strategy pauses while a venue is missing |
 | API keys (at go-live) | Trade-only (no withdrawal), with an IP allow-list |
 | Kill switch | Flatten, email, stay off until the owner restarts it by hand |
-| Kill-switch level | **40% drop from peak** (owner's choice over 25%) |
+| Kill-switch level | **40% drop from peak** (owner's choice over 25%). Pi set to `--max-drawdown 40` on 2026-11-11 (was 8); the pre-trade guard and leverage taper use the same limit |
 | Go-live bar | A pre-registered pass, plus 1 month of paper profit, plus drop under 40%, plus ≥200 trades |
 | Email | Gmail app password, kept in an env file on the Pi (owner sets it up; never in git) |
 | Updates | Claude deploys with the owner's OK and keeps the previous binary for rollback |
