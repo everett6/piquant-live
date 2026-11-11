@@ -84,9 +84,18 @@ func truncDay(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 }
 
+// FetchCoinbaseDailyCandles returns up to 300 UTC daily candles for product in [start, end).
+func FetchCoinbaseDailyCandles(ctx context.Context, client *http.Client, product string, start, end time.Time) ([]CandleRow, error) {
+	return fetchCoinbaseCandlesGran(ctx, client, product, start, end, 86400)
+}
+
 func fetchCoinbaseCandles(ctx context.Context, client *http.Client, product string, start, end time.Time) ([]CandleRow, error) {
-	u := fmt.Sprintf("%s/products/%s/candles?granularity=60&start=%s&end=%s", CoinbaseCandlesBase,
-		url.PathEscape(product), start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339))
+	return fetchCoinbaseCandlesGran(ctx, client, product, start, end, 60)
+}
+
+func fetchCoinbaseCandlesGran(ctx context.Context, client *http.Client, product string, start, end time.Time, gran int) ([]CandleRow, error) {
+	u := fmt.Sprintf("%s/products/%s/candles?granularity=%d&start=%s&end=%s", CoinbaseCandlesBase,
+		url.PathEscape(product), gran, start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339))
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		body, code, err := httpGet(ctx, client, u, 1<<20)
