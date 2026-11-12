@@ -92,3 +92,31 @@ Once, after the 12 months are imported and the evaluator's synthetic tests pass.
 - The unfiltered rule will be negative by about the cost.
 - Resting bids will show negative markout after fills (adverse selection), as in PREREG8.
 - I expect V1 to fail.
+
+## Result (run once, 2026-11-12): V1 FAILS
+
+531 million real BTCUSDT trades (2024). Bear regime held 33% of minutes.
+
+| Rule | Discovery n / net bps | Holdout n / net bps (t) | Holdout gross | Holdout stress | Win rate (holdout) |
+|---|---|---|---|---|---|
+| V1 (A-taker + VPIN > 0.65) | 9 / +11.2 | 10 / −0.8 (t −0.07) | +8.8 | −6.8 | 60% |
+| A-taker unfiltered (replication, not judged) | 1,036 / −10.9 | 1,445 / −10.5 (t −11.0) | −0.3 | −16.5 | 41% |
+
+- **Why V1 fails:** 10 holdout trades, against a minimum of 100, and a negative holdout mean.
+  - VPIN is above 0.65 in 0.7% of minutes (median 0.36, p99 0.63, p99.9 0.74).
+  - Only 19 of the 4,254 A-trigger minutes (0.45%) had it.
+  - The 19 filtered trades had a higher gross (+8.8 to +20 bps) than the unfiltered rule (about 0), but 19 trades
+    cannot tell that apart from noise (t about 1 in discovery, 0 in the holdout).
+- **Replication:** the closed PREREG9 A-taker on independent data (Binance 2024 ticks, not Coinbase 1m) gives
+  the same answer: about zero gross, −10.5 bps net, 41% wins.
+- **Maker fills (descriptive):**
+  - The passive side of every trade loses about 1.0–1.2 bps within a second, and the loss persists at 30
+    minutes (−1.0 bp).
+  - A bid resting at the last price fills 86% of minutes (no queue model). The move after the fill is −0.7 bps
+    at 1 minute and −0.2 at 30 minutes.
+  - Net of a 2 bps maker entry and a 7 bps taker exit, that is about −9.2 to −9.7 bps per round trip.
+  - Resting orders at the touch are adversely selected on average. Maker fees alone do not make them
+    profitable.
+- **What happens next:** the VPIN cascade filter on the PREREG9 short is closed, with no variants. Trials
+  charged: 737. PREREG17's K-variants (maker entries with order-book filters, due 2026-12-09) are the remaining
+  test of whether filtering can beat this adverse selection.
