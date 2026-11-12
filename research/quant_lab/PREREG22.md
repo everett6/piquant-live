@@ -1,0 +1,73 @@
+# Pre-registration 22: PREREG18's lead-lag and flow rules on Tardis.dev free days, 2023–2026 (committed before any round-22 code runs on real data)
+
+## Why
+The owner does not want to wait for the 2026-12-09 run of PREREG18 on our own recording. Tardis.dev publishes
+the first day of every month free: Coinbase, Kraken and Binance.US quotes (best bid/ask on every change), trades
+and full books. This gives about 47 separate days across bull, bear and flat markets.
+
+The three PREREG18 rules (L1, L2, F1) are run here **unchanged**, through the same code (`strategies18.py`),
+on this independent data. Nothing is fitted or tuned. PREREG18 itself still runs once on the recorded window on
+or after 2026-12-09, and is not changed by this result.
+
+## Data
+- **Source:** `https://datasets.tardis.dev/v1/<exchange>/<type>/<YYYY>/<MM>/01/<symbol>.csv.gz`, the free days
+  only (no API key, nothing paid). Streamed and reduced on Kaggle (or the Pi). Raw files are not kept.
+- **Days:** the 1st of each month from 2023-01-01 to 2026-11-01 (47 days).
+  - **Discovery:** 2023-01-01 to 2024-12-01 (24 days).
+  - **Holdout:** 2025-01-01 to 2026-11-01 (23 days).
+- **Symbols:**
+  - Coinbase `BTC-USD`, `ETH-USD`;
+  - Kraken `XBT-USD` up to 2026-07-01, then `BTC-USD`; `ETH-USD` throughout;
+  - Binance.US `BTCUSD`, `ETHUSD` (lead measurements only; not traded).
+- **Clock:** Tardis `local_timestamp` (its capture time, one clock for all venues), cut to ms.
+- **Books:** each venue's `quotes` file is turned into 1 s snapshots, to match our recorder.
+  - A snapshot at every whole second holds the latest best bid and ask at or before it.
+  - mid = (bid + ask) / 2. Seconds before the first quote of the day, or with bid ≥ ask, have no snapshot.
+- **Trades (F1):** Coinbase `trades`. `side` is the aggressor side; size is `amount`.
+
+## What carries over from PREREG18, and what had to change
+- **Unchanged:** signals, thresholds (5 bps in 1 s; flow60 ≥ 0.50), holds (30 s; 5 min), fills (first 1 s
+  snapshot ≥ 200 ms after the decision; buy at the ask, sell at the bid), costs and stress costs, one open trade
+  per coin per rule, and the pass rule's four checks.
+- **Days are separate.** Each day is run on its own; nothing (an open trade, a signal's "1 s earlier") crosses
+  midnight. F1's volume floor uses **that day's own** median 1-minute volume, because the previous UTC day is not
+  in the data. (PREREG18 already uses the day's own median on its first day.)
+- **Exclusions** (no new entries; open trades still exit):
+  - minutes with a gap in Coinbase trade IDs (Coinbase IDs are sequential);
+  - minutes inside a gap of more than 60 s between quote updates on any venue the rule uses. Quotes arrive only
+    on change, so the recorder's 5 s snapshot rule cannot be used; 60 s without any top-of-book change on BTC or
+    ETH means a feed problem;
+  - there is no clock check in this data, so that rule is dropped.
+- **Trades per day** are reported per data day (47 days, not 30 per month).
+
+## Rules (3 trials: 737 + 3 = 740)
+- **L1:** Coinbase leads Kraken; buy Kraken spot, long only, exit after 30 s. Costs 40 bps per side (stress 45).
+- **L2:** Kraken leads Coinbase; trade the Coinbase futures proxy long and short, exit after 30 s. Costs 6 + 1 bps
+  per side (stress 6 + 3).
+- **F1:** 60 s Coinbase flow momentum; long and short, exit after 5 min. Costs 6 + 1 (stress 6 + 3).
+- Full definitions: PREREG18.md. Code: `strategies18.py`, used as is.
+
+## Pass rule (same as PREREG18)
+A rule passes only if all of these hold:
+1. Holdout: at least 200 trades.
+2. Holdout: mean net bps per trade > 0, with a one-sided t-stat ≥ 2.0.
+3. Discovery: mean net bps per trade > 0.
+4. Holdout at stress costs: mean net bps per trade > 0.
+
+## Also reported (descriptive, no trial)
+- **Lead matrix:** for each ordered pair of the three venues (6 pairs) and each coin, the number of PREREG18-style
+  lead signals (leader moves ≥ 5 bps in 1 s, follower less than half) and the follower's mean signed mid move 1, 5
+  and 30 s later. This shows which venue follows, as the owner asked ("follower chosen by data").
+- Per rule: win rate, trades per day, share of gross lost to the spread, worst trade, and results by year.
+
+**If one passes:** it still has to pass PREREG18 on our recording (2026-12-09) before forward paper trading.
+**If none pass:** these rules fail on 2023–2026 history. PREREG18 still runs as registered.
+
+## Run
+- Once. Code is tested on synthetic data first; the real run happens a single time.
+- The run reads only the free files listed above.
+
+## Prediction (written now)
+Same as PREREG18. L1: a real lead (Kraken follows Coinbase) but strongly negative net after 80 bps of fees. L2:
+a weaker lead, net about −10 to −15 bps. F1: net about −12 bps. I expect none to pass. In the lead matrix,
+Coinbase leads both other venues.
