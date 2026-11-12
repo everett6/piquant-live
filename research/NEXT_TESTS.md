@@ -13,6 +13,9 @@
   half, with taker costs of 14 bps round trip and a maker model based on queue position from the book.
 - **Pre-registered already:** PREREG17 (maker entries with the owner's pre-fill defense, confluence and
   breakeven ladder; 3 trials, 726 → 729). Run it once on or after 2026-12-09.
+- **Also pre-registered:** PREREG18 (lead-lag Coinbase→Kraken and Kraken→Coinbase, and 60 s trade-flow
+  momentum; 3 trials, 729 → 732). Same window, run with PREREG17. Its evaluator still needs writing (synthetic
+  tests only before the run).
 - **Check first:** `trade_id_gaps` and reconnects in ticks_status.json. Exclude gap periods.
 
 ## Live state as of 2026-11-11
