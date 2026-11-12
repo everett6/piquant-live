@@ -55,3 +55,35 @@ description.
 - N2: few days held, noisy, Sharpe near 0. Fails check 1.
 - A hedged book lowers risk by removing the exposure that earned the return. It does not raise the Sharpe ratio
   without a signal for which leg to favour.
+
+## Result (run once, 2026-11-11): both FAIL
+
+Window 2016-06-01 to 2026-11-10. Hedge ratio β: median 0.62 (10th–90th percentile 0.29–0.82).
+
+| Rule | Net Sharpe | Stress Sharpe | Return/yr | Volatility | Max drawdown | Days held | Periods > 0 |
+|---|---|---|---|---|---|---|---|
+| N1 always on | +0.42 | −2.36 | +9.5% | 44.7% | −80% | 100% | 3/5 (B −70%, A −34%) |
+| N2 volatility spikes only | +0.27 | −0.37 | +3.4% | 18.5% | −40% | 9% | 4/5 |
+
+**Daily loss tails (same days):**
+
+| | 99% | 99.9% | Worst day |
+|---|---|---|---|
+| Long BTC | −9.9% | −15.0% | −38.8% |
+| Long ETH | −12.4% | −19.9% | −43.3% |
+| Equal-weight long | −10.7% | −16.4% | −41.1% |
+| Hedged book (N1) | n/a | **−12.0%** | **−16.7%** |
+| Hedged book on spike days (N2) | n/a | −10.5% (BTC same days −12.7%) | −11.1% (BTC −13.2%) |
+
+**Reading:**
+- **Netting cuts the worst day by 57%** (−38.8% → −16.7%), because the market-wide crash days cancel.
+- **It cuts the 1-in-1,000 day by only 20%** (−15.0% → −12.0%). Check 4 needed a cut of half.
+  - ETH's own moves are large: β is only about 0.6, and ETH has days of ±15% that BTC does not share.
+  - The hedged book therefore still has 45% annual volatility and an −80% drawdown, from ETH outrunning BTC in
+    2021 and since mid-2025.
+- **Nothing is earned for it.** Sharpe is 0.42 before stress and strongly negative with stress funding on two legs.
+  The +9.5% a year is BTC beating beta-weighted ETH over this sample, not a repeatable edge: it lost 70% in 2021–22.
+- A beta-neutral BTC–ETH book swaps market risk for pair risk, which is nearly as large here. It does not solve the
+  floor problem.
+
+Trials charged: 736.
