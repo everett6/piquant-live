@@ -79,3 +79,38 @@ A rule passes only if all of these hold:
 - **C2:** higher return while in, but less time in. The full-window return is similar or a little lower, and the
   drawdown is smaller.
 - About 0.5–0.8% a month at best: a real but modest yield, far from 7% a month.
+
+## Result (run once, 2026-11-11): C1 PASSES (narrowly), C2 FAILS
+
+Window 2020-01-01 to 2026-10-31. Mean funding: BTC +11.6% a year, ETH +13.7%. Funding was negative 14% of the time.
+
+| Rule | Base %/yr | Stress %/yr | Stress max DD | Stress %/month | 2020 | 2021 | 2022 | 2023–24 | 2025–Oct 2026 | Liquidations | Time in market |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| C1 always on | +8.15 | **+5.06** | −1.0% | +0.41 | +9.8% | +16.3% | −0.6% | +8.7% | +1.6% | 0 | 100% |
+| C2 high funding only | +5.89 | +3.48 | −1.1% | +0.29 | +7.7% | +14.8% | −0.1% | +2.9% | −0.4% | 0 | 29–32% |
+
+- **C1 passes all four checks:**
+  1. +5.06% vs the 5% bar, at stress costs;
+  2. drawdown −1.0%;
+  3. positive in 4/5 periods (only 2022 negative);
+  4. no liquidations.
+
+  It clears check 1 by 0.06 points.
+- **C2 fails check 1.** Waiting for high funding missed most of the carry and paid switching costs.
+
+**Reading (what the pass does and does not mean):**
+- **Recent yield is low.** 2025 to October 2026 earned +1.6% in total over 22 months (under 1% a year at
+  stress), below the T-bill rate. Most of the full-window return came from 2020–21 and 2023–24.
+- **The drawdown is understated.**
+  - The model has no basis risk: spot and perpetual are treated as the same price.
+  - Real carry books lost money on basis swings and exchange failures (for example FTX, November 2022). None of
+    that is in this simulation.
+- **The funding is a proxy.**
+  - Binance blocks US users (its API returns HTTP 451 from both machines).
+  - A US perpetual venue's funding must be checked before this means anything for live money.
+- **It is a yield, not a growth engine:** about 0.4% a month at stress, versus the 7%/month goal.
+
+**Next, per the pass rule:** C1 becomes a paper ledger. Binance publishes funding only as monthly files (no daily
+files; the live API is blocked in the US), so that ledger could only update monthly.
+
+Trials charged: 734.
