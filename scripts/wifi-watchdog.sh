@@ -34,12 +34,12 @@ while true; do
     sleep 15
     disable_power_save
 
-    # Find default gateway
-    GATEWAY=$(ip route show default 2>/dev/null | awk '/default/ {print $3}' | head -n 1)
-    TARGET=${GATEWAY:-"1.1.1.1"}
+    # Internet test, not just the router: on 2026-11-12 the router stayed reachable (NetworkManager
+    # CONNECTED_SITE) while the internet and DNS were down for 3 h, so a gateway ping hid the outage.
+    TARGET="1.1.1.1/8.8.8.8"
 
-    # Ping test (2 probes, 2 second timeout)
-    if ping -q -c 2 -W 2 "$TARGET" >/dev/null 2>&1 || ping -q -c 2 -W 2 "8.8.8.8" >/dev/null 2>&1; then
+    # Ping test (2 probes, 2 second timeout) to two public resolvers
+    if ping -q -c 2 -W 2 1.1.1.1 >/dev/null 2>&1 || ping -q -c 2 -W 2 8.8.8.8 >/dev/null 2>&1; then
         if [ $FAIL_COUNT -gt 0 ]; then
             log "✔ Internet connection RESTORED after $FAIL_COUNT failed cycles. WebSocket feed reconnecting."
             FAIL_COUNT=0

@@ -40,6 +40,11 @@
 - **One outage:** 07:00:33–10:04:04 UTC (3 h 3 min).
   - The home internet went down while the WiFi stayed associated (NetworkManager CONNECTED_SITE; DNS failed).
   - The collector retried every 64 s and resumed on its own, so there is no code fault.
+  - The recorder is the desktop (piquant-collect.service), not the Pi. On 11-12 it was on WiFi (wlp7s0) with
+    the Ethernet port (enp6s0) unplugged, and it had no `~/.config/piquant/alert.env`, so its "tick venue down
+    5+ min" alert went to the log only. Owner to-do: plug in Ethernet and create alert.env on the desktop.
+  - `scripts/wifi-watchdog.sh` counted a router ping as "online", so it would have missed this outage too. It now
+    pings 1.1.1.1/8.8.8.8 only. No watchdog can fix an ISP outage; only a hotspot failover would.
   - The PREREG17/18 rules already exclude these minutes: the book gaps are over 5 s, and the 16 failed clock
     checks fall in the same window.
 - **No clock checks before 02:51 UTC** (collector restarts for deploys), so 00:00–02:51 on 11-12 is excluded by
