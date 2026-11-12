@@ -65,10 +65,12 @@
 | Tax records | Yearly CSV of every fill (date, price, fee, cost basis) |
 | Clock sync | Halt gap trades if the clock is off by more than 250 ms |
 | Rate limits | Back off, keep positions, email if it repeats |
-| Old engine code | Quarantine market making, Bybit and the global region behind an off switch; keep the tests |
+| Old engine code | Quarantine market making, Bybit and the global region behind an off switch; keep the tests. **Done 2026-11-11:** `--mft-entries` (maker quoting) and `--auto-recalibrate` default off, and they and `--region global` need `--allow-quarantined`; the Bybit ingestor builds only with `-tags quarantine` (its tests run with that tag) |
 
 ## Problems found in the code (subagent review, 2026-11-11)
-- **The auto-recalibrator can never find data.** It looks for monthly `*.pqbin` files
+- ~~The auto-recalibrator can never find data.~~ Quarantined 2026-11-11 instead of fixed: it is an unregistered
+  in-sample grid search that hot-reloads live parameters, which the pre-registration rules forbid. Now off unless
+  `--auto-recalibrate --allow-quarantined`. Original note: It looks for monthly `*.pqbin` files
   (internal/backtest/auto_recalibrate.go:38), but the collector writes daily `*.jsonl.gz` files. It logs
   "no tick partitions found" every hour.
 - **There is no email sender anywhere.** Alerts must be built.

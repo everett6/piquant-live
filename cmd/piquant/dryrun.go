@@ -56,6 +56,8 @@ type dryRunFlags struct {
 	expBreaker        int
 	trendGate         bool
 	mftEntries        bool
+	autoRecalibrate   bool
+	allowQuarantined  bool
 	trendDir          string
 	enableNews        bool
 	region            string
@@ -108,7 +110,9 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.BoolVar(&f.enableCoinbase, "coinbase", true, "enable Coinbase institutional USD lead-lag signal ingestor (default true)")
 	fs.StringVar(&f.coinbaseWS, "coinbase-ws", "", "custom Coinbase public WebSocket URL (default auto)")
 	fs.BoolVar(&f.trendGate, "trend-gate", true, "gate new entries by the daily BTC SMA50 trend (long only above it, no new entries below) and run the 2x/1x trend core ledger in-process")
-	fs.BoolVar(&f.mftEntries, "mft-entries", true, "allow new medium-frequency entries (false = trend core only; the 1-minute replay shows the MFT layer loses ~14 bps/trade)")
+	fs.BoolVar(&f.mftEntries, "mft-entries", false, "QUARANTINED: allow new medium-frequency / market-making entries (failed PREREG8-10 at ~-14 bps/trade); needs --allow-quarantined")
+	fs.BoolVar(&f.autoRecalibrate, "auto-recalibrate", false, "QUARANTINED: unregistered in-sample grid search that hot-reloads live params; needs --allow-quarantined")
+	fs.BoolVar(&f.allowQuarantined, "allow-quarantined", false, "permit quarantined code paths (market making, auto-recalibration, global region) for research only")
 	fs.StringVar(&f.trendDir, "trend-dir", "", "trend core ledger directory (default <data dir>/trend)")
 	fs.IntVar(&f.expBreaker, "expectancy-breaker", 50, "stop new entries after N closed trades if mean net bps/trade is < 0 at the upper 95% bound (0 = off; default 50: round 4 showed the live entry loses ~its cost per trade)")
 	fs.StringVar(&f.feedVenue, "feed-venue", "auto", "primary market feed for fills and flow features: 'auto' (coinbase for us-futures, else binance), 'binance' or 'coinbase'")
@@ -199,6 +203,9 @@ func runDryRun(ctx context.Context, args []string) error {
 	region := strings.ToLower(strings.TrimSpace(f.region))
 	if region != paper.RegionUS && region != paper.RegionUSFutures && region != paper.RegionGlobal {
 		return fmt.Errorf("unknown --region %q (want us, us-futures or global)", f.region)
+	}
+	if err := checkQuarantine(f, region); err != nil {
+		return err
 	}
 
 	feed, err := resolveFeedVenue(f.feedVenue, region, f.wsURL)
@@ -315,7 +322,9 @@ func runDryRun(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize dry run engine: %w", err)
 	}
-	dryRunEngine.SetAutonomousRecalibrator(backtest.RunAutonomousRecalibration)
+	if f.autoRecalibrate {
+		dryRunEngine.SetAutonomousRecalibrator(backtest.RunAutonomousRecalibration)
+	}
 
 	// Live venue latency probe drives order timing and the HFT/MFT/LFT strategy regime
 	latMon := paper.NewLatencyMonitor(feedEndpoint, 15*time.Second)
@@ -647,4 +656,21 @@ func resolveFeedVenue(flag, region, wsURL string) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown --feed-venue %q (want auto, binance or coinbase)", flag)
 	}
+}
+
+// checkQuarantine refuses quarantined code paths unless --allow-quarantined is set (owner spec 2026-11-11:
+// market making, Bybit and the global region stay behind an off switch; their tests are kept).
+func checkQuarantine(f *dryRunFlags, region string) error {
+	if f.allowQuarantined {
+		return nil
+	}
+	switch {
+	case f.mftEntries:
+		return fmt.Errorf("--mft-entries is quarantined (market making failed PREREG8-10); add --allow-quarantined for research")
+	case f.autoRecalibrate:
+		return fmt.Errorf("--auto-recalibrate is quarantined (unregistered parameter search); add --allow-quarantined for research")
+	case region == paper.RegionGlobal:
+		return fmt.Errorf("--region global is quarantined (not a US venue); add --allow-quarantined for research")
+	}
+	return nil
 }
