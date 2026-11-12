@@ -35,6 +35,7 @@ func runCollect(ctx context.Context, args []string) error {
 	backupKeep := fs.Int("backup-keep", 30, "nightly archives to keep")
 	backupHour := fs.Int("backup-hour", 3, "local hour after which the nightly backup runs")
 	backupGit := fs.String("backup-git-dir", "", "clone of a PRIVATE repo to push Pi ledgers to (empty = off)")
+	clockF := addClockFlags(fs)
 	gdeltSpacing := fs.Duration("gdelt-spacing", 20*time.Second, "delay between GDELT requests (their limit is ~1 per 5s, enforced strictly)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -136,6 +137,7 @@ func runCollect(ctx context.Context, args []string) error {
 		}
 		go collect.RunBackups(ctx, bc, func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
 	}
+	startClockGuard(ctx, clockF, filepath.Join(*dir, "clock_offsets.jsonl"))
 	fmt.Printf("[COLLECT] writing to %s (symbols %v, coinbase %v); status in status.json\n", *dir, symList, cbProds)
 	col.Run(ctx)
 	fmt.Println("[COLLECT] stopped, buffers flushed")

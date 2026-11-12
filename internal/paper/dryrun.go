@@ -468,6 +468,8 @@ type DryRunEngine struct {
 	macroGuardian *macro.MacroGuardian
 	newsPipeline  *macro.NewsPipeline
 	trendGate     *TrendGate
+	clockGuard    ClockGuard
+	clockBlocked  atomic.Bool
 
 	// Online tick tracking & autonomous cloud parameter hot-reload
 	minHalfSpreadFloorBps float64
@@ -600,9 +602,38 @@ func (e *DryRunEngine) SetTrendGate(g *TrendGate) {
 	e.trendGate = g
 }
 
+// ClockGuard reports whether the system clock is verified within the owner's limit (clocksync.Guard).
+type ClockGuard interface {
+	Status() (bool, string)
+}
+
+// SetClockGuard blocks new entries while the clock is unverified or off (call before Start; nil disables).
+func (e *DryRunEngine) SetClockGuard(g ClockGuard) {
+	e.clockGuard = g
+}
+
+// clockEntryAllowed applies the clock guard, logging each change of state once.
+func (e *DryRunEngine) clockEntryAllowed() bool {
+	if e.clockGuard == nil {
+		return true
+	}
+	ok, why := e.clockGuard.Status()
+	if e.clockBlocked.Swap(!ok) != !ok {
+		if ok {
+			fmt.Fprintln(os.Stderr, "[CLOCK] clock verified again; entries allowed")
+		} else {
+			fmt.Fprintf(os.Stderr, "[CLOCK] new entries blocked: %s\n", why)
+		}
+	}
+	return ok
+}
+
 // trendEntryAllowed is the single trend-gate decision for opening/adding orders (exits never call it).
 func (e *DryRunEngine) trendEntryAllowed(side string, now time.Time) bool {
 	if e.cfg.MFTEntriesOff {
+		return false
+	}
+	if !e.clockEntryAllowed() {
 		return false
 	}
 	if e.trendGate == nil {

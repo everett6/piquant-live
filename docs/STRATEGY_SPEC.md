@@ -62,8 +62,8 @@
 | Updates | Claude deploys with the owner's OK and keeps the previous binary for rollback |
 | Tick data retention | Keep everything; revisit when free disk nears the 20 GB guard |
 | Backups | Nightly copy of Pi state to the desktop, plus the ledgers to a private GitHub repo |
-| Tax records | Yearly CSV of every fill (date, price, fee, cost basis) |
-| Clock sync | Halt gap trades if the clock is off by more than 250 ms |
+| Tax records | Yearly CSV of every fill (date, price, fee, cost basis). **Trend ledgers done 2026-11-11:** `piquant tax --trend [--year Y] [--export f.csv]` lists each closed position per coin: spot variants on Form 8949 (FIFO, short/long term), futures variants as Section 1256 contracts on Form 6781 (60/40, open positions marked at each year's last close). Fills are at daily closes, sized at $200 per variant unless the variant sets its own capital. Paper record for a tax professional, not advice |
+| Clock sync | Halt gap trades if the clock is off by more than 250 ms. **Done 2026-11-11:** the engine and collector check the clock against 3 public time servers (SNTP) every 10 minutes, using the median offset. The engine blocks new entries (exits still run) when the offset is over 250 ms, when no check has succeeded yet, or when the last good check is over 30 minutes old. Every check is logged to `clock_offsets.jsonl` (collector dir, and `<data>/paper` on the Pi), so tick tests can drop bad-clock windows. Flags: `--clock-servers`, `--clock-max-ms` |
 | Rate limits | Back off, keep positions, email if it repeats |
 | Old engine code | Quarantine market making, Bybit and the global region behind an off switch; keep the tests. **Done 2026-11-11:** `--mft-entries` (maker quoting) and `--auto-recalibrate` default off, and they and `--region global` need `--allow-quarantined`; the Bybit ingestor builds only with `-tags quarantine` (its tests run with that tag) |
 

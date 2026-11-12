@@ -60,6 +60,11 @@ type DayRec struct {
 	Ret    float64 `json:"ret"`    // net return of the day (held position, funding, rebalancing cost)
 	PosOut float64 `json:"pos"`    // position decided at this day's close
 	Equity float64 `json:"equity"` // after the day
+	// Per-sleeve detail for the tax export (added 2026-11-11; older records lack it). Single-coin variants use B.
+	PosB   float64 `json:"pos_b,omitempty"`
+	PosE   float64 `json:"pos_e,omitempty"`
+	CloseB float64 `json:"close_b,omitempty"`
+	CloseE float64 `json:"close_e,omitempty"`
 }
 
 // Ledger tracks one variant.
@@ -331,7 +336,8 @@ func (l *Ledger) stepPair(date string, barB, barE float64, histB, histE []Day) {
 		tb, te = 0, 0
 	}
 	l.Pos, l.PosAlt = tb, te
-	l.Days = append(l.Days, DayRec{Date: date, Ret: ret, PosOut: 0.5*tb + 0.5*te, Equity: l.Equity})
+	l.Days = append(l.Days, DayRec{Date: date, Ret: ret, PosOut: 0.5*tb + 0.5*te, Equity: l.Equity,
+		PosB: tb, PosE: te, CloseB: histB[len(histB)-1].Close, CloseE: histE[len(histE)-1].Close})
 }
 
 // Reset restarts one variant flat at equity 1 (the manual restart after a kill switch).
@@ -371,7 +377,8 @@ func (l *Ledger) step(date string, bar float64, hist []Day) {
 		target = 0
 	}
 	l.Pos = target
-	l.Days = append(l.Days, DayRec{Date: date, Ret: ret, PosOut: target, Equity: l.Equity})
+	l.Days = append(l.Days, DayRec{Date: date, Ret: ret, PosOut: target, Equity: l.Equity,
+		PosB: target, CloseB: hist[len(hist)-1].Close})
 }
 
 func sortedKeys(m map[string]*Ledger) []string {
