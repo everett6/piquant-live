@@ -378,13 +378,19 @@ func ParseAggTradeCSV(r io.Reader, onTick func(tick *AggTradeTick) error) error 
 				}
 
 				ms := int64(transactMs)
-				if ms == prevMs {
-					microOffset += 1000 // Synthesize 1 microsecond offset for consecutive intra-ms trades
+				var timestampNs int64
+				if ms >= 100_000_000_000_000 {
+					// Binance spot archives switched to microsecond timestamps on 2025-01-01 (16 digits).
+					timestampNs = ms * 1_000
 				} else {
-					prevMs = ms
-					microOffset = 0
+					if ms == prevMs {
+						microOffset += 1000 // Synthesize 1 microsecond offset for consecutive intra-ms trades
+					} else {
+						prevMs = ms
+						microOffset = 0
+					}
+					timestampNs = ms*1_000_000 + microOffset
 				}
-				timestampNs := ms*1_000_000 + microOffset
 
 				scratchTick.TradeID = tradeID
 				scratchTick.Price = price

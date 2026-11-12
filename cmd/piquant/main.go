@@ -66,6 +66,8 @@ func main() {
 		err = runSecrets(args)
 	case "tax":
 		err = runTax(ctx, args)
+	case "import-ticks":
+		err = runImportTicks(args)
 	case "carry":
 		err = runCarry(args)
 	case "alert-test":
@@ -113,6 +115,7 @@ func usage() {
   piquant secrets     manage the local credential store
   piquant tax         crypto capital gains, IRS Form 8949 CSV export & CA tax reserve
   piquant unlock      clear a kill-switch lock (engine stopped first)
+  piquant import-ticks  download real Binance aggTrades months into .pqbin (--symbol --from --to)
   piquant carry       PREREG19 funding-carry paper ledger (monthly; --once to advance)
   piquant alert-test  send a test email using ~/.config/piquant/alert.env
   piquant collect     record live prices + news and backfill history (dev PC)
