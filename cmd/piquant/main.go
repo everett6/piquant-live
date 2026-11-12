@@ -66,10 +66,18 @@ func main() {
 		err = runSecrets(args)
 	case "tax":
 		err = runTax(ctx, args)
+	case "carry":
+		err = runCarry(args)
+	case "alert-test":
+		err = runAlertTest(args)
+	case "unlock":
+		err = runUnlock(args)
 	case "collect":
 		err = runCollect(ctx, args)
 	case "extract":
 		err = runExtract(ctx, args)
+	case "trend":
+		err = runTrend(args)
 	case "news":
 		err = runNews(ctx, args)
 	case "version", "-v", "--version":
@@ -104,7 +112,11 @@ func usage() {
   piquant bench            run Pi 5 architecture stress test and micro-latency benchmark
   piquant secrets     manage the local credential store
   piquant tax         crypto capital gains, IRS Form 8949 CSV export & CA tax reserve
+  piquant unlock      clear a kill-switch lock (engine stopped first)
+  piquant carry       PREREG19 funding-carry paper ledger (monthly; --once to advance)
+  piquant alert-test  send a test email using ~/.config/piquant/alert.env
   piquant collect     record live prices + news and backfill history (dev PC)
+  piquant trend       PREREG6 forward paper test of the SMA50 trend filter (--once, --report)
   piquant extract     score stored headlines with a local LLM (Ollama)
   piquant news        macro & micro news intelligence oracle with exploit defense
   piquant version     print build information

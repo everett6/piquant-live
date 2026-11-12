@@ -1,3 +1,8 @@
+//go:build quarantine
+
+// Quarantined 2026-11-11 (owner spec): Bybit is not a US venue and nothing uses this ingestor.
+// Build or test it with -tags quarantine.
+
 package paper
 
 import (

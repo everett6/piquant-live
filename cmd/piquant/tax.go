@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"piquant-live/internal/tax"
+	"piquant-live/internal/trend"
 )
 
 type taxFlags struct {
@@ -22,6 +23,9 @@ type taxFlags struct {
 	printCSV  bool
 	printJSON bool
 	printLot  bool
+	trend     bool
+	trendDir  string
+	trendCap  float64
 }
 
 func addTaxFlags(fs *flag.FlagSet) *taxFlags {
@@ -35,6 +39,9 @@ func addTaxFlags(fs *flag.FlagSet) *taxFlags {
 	fs.BoolVar(&f.printCSV, "csv", false, "output raw IRS Form 8949 CSV to standard output")
 	fs.BoolVar(&f.printJSON, "json", false, "output structured tax summary in JSON format")
 	fs.BoolVar(&f.printLot, "table", false, "print detailed Form 8949 trade-by-trade lot disposition table")
+	fs.BoolVar(&f.trend, "trend", false, "report the trend ledgers (P1, R3, D2, ...) instead of the engine journal")
+	fs.StringVar(&f.trendDir, "trend-dir", "", "trend ledger directory (default <data dir>/trend)")
+	fs.Float64Var(&f.trendCap, "trend-capital", 200, "dollars per trend variant at equity 1 (a variant's own capital wins)")
 	return f
 }
 
@@ -48,6 +55,14 @@ func runTax(ctx context.Context, args []string) error {
 	dDir := f.dataDir
 	if dDir == "" {
 		dDir = defaultDataDir()
+	}
+
+	if f.trend {
+		dir := f.trendDir
+		if dir == "" {
+			dir = filepath.Join(dDir, "trend")
+		}
+		return runTrendTax(f, filepath.Join(dir, "trend_state.json"))
 	}
 
 	// Locate journal file
@@ -113,5 +128,46 @@ func runTax(ctx context.Context, args []string) error {
 		fmt.Print(tax.FormatDispositionsTable(summary))
 	}
 
+	return nil
+}
+
+// runTrendTax writes the trend ledgers' closed positions (Form 8949 for spot variants, Form 6781 Section 1256
+// for futures variants) as CSV, or prints totals.
+func runTrendTax(f *taxFlags, statePath string) error {
+	st, err := trend.Load(statePath)
+	if err != nil {
+		return fmt.Errorf("trend ledger %s: %w", statePath, err)
+	}
+	rows, open, skipped := st.TaxRows(f.trendCap, f.taxYear)
+	switch {
+	case f.exportCSV != "":
+		fh, err := os.Create(f.exportCSV)
+		if err != nil {
+			return err
+		}
+		if err := trend.WriteTaxCSV(fh, rows); err != nil {
+			fh.Close()
+			return err
+		}
+		if err := fh.Close(); err != nil {
+			return err
+		}
+		fmt.Printf("Wrote %d trend ledger rows to %s\n", len(rows), f.exportCSV)
+	case f.printCSV:
+		return trend.WriteTaxCSV(os.Stdout, rows)
+	}
+	year := "all years"
+	if f.taxYear != 0 {
+		year = fmt.Sprint(f.taxYear)
+	}
+	fmt.Printf("Trend ledgers, %s, $%.0f per variant unless set: %s\n", year, f.trendCap, trend.Totals(rows))
+	fmt.Printf("Open positions (not taxable until closed; futures are marked at year end): %d\n", len(open))
+	for _, o := range open {
+		fmt.Printf("  %-26s %s qty %.6f basis $%.2f since %s\n", o.Variant, o.Coin, o.Quantity, o.CostUSD, o.Opened)
+	}
+	if skipped > 0 {
+		fmt.Printf("Skipped %d ledger days recorded before per-coin detail existed\n", skipped)
+	}
+	fmt.Println("Paper record only: fills at daily closes, futures treated as Section 1256 contracts. Check with a tax professional.")
 	return nil
 }

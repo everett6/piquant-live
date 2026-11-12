@@ -74,6 +74,8 @@ type DryRunConfig struct {
 	// ExpectancyBreakerMinTrades > 0 stops new entries (exits still run) once at least this many round trips
 	// have closed and the upper 95% bound of mean net bps per trade is below zero. 0 disables it.
 	ExpectancyBreakerMinTrades int
+	// MFTEntriesOff stops all new medium-frequency entries (exits still run); the trend core ledger is unaffected.
+	MFTEntriesOff bool
 	DisableCloudParams bool              // Ignore optimal_params.json hot-reloads (cloud/backtest-tuned overrides)
 }
 
@@ -200,6 +202,7 @@ type DryRunState struct {
 	WindowPreset      string               `json:"window_preset"`            // "7d" (last week), "30d" (last month), "14d" (2 weeks)
 	HoursRemaining    float64              `json:"hours_remaining"`
 	DataSource             string               `json:"data_source"`              // "live" or "fallback"
+	RejectedTicks          int64                `json:"rejected_ticks"`           // Impossible prints dropped by the bad-tick guard
 	FeedDownSeconds        float64              `json:"feed_down_seconds"`        // Cumulative duration market feed was disconnected
 	QuotingPaused          bool                 `json:"quoting_paused"`           // True when quoting/matching paused due to feed down
 	OfflineDowntimeSeconds float64              `json:"offline_downtime_seconds"` // Cumulative time system was shut down / offline
@@ -220,6 +223,7 @@ type DryRunState struct {
 	QuantOrchestrator      *orchestrator.OrchestratorReport `json:"quant_orchestrator,omitempty"` // Latency-adaptive multi-strategy orchestration
 	Goal                   GoalState                     `json:"goal"`                     // Self-adjusting monthly-target controller
 	Expectancy             ExpectancyState               `json:"expectancy"`               // Net bps per trade by exit reason vs breakeven
+	TrendGate              *TrendGateState               `json:"trend_gate,omitempty"`     // Daily SMA50 regime gating new MFT entries
 	ExpectancyBreakerOn    bool                          `json:"expectancy_breaker_on"`    // New entries stopped: negative edge confirmed
 	Latency                LatencySnapshot               `json:"latency"`                  // Measured venue latency and chosen strategy regime
 	MFTDiagnostics         map[string]MFTDiagnosticSnapshot `json:"mft_diagnostics,omitempty"` // Real-time MFT decision telemetry per symbol
@@ -431,6 +435,7 @@ type AutonomousRecalibrator func(ctx context.Context, symbol string, currentCapi
 
 // DryRunEngine orchestrates the 14-day autonomous dry run.
 type DryRunEngine struct {
+	tickFilters map[string]*tickFilter // bad-print guard per symbol (guarded by mu)
 	cfg       DryRunConfig
 	ring      *engine.SPSCRing
 	stream    MarketFeed
@@ -462,6 +467,9 @@ type DryRunEngine struct {
 	leverageCtrl  *DynamicLeverageController
 	macroGuardian *macro.MacroGuardian
 	newsPipeline  *macro.NewsPipeline
+	trendGate     *TrendGate
+	clockGuard    ClockGuard
+	clockBlocked  atomic.Bool
 
 	// Online tick tracking & autonomous cloud parameter hot-reload
 	minHalfSpreadFloorBps float64
@@ -587,6 +595,54 @@ type MarketFeed interface {
 	GetL2Book(symbol string) (*marketdata.L2OrderBook, bool)
 	// CopyL2Book copies the symbol's book into dst without allocating (hot path).
 	CopyL2Book(symbol string, dst *marketdata.L2OrderBook) bool
+}
+
+// SetTrendGate restricts new entries to the daily trend direction (call before Start; nil disables).
+func (e *DryRunEngine) SetTrendGate(g *TrendGate) {
+	e.trendGate = g
+}
+
+// ClockGuard reports whether the system clock is verified within the owner's limit (clocksync.Guard).
+type ClockGuard interface {
+	Status() (bool, string)
+}
+
+// SetClockGuard blocks new entries while the clock is unverified or off (call before Start; nil disables).
+func (e *DryRunEngine) SetClockGuard(g ClockGuard) {
+	e.clockGuard = g
+}
+
+// clockEntryAllowed applies the clock guard, logging each change of state once.
+func (e *DryRunEngine) clockEntryAllowed() bool {
+	if e.clockGuard == nil {
+		return true
+	}
+	ok, why := e.clockGuard.Status()
+	if e.clockBlocked.Swap(!ok) != !ok {
+		if ok {
+			fmt.Fprintln(os.Stderr, "[CLOCK] clock verified again; entries allowed")
+		} else {
+			fmt.Fprintf(os.Stderr, "[CLOCK] new entries blocked: %s\n", why)
+		}
+	}
+	return ok
+}
+
+// trendEntryAllowed is the single trend-gate decision for opening/adding orders (exits never call it).
+func (e *DryRunEngine) trendEntryAllowed(side string, now time.Time) bool {
+	if e.cfg.MFTEntriesOff {
+		return false
+	}
+	if !e.clockEntryAllowed() {
+		return false
+	}
+	if e.trendGate == nil {
+		return true
+	}
+	if side == "BUY" {
+		return e.trendGate.AllowLongEntry(now)
+	}
+	return e.trendGate.AllowShortEntry(now)
 }
 
 // SetMarketFeed replaces the primary market feed (call before Start).
@@ -864,6 +920,8 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		e.state.Goal.BenchmarkSymbol = strings.ToUpper(cfg.Symbols[0])
 	}
 
+	e.enforceKillLock()
+
 	if stream != nil { // avoid a typed-nil interface
 		e.stream = stream
 	}
@@ -965,6 +1023,9 @@ func (e *DryRunEngine) Stop() {
 // emergencyFlattenLocked liquidates all open inventory at current mark price and converts unrealized PnL to cash.
 // Caller MUST hold e.mu.
 func (e *DryRunEngine) emergencyFlattenLocked(reason string) {
+	if e.state.CircuitHalted {
+		e.writeKillLockLocked(reason)
+	}
 	for sym, pos := range e.state.Positions {
 		if pos != nil && pos.Size != 0 && pos.MarkPrice > 0 {
 			closePrice := pos.MarkPrice
@@ -1153,6 +1214,11 @@ func (e *DryRunEngine) State() DryRunState {
 	if e.newsPipeline != nil {
 		newsRep := e.newsPipeline.Evaluate(now)
 		cp.NewsSentiment = &newsRep
+	}
+
+	if e.trendGate != nil {
+		tg := e.trendGate.Snapshot(now)
+		cp.TrendGate = &tg
 	}
 
 	if e.cbOracle != nil {
@@ -1981,6 +2047,10 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 	}
 
 	e.mu.Lock()
+	if !isFallback && !e.tickOKLocked(symbol, price, now) {
+		e.mu.Unlock()
+		return
+	}
 	if isFallback {
 		e.state.DataSource = "fallback"
 		e.state.QuotingPaused = true
@@ -3357,6 +3427,9 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		if convictionUp < 0.40 {
 			allowBuy = false // Decisive bearish invalidation: never buy into confirmed downward momentum
 		}
+		if !e.trendEntryAllowed("BUY", now) {
+			allowBuy = false // Daily trend filter: new longs only while BTC closes above its SMA50
+		}
 		if sm.OBI < -0.20 && convictionUp < buyThreshold {
 			allowBuy = false // Order book collapse defense: thin bid depth requires >= 0.72 conviction
 		}
@@ -3431,8 +3504,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		sellSize = math.Abs(currentInv)
 	} else {
 		// Opening / accumulating short inventory
-		if e.cfg.SpotOnly {
-			// Spot-only cash account: naked shorting is strictly prohibited! Cannot sell if flat or short.
+		if e.cfg.SpotOnly || !e.trendEntryAllowed("SELL", now) {
+			// Spot-only cash account, or the long-or-flat daily trend filter: no opening shorts.
 			allowSell = false
 		} else {
 			// Binance minimum notional ($5.00 USDT) enforcement for opening short positions

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"piquant-live/internal/alert"
 	"piquant-live/internal/collect"
 	"piquant-live/internal/engine"
 	"piquant-live/internal/paper"
@@ -25,6 +26,18 @@ func runCollect(ctx context.Context, args []string) error {
 	gdeltDays := fs.Int("gdelt-days", 90, "days of GDELT headlines to backfill")
 	noBackfill := fs.Bool("no-backfill", false, "skip historical backfill")
 	minFree := fs.Float64("min-free-gb", 20, "pause writing below this much free disk")
+	ticks := fs.Bool("ticks", true, "record every trade and 1s top-10 order-book snapshots (ticks/, book/)")
+	tickVenues := fs.String("tick-venues", "coinbase,binanceus,kraken", "venues for tick recording")
+	tickBases := fs.String("tick-bases", "BTC,ETH,SOL", "coins for tick recording on every venue")
+	backupHost := fs.String("backup-host", "", "ssh target for the nightly Pi state backup (empty = off)")
+	backupRemote := fs.String("backup-remote-dir", "piquant-data", "Pi data dir, relative to its home")
+	backupPaths := fs.String("backup-paths", "paper,trend,config,reports,macro", "Pi subdirs to back up")
+	backupDest := fs.String("backup-dest", filepath.Join(home, "piquant-backups", "pi"), "local backup folder")
+	backupKeep := fs.Int("backup-keep", 30, "nightly archives to keep")
+	backupHour := fs.Int("backup-hour", 3, "local hour after which the nightly backup runs")
+	backupGit := fs.String("backup-git-dir", "", "clone of a PRIVATE repo to push Pi ledgers to (empty = off)")
+	clockF := addClockFlags(fs)
+	alertEnv := addAlertFlag(fs)
 	gdeltSpacing := fs.Duration("gdelt-spacing", 20*time.Second, "delay between GDELT requests (their limit is ~1 per 5s, enforced strictly)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -33,6 +46,7 @@ func runCollect(ctx context.Context, args []string) error {
 		return err
 	}
 	collect.GDELTSpacing = *gdeltSpacing
+	al := alert.New(*alertEnv, "desktop")
 	symList := strings.Split(*symbols, ",")
 	cbProds := []string{}
 	for i := range symList {
@@ -91,6 +105,49 @@ func runCollect(ctx context.Context, args []string) error {
 				}
 			}
 		}()
+	}
+	if *ticks {
+		tc := collect.TickConfig{Dir: *dir, MinFreeGB: *minFree}
+		venues := strings.Split(*tickVenues, ",")
+		for _, b := range strings.Split(*tickBases, ",") {
+			b = strings.ToUpper(strings.TrimSpace(b))
+			for _, v := range venues {
+				switch strings.TrimSpace(v) {
+				case "coinbase":
+					tc.Products = append(tc.Products, b+"-USD")
+				case "binanceus":
+					tc.BinanceUS = append(tc.BinanceUS, b+"USDT")
+				case "kraken":
+					tc.Kraken = append(tc.Kraken, b+"/USD")
+				}
+			}
+		}
+		rec, err := collect.NewTickRecorder(tc)
+		if err != nil {
+			return err
+		}
+		tickDone := make(chan struct{})
+		go func() { rec.Run(ctx); close(tickDone) }()
+		defer func() { <-tickDone }() // let the recorder flush its buffers on shutdown
+	}
+	if *backupHost != "" {
+		bc := collect.BackupConfig{Host: *backupHost, RemoteDir: *backupRemote, Dest: *backupDest,
+			Keep: *backupKeep, Hour: *backupHour, GitDir: *backupGit,
+			Alert:      func(key, subject, body string) { al.Send(key, subject, body) },
+			ExtraFiles: []string{filepath.Join(*dir, "carry", "carry_state.json")}}
+		for _, p := range strings.Split(*backupPaths, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				bc.Paths = append(bc.Paths, p)
+			}
+		}
+		go collect.RunBackups(ctx, bc, func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
+	}
+	go runCarryLoop(ctx, filepath.Join(*dir, "carry"), al)
+	startClockGuard(ctx, clockF, filepath.Join(*dir, "clock_offsets.jsonl"), al)
+	if *ticks {
+		go collect.WatchTicks(ctx, *dir, func(p collect.TickProblem) {
+			al.Send(p.Key, "Tick recording problem", p.Msg)
+		})
 	}
 	fmt.Printf("[COLLECT] writing to %s (symbols %v, coinbase %v); status in status.json\n", *dir, symList, cbProds)
 	col.Run(ctx)

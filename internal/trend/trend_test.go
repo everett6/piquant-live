@@ -1,0 +1,306 @@
+package trend
+
+import (
+	"fmt"
+	"math"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func days(start string, closes ...float64) []Day {
+	t0, _ := time.Parse("2006-01-02", start)
+	out := make([]Day, len(closes))
+	for i, c := range closes {
+		out[i] = Day{Date: t0.AddDate(0, 0, i).Format("2006-01-02"), Close: c}
+	}
+	return out
+}
+
+func rising(n int, from, step float64) []float64 {
+	out := make([]float64, n)
+	for i := range out {
+		out[i] = from + step*float64(i)
+	}
+	return out
+}
+
+func TestTrendFilterEntersOnlyAboveSMAAndChargesCosts(t *testing.T) {
+	st := NewState("2026-11-11")
+	st.Advance(days("2026-01-01", rising(60, 100, 1)...)) // strictly rising: above SMA50 once 50 closes exist
+	t1, t2, bh := st.Ledgers["T1_spot_1x"], st.Ledgers["T2_futures_2x"], st.Ledgers["BH"]
+	if t1.Pos != 1 || t2.Pos != 2 || bh.Pos != 1 {
+		t.Fatalf("positions t1=%v t2=%v bh=%v", t1.Pos, t2.Pos, bh.Pos)
+	}
+	for i := 0; i < 48; i++ { // before 50 closes the filter is flat
+		if t1.Days[i].PosOut != 0 {
+			t.Fatalf("day %d entered before SMA warm-up", i)
+		}
+	}
+	entry := t1.Days[48] // 50th close: first decision with a full SMA
+	if entry.PosOut != 1 || math.Abs(entry.Ret-(-3e-4)) > 1e-12 {
+		t.Fatalf("entry day = %+v (want pos 1, ret = -3 bps entry cost)", entry)
+	}
+	d := t2.Days[49] // held 2x through a +1/149 day (149 -> 150), funding 2.4 bps x 2
+	want := 2*(1.0/149) - 2*0.1*24*1e-4
+	if math.Abs(d.Ret-want) > 1e-12 {
+		t.Fatalf("T2 held-day ret = %v want %v", d.Ret, want)
+	}
+}
+
+func TestAdvanceIsIdempotentAndCatchesUp(t *testing.T) {
+	all := days("2026-01-01", rising(70, 100, 0.5)...)
+	a := NewState("x")
+	a.Advance(all[:40])
+	a.Advance(all[:55]) // overlap must not double count
+	a.Advance(all)
+	b := NewState("x")
+	b.Advance(all)
+	if a.Ledgers["T1_spot_1x"].Equity != b.Ledgers["T1_spot_1x"].Equity || len(a.Ledgers["BH"].Days) != 69 {
+		t.Fatalf("catch-up mismatch: %v vs %v, days %d", a.Ledgers["T1_spot_1x"].Equity,
+			b.Ledgers["T1_spot_1x"].Equity, len(a.Ledgers["BH"].Days))
+	}
+}
+
+func TestKillRuleStopsT2(t *testing.T) {
+	c := append(rising(60, 100, 1), 110, 100, 90) // -31% day while long 2x: drawdown > 50%
+	st := NewState("x")
+	st.Advance(days("2026-01-01", c...))
+	t2 := st.Ledgers["T2_futures_2x"]
+	if !t2.Killed || t2.Pos != 0 || t2.MaxDD < 0.5 {
+		t.Fatalf("T2 not killed: %+v", *t2)
+	}
+}
+
+func TestScoreBeatRateExcludesPartialMonths(t *testing.T) {
+	st := NewState("2026-01-10") // registration month (Jan) and the current month (Mar) are excluded
+	st.Advance(days("2025-11-01", rising(130, 100, 1)...))
+	got := map[string]Summary{}
+	for _, s := range st.Score(time.Date(2026, 3, 5, 0, 0, 0, 0, time.UTC)) {
+		got[s.Name] = s
+	}
+	if got["T1_spot_1x"].Months != 1 || got["T2_futures_2x"].Months != 1 {
+		t.Fatalf("months: %+v", got)
+	}
+	if got["T1_spot_1x"].Beats != 0 { // 1x held all Feb = BH exactly: not a strict beat
+		t.Fatalf("T1 beats = %d", got["T1_spot_1x"].Beats)
+	}
+	if got["T2_futures_2x"].Beats != 1 { // 2x in a rising month beats BH after funding
+		t.Fatalf("T2 beats = %d", got["T2_futures_2x"].Beats)
+	}
+}
+
+func TestSaveLoadRoundTrip(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "s.json")
+	st := NewState("2026-11-11")
+	st.Advance(days("2026-01-01", rising(55, 100, 1)...))
+	if err := st.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(p)
+	if err != nil || got == nil || got.LastDate != st.LastDate || got.Ledgers["T1_spot_1x"].Equity != st.Ledgers["T1_spot_1x"].Equity {
+		t.Fatalf("round trip failed: %v %+v", err, got)
+	}
+	if missing, err := Load(filepath.Join(t.TempDir(), "none.json")); missing != nil || err != nil {
+		t.Fatal("missing file should be (nil, nil)")
+	}
+}
+
+func TestSeedDoesNotBacktest(t *testing.T) {
+	st := NewState("2026-03-01")
+	all := days("2026-01-01", rising(70, 100, 1)...)
+	st.Seed(all[:60]) // history before registration
+	if len(st.Ledgers["BH"].Days) != 0 || st.Ledgers["T1_spot_1x"].Equity != 1 {
+		t.Fatal("seed must not create ledger entries")
+	}
+	st.Advance(all) // only the 10 days after the seed count
+	if n := len(st.Ledgers["BH"].Days); n != 10 {
+		t.Fatalf("forward days = %d, want 10", n)
+	}
+	if st.Ledgers["T1_spot_1x"].Days[0].PosOut != 1 { // SMA is warm from the seed
+		t.Fatal("seeded SMA should allow entry on the first forward day")
+	}
+}
+
+func TestRegime(t *testing.T) {
+	st := NewState("x")
+	if _, _, _, ok := st.Regime(50); ok {
+		t.Fatal("no history must be unknown")
+	}
+	st.Seed(days("2026-01-01", rising(50, 100, 1)...))
+	if up, c, m, ok := st.Regime(50); !ok || !up || c != 149 || m != 124.5 {
+		t.Fatalf("regime up=%v c=%v m=%v ok=%v", up, c, m, ok)
+	}
+	st.Seed(days("2026-02-20", 100))
+	if up, _, _, _ := st.Regime(50); up {
+		t.Fatal("close below SMA must be DOWN")
+	}
+}
+
+func TestPairVariantHalvesSleevesAndWaitsForBTCDay(t *testing.T) {
+	st := NewState("2024-01-01")
+	btc := days("2023-11-01", rising(62, 100, 1)...)   // 2023-11-01 .. 2024-01-01, rising: above SMA50
+	eth := days("2023-11-01", rising(62, 50, -0.1)...) // falling: below SMA50
+	st.Seed(btc)
+	st.SeedETH(eth)
+	fwdB := days("2024-01-02", 162, 170)
+	fwdE := days("2024-01-02", 43.8, 40)
+	// ETH day before BTC has applied it: ignored for now
+	if n := st.AdvanceETH(fwdE); n != 0 || st.ETHLast != "2024-01-01" {
+		t.Fatalf("n=%d last=%s", n, st.ETHLast)
+	}
+	st.Advance(fwdB)
+	if n := st.AdvanceETH(fwdE); n != 2 {
+		t.Fatalf("pair steps %d", n)
+	}
+	p := st.Ledgers["P1_btc_eth_2x"]
+	cost := 7e-4
+	day1 := 0.5 * (-2 * cost) // BTC enters 2x (ETH stays flat), no position held during day 1
+	barB := 170.0/162 - 1
+	day2 := 0.5 * (2*barB - 2*0.1*24*1e-4)
+	if len(p.Days) != 2 || math.Abs(p.Days[0].Ret-day1) > 1e-12 || math.Abs(p.Days[1].Ret-day2) > 1e-12 {
+		t.Fatalf("days %+v want %v %v", p.Days, day1, day2)
+	}
+	if p.Pos != 2 || p.PosAlt != 0 {
+		t.Fatalf("pos %v alt %v", p.Pos, p.PosAlt)
+	}
+	if got := len(st.Ledgers["T2_futures_2x"].Days); got != 2 {
+		t.Fatalf("T2 days %d", got)
+	}
+	// idempotent
+	if n := st.AdvanceETH(fwdE); n != 0 {
+		t.Fatal("re-applied")
+	}
+}
+
+func TestLoadAddsMissingVariants(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.json")
+	st := &State{Registered: "2024-01-01", Ledgers: map[string]*Ledger{"BH": {Variant: Variants[2], Equity: 1.5, Peak: 1.5}}}
+	if err := st.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil || got.Ledgers["P1_btc_eth_2x"] == nil || got.Ledgers["BH"].Equity != 1.5 || len(got.Ledgers) != len(Variants) {
+		t.Fatalf("%v %+v", err, got)
+	}
+}
+
+func TestFastExitSleeveLeavesBelowSMA20(t *testing.T) {
+	v := Variant{Lev: 2, SMA: 50, ExitSMA: 20}
+	up := days("2024-01-01", rising(80, 100, 1)...) // close well above both SMAs
+	if _, tgt := v.sleeve(0, 0, up); tgt != 2 {
+		t.Fatalf("enter: %v", tgt)
+	}
+	// drop below SMA20 but stay above SMA50: P1 rule holds, fast exit leaves
+	h := append(append([]Day{}, up...), Day{Date: "2024-03-21", Close: 168})
+	if m20, _ := sma(h, 20); !(168 < m20) {
+		t.Fatalf("setup: sma20 %v", m20)
+	}
+	if m50, _ := sma(h, 50); !(168 > m50) {
+		t.Fatalf("setup: sma50 %v", m50)
+	}
+	if _, tgt := v.sleeve(2, 0, h); tgt != 0 {
+		t.Fatalf("fast exit kept %v", tgt)
+	}
+	p1 := Variant{Lev: 2, SMA: 50}
+	if _, tgt := p1.sleeve(2, 0, h); tgt != 2 {
+		t.Fatalf("P1 should hold, got %v", tgt)
+	}
+}
+
+func pairState(t *testing.T) *State {
+	t.Helper()
+	st := NewState("2024-01-01")
+	st.Seed(days("2023-11-01", rising(62, 100, 1)...))
+	st.SeedETH(days("2023-11-01", rising(62, 50, 0.5)...))
+	return st
+}
+
+func TestPaper50DailyStopFlattensForOneClose(t *testing.T) {
+	v := Variant{Name: "x", Lev: 2, FeeBps: 0, SMA: 50, Pair: true, DailyStop: 0.02, Capital: 50}
+	st := pairState(t)
+	st.Ledgers = map[string]*Ledger{"x": {Variant: v, Equity: 1, Peak: 1}}
+	st.Advance(days("2024-01-02", 162, 150, 165))
+	st.AdvanceETH(days("2024-01-02", 81, 75, 82.5))
+	l := st.Ledgers["x"]
+	// day 1: enter both sleeves (2x); day 2: -7.4% on both at 2x -> big loss -> stop -> flat; day 3: flat (0 return), re-enter
+	if l.Stops != 1 || l.Days[1].PosOut != 0 || l.Days[2].Ret != 0 || l.Pos != 2 || l.PosAlt != 2 {
+		t.Fatalf("stops %d days %+v pos %v/%v", l.Stops, l.Days, l.Pos, l.PosAlt)
+	}
+	if got := st.Score(time.Now())[0].EquityUSD; math.Abs(got-50*l.Equity) > 1e-9 {
+		t.Fatalf("equity usd %v", got)
+	}
+}
+
+func TestPaper50KillSwitchAndReset(t *testing.T) {
+	v := Variant{Name: "x", Lev: 2, FeeBps: 0, SMA: 50, Pair: true, KillDD: 0.05}
+	st := pairState(t)
+	st.Ledgers = map[string]*Ledger{"x": {Variant: v, Equity: 1, Peak: 1}}
+	st.Advance(days("2024-01-02", 162, 155, 170, 180))
+	st.AdvanceETH(days("2024-01-02", 81, 77, 85, 90))
+	l := st.Ledgers["x"]
+	if !l.Killed || l.Pos != 0 || l.PosAlt != 0 || l.Days[3].Ret != 0 {
+		t.Fatalf("killed %v pos %v/%v days %+v", l.Killed, l.Pos, l.PosAlt, l.Days)
+	}
+	if err := st.Reset("x"); err != nil || st.Ledgers["x"].Killed || st.Ledgers["x"].Equity != 1 {
+		t.Fatal("reset failed", err)
+	}
+	if st.Reset("nope") == nil {
+		t.Fatal("unknown variant accepted")
+	}
+}
+
+func TestPullbackTargetEntersExitsAndCaps(t *testing.T) {
+	v := Variant{Lev: 1, Pullback: true}
+	up := days("2023-01-01", rising(230, 100, 1)...) // long uptrend, last close 329
+	hold := 0
+	if v.pullbackTarget(0, &hold, up) != 0 {
+		t.Fatal("entered without a pullback")
+	}
+	h := append(append([]Day{}, up...), Day{Date: "2023-08-19", Close: 270}) // 270 <= 0.85*329, > SMA200
+	if m, _ := sma(h, 200); !(270 > m) {
+		t.Fatalf("setup sma200 %v", m)
+	}
+	if v.pullbackTarget(0, &hold, h) != 1 {
+		t.Fatal("did not enter the pullback")
+	}
+	// Held, still below SMA20: stays in, counting closes, and leaves on the 10th.
+	for i := 1; i <= 10; i++ {
+		h = append(h, Day{Date: fmt.Sprintf("2023-09-%02d", i), Close: 270})
+		got := v.pullbackTarget(1, &hold, h)
+		if (i < 10 && got != 1) || (i == 10 && (got != 0 || hold != 0)) {
+			t.Fatalf("close %d: target %v hold %d", i, got, hold)
+		}
+	}
+	// Exit early on a close above SMA20.
+	hold = 0
+	h2 := append(append([]Day{}, up...), Day{Date: "2023-08-19", Close: 270}, Day{Date: "2023-08-20", Close: 400})
+	if v.pullbackTarget(1, &hold, h2) != 0 {
+		t.Fatal("did not exit above SMA20")
+	}
+	// Below SMA200: no entry even after a 15% drop.
+	down := days("2023-01-01", rising(230, 400, -1)...)
+	down = append(down, Day{Date: "2023-08-19", Close: 100})
+	if v.pullbackTarget(0, &hold, down) != 0 {
+		t.Fatal("entered below SMA200")
+	}
+}
+
+func TestBackfillPrependsOlderOnly(t *testing.T) {
+	st := NewState("2024-01-01")
+	st.Seed(days("2023-12-01", rising(31, 100, 1)...))
+	st.SeedETH(days("2023-12-01", rising(31, 50, 1)...))
+	older := days("2023-06-01", rising(214, 10, 0.1)...) // overlaps the stored range
+	st.Backfill(older, older)
+	if st.History[0].Date != "2023-06-01" || st.History[len(st.History)-1].Date != "2023-12-31" {
+		t.Fatalf("range %s..%s", st.History[0].Date, st.History[len(st.History)-1].Date)
+	}
+	for i := 1; i < len(st.History); i++ {
+		if st.History[i].Date <= st.History[i-1].Date {
+			t.Fatalf("not strictly increasing at %d", i)
+		}
+	}
+	if st.History[len(st.History)-1].Close != 130 || len(st.ETHHistory) != len(st.History) {
+		t.Fatal("stored closes changed or ETH not backfilled")
+	}
+}
