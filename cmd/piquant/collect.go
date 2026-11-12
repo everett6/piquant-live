@@ -133,7 +133,8 @@ func runCollect(ctx context.Context, args []string) error {
 	if *backupHost != "" {
 		bc := collect.BackupConfig{Host: *backupHost, RemoteDir: *backupRemote, Dest: *backupDest,
 			Keep: *backupKeep, Hour: *backupHour, GitDir: *backupGit,
-			Alert: func(key, subject, body string) { al.Send(key, subject, body) }}
+			Alert:      func(key, subject, body string) { al.Send(key, subject, body) },
+			ExtraFiles: []string{filepath.Join(*dir, "carry", "carry_state.json")}}
 		for _, p := range strings.Split(*backupPaths, ",") {
 			if p = strings.TrimSpace(p); p != "" {
 				bc.Paths = append(bc.Paths, p)
@@ -141,6 +142,7 @@ func runCollect(ctx context.Context, args []string) error {
 		}
 		go collect.RunBackups(ctx, bc, func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
 	}
+	go runCarryLoop(ctx, filepath.Join(*dir, "carry"), al)
 	startClockGuard(ctx, clockF, filepath.Join(*dir, "clock_offsets.jsonl"), al)
 	if *ticks {
 		go collect.WatchTicks(ctx, *dir, func(p collect.TickProblem) {

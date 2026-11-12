@@ -67,6 +67,14 @@
 | Rate limits | Back off, keep positions, email if it repeats |
 | Old engine code | Quarantine market making, Bybit and the global region behind an off switch; keep the tests. **Done 2026-11-11:** `--mft-entries` (maker quoting) and `--auto-recalibrate` default off, and they and `--region global` need `--allow-quarantined`; the Bybit ingestor builds only with `-tags quarantine` (its tests run with that tag) |
 
+## Carry paper ledger (PREREG19 C1, added 2026-11-11)
+- **What:** always-on funding carry on BTC and ETH (long spot, short perpetual at 2x on the short leg), paper only.
+- **Where:** the desktop collector, in `~/piquant-collect/carry/carry_state.json`. It opened at the 2026-11-11 close.
+- **Updates:** once a month. Binance publishes funding only as monthly files, and its live API is blocked in the US.
+- **Tracks:** base and stress equity, max drop and liquidations. Print with `piquant carry`; advance with `--once`.
+- **Backup:** the nightly ledger push copies it to the private repo under `desktop/`.
+- **Limits:** no basis risk is modelled, and Binance funding is a proxy for a US venue.
+
 ## Problems found in the code (subagent review, 2026-11-11)
 - ~~The auto-recalibrator can never find data.~~ Quarantined 2026-11-11 instead of fixed: it is an unregistered
   in-sample grid search that hot-reloads live parameters, which the pre-registration rules forbid. Now off unless

@@ -26,6 +26,8 @@ type BackupConfig struct {
 	GitDir    string   // optional: a clone of a PRIVATE repo; ledgers are committed and pushed there
 	Check     time.Duration
 	Alert     func(key, subject, body string) // optional: called on failures (the caller rate-limits)
+	// ExtraFiles are local ledger files (e.g. the desktop carry ledger) copied into GitDir/desktop on each push.
+	ExtraFiles []string
 
 	// command builds the fetch command; tests replace it.
 	command func(ctx context.Context) *exec.Cmd
@@ -204,10 +206,27 @@ func (b *backupRunner) pushLedgers(ctx context.Context, archive string, now time
 	if o, err := tar.CombinedOutput(); err != nil {
 		return fmt.Errorf("tar: %v: %s", err, strings.TrimSpace(string(o)))
 	}
-	if _, err := git("add", "-A", "pi"); err != nil {
+	for _, f := range b.cfg.ExtraFiles {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue // not created yet
+		}
+		dst := filepath.Join(b.cfg.GitDir, "desktop", filepath.Base(f))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			return err
+		}
+	}
+	specs := []string{"pi"}
+	if _, err := os.Stat(filepath.Join(b.cfg.GitDir, "desktop")); err == nil {
+		specs = append(specs, "desktop")
+	}
+	if _, err := git(append([]string{"add", "-A"}, specs...)...); err != nil {
 		return err
 	}
-	if st, _ := git("status", "--porcelain", "pi"); strings.TrimSpace(st) == "" {
+	if st, _ := git(append([]string{"status", "--porcelain"}, specs...)...); strings.TrimSpace(st) == "" {
 		return nil
 	}
 	if _, err := git("commit", "-q", "-m", "Pi ledgers "+now.Format("2006-01-02")); err != nil {
