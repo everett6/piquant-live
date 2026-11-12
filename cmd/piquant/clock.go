@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"piquant-live/internal/alert"
 	"piquant-live/internal/clocksync"
 )
 
@@ -36,7 +37,7 @@ type clockRecord struct {
 
 // startClockGuard starts the guard in the background (nil when disabled). logPath, if set, gets one JSON line per
 // check. State changes are printed.
-func startClockGuard(ctx context.Context, f *clockFlags, logPath string) *clocksync.Guard {
+func startClockGuard(ctx context.Context, f *clockFlags, logPath string, al *alert.Alerter) *clocksync.Guard {
 	var servers []string
 	for _, s := range strings.Split(f.servers, ",") {
 		if s = strings.TrimSpace(s); s != "" {
@@ -62,6 +63,10 @@ func startClockGuard(ctx context.Context, f *clockFlags, logPath string) *clocks
 			} else {
 				_, why := g.Status()
 				fmt.Printf("[CLOCK] clock NOT OK: %s\n", why)
+				if prev != -1 || m.Err == nil { // a failed first check at boot is usually just the network
+					al.Send("clock", "Clock not OK: new entries blocked", why+
+						"\n\nNew trades stay blocked until the clock is back within the limit.")
+				}
 			}
 			prev = state
 		}

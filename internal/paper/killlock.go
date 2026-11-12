@@ -13,6 +13,9 @@ import (
 // engine starts halted, whatever the checkpoint says. Only `piquant unlock` (a human) removes it.
 const KillLockName = "KILL_LOCK"
 
+// KillHook, if set, is called (on its own goroutine) each time a new kill lock is written, e.g. to email the owner.
+var KillHook func(KillLock)
+
 // KillLock records why and when the engine was killed.
 type KillLock struct {
 	Reason     string    `json:"reason"`
@@ -69,6 +72,9 @@ func (e *DryRunEngine) writeKillLockLocked(trigger string) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "[KILL] engine halted and locked (%s). Restart needs: piquant unlock\n", kl.Reason)
+	if KillHook != nil {
+		go KillHook(kl)
+	}
 }
 
 // enforceKillLock runs at startup: a lock forces the halt; a halted checkpoint without a lock gets one.

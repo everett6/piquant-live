@@ -25,6 +25,7 @@ type BackupConfig struct {
 	Hour      int      // local hour after which the day's backup is due
 	GitDir    string   // optional: a clone of a PRIVATE repo; ledgers are committed and pushed there
 	Check     time.Duration
+	Alert     func(key, subject, body string) // optional: called on failures (the caller rate-limits)
 
 	// command builds the fetch command; tests replace it.
 	command func(ctx context.Context) *exec.Cmd
@@ -82,6 +83,9 @@ func (b *backupRunner) tick(ctx context.Context, now time.Time) {
 	n, err := b.fetch(ctx, now)
 	if err != nil {
 		b.logf("[BACKUP] Pi backup failed: %v", err)
+		if b.cfg.Alert != nil {
+			b.cfg.Alert("backup", "Pi backup failed", fmt.Sprintf("%v\n\nIt retries every 30 minutes.", err))
+		}
 		return
 	}
 	b.logf("[BACKUP] saved %s (%d KB)", b.archivePath(now), n>>10)
@@ -91,6 +95,9 @@ func (b *backupRunner) tick(ctx context.Context, now time.Time) {
 	if b.cfg.GitDir != "" {
 		if err := b.pushLedgers(ctx, b.archivePath(now), now); err != nil {
 			b.logf("[BACKUP] ledger push failed: %v", err)
+			if b.cfg.Alert != nil {
+				b.cfg.Alert("ledger-push", "Ledger push to the private repo failed", err.Error())
+			}
 		}
 	}
 }

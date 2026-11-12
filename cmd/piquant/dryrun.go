@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"piquant-live/internal/alert"
 	"piquant-live/internal/backtest"
 	"piquant-live/internal/config"
 	"piquant-live/internal/dashboard"
@@ -59,6 +60,7 @@ type dryRunFlags struct {
 	autoRecalibrate   bool
 	allowQuarantined  bool
 	clock             *clockFlags
+	alertEnv          *string
 	trendDir          string
 	enableNews        bool
 	region            string
@@ -114,6 +116,7 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	fs.BoolVar(&f.mftEntries, "mft-entries", false, "QUARANTINED: allow new medium-frequency / market-making entries (failed PREREG8-10 at ~-14 bps/trade); needs --allow-quarantined")
 	fs.BoolVar(&f.autoRecalibrate, "auto-recalibrate", false, "QUARANTINED: unregistered in-sample grid search that hot-reloads live params; needs --allow-quarantined")
 	f.clock = addClockFlags(fs)
+	f.alertEnv = addAlertFlag(fs)
 	fs.BoolVar(&f.allowQuarantined, "allow-quarantined", false, "permit quarantined code paths (market making, auto-recalibration, global region) for research only")
 	fs.StringVar(&f.trendDir, "trend-dir", "", "trend core ledger directory (default <data dir>/trend)")
 	fs.IntVar(&f.expBreaker, "expectancy-breaker", 50, "stop new entries after N closed trades if mean net bps/trade is < 0 at the upper 95% bound (0 = off; default 50: round 4 showed the live entry loses ~its cost per trade)")
@@ -373,7 +376,8 @@ func runDryRun(ctx context.Context, args []string) error {
 		dryRunEngine.SetCoinbaseOracle(cbOracle)
 	}
 
-	if g := startClockGuard(ctx, f.clock, filepath.Join(dDir, "paper", "clock_offsets.jsonl")); g != nil {
+	al := alert.New(*f.alertEnv, "pi")
+	if g := startClockGuard(ctx, f.clock, filepath.Join(dDir, "paper", "clock_offsets.jsonl"), al); g != nil {
 		dryRunEngine.SetClockGuard(g)
 	}
 
@@ -387,6 +391,15 @@ func runDryRun(ctx context.Context, args []string) error {
 		go runTrendCore(ctx, tdir, gate)
 		fmt.Printf("[TREND] daily SMA50 gate on; 2x/1x trend core ledger in %s\n", tdir)
 	}
+
+	alertTrendDir := ""
+	if f.trendGate {
+		alertTrendDir = f.trendDir
+		if alertTrendDir == "" {
+			alertTrendDir = filepath.Join(dDir, "trend")
+		}
+	}
+	go watchEngine(ctx, dryRunEngine, al, alertTrendDir)
 
 	dryRunEngine.Start(ctx)
 	defer dryRunEngine.Stop()

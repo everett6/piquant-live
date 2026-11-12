@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"piquant-live/internal/alert"
 	"piquant-live/internal/collect"
 	"piquant-live/internal/engine"
 	"piquant-live/internal/paper"
@@ -36,6 +37,7 @@ func runCollect(ctx context.Context, args []string) error {
 	backupHour := fs.Int("backup-hour", 3, "local hour after which the nightly backup runs")
 	backupGit := fs.String("backup-git-dir", "", "clone of a PRIVATE repo to push Pi ledgers to (empty = off)")
 	clockF := addClockFlags(fs)
+	alertEnv := addAlertFlag(fs)
 	gdeltSpacing := fs.Duration("gdelt-spacing", 20*time.Second, "delay between GDELT requests (their limit is ~1 per 5s, enforced strictly)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -44,6 +46,7 @@ func runCollect(ctx context.Context, args []string) error {
 		return err
 	}
 	collect.GDELTSpacing = *gdeltSpacing
+	al := alert.New(*alertEnv, "desktop")
 	symList := strings.Split(*symbols, ",")
 	cbProds := []string{}
 	for i := range symList {
@@ -129,7 +132,8 @@ func runCollect(ctx context.Context, args []string) error {
 	}
 	if *backupHost != "" {
 		bc := collect.BackupConfig{Host: *backupHost, RemoteDir: *backupRemote, Dest: *backupDest,
-			Keep: *backupKeep, Hour: *backupHour, GitDir: *backupGit}
+			Keep: *backupKeep, Hour: *backupHour, GitDir: *backupGit,
+			Alert: func(key, subject, body string) { al.Send(key, subject, body) }}
 		for _, p := range strings.Split(*backupPaths, ",") {
 			if p = strings.TrimSpace(p); p != "" {
 				bc.Paths = append(bc.Paths, p)
@@ -137,7 +141,12 @@ func runCollect(ctx context.Context, args []string) error {
 		}
 		go collect.RunBackups(ctx, bc, func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
 	}
-	startClockGuard(ctx, clockF, filepath.Join(*dir, "clock_offsets.jsonl"))
+	startClockGuard(ctx, clockF, filepath.Join(*dir, "clock_offsets.jsonl"), al)
+	if *ticks {
+		go collect.WatchTicks(ctx, *dir, func(p collect.TickProblem) {
+			al.Send(p.Key, "Tick recording problem", p.Msg)
+		})
+	}
 	fmt.Printf("[COLLECT] writing to %s (symbols %v, coinbase %v); status in status.json\n", *dir, symList, cbProds)
 	col.Run(ctx)
 	fmt.Println("[COLLECT] stopped, buffers flushed")

@@ -66,6 +66,8 @@ func main() {
 		err = runSecrets(args)
 	case "tax":
 		err = runTax(ctx, args)
+	case "alert-test":
+		err = runAlertTest(args)
 	case "unlock":
 		err = runUnlock(args)
 	case "collect":
@@ -109,6 +111,7 @@ func usage() {
   piquant secrets     manage the local credential store
   piquant tax         crypto capital gains, IRS Form 8949 CSV export & CA tax reserve
   piquant unlock      clear a kill-switch lock (engine stopped first)
+  piquant alert-test  send a test email using ~/.config/piquant/alert.env
   piquant collect     record live prices + news and backfill history (dev PC)
   piquant trend       PREREG6 forward paper test of the SMA50 trend filter (--once, --report)
   piquant extract     score stored headlines with a local LLM (Ollama)
