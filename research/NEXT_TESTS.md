@@ -32,3 +32,19 @@
   `piquant trend --dir ~/piquant-data/trend --reset PAPER50_btc_eth_0p2x`.
 - **Historical diagnostic (38 start dates, 2016–2025):** the kill switch fired from every start, after a median
   of 111 days, with $47–78 left. The 1.2% fee on small orders costs more than the trend earns at 0.2x.
+
+## Recording check, 2026-11-12 (gaps only; no signals computed)
+- **Script:** `research/quant_lab/dq_ticks.py YYYY-MM-DD`. Rerun it on every day before the Dec 9 run.
+- **All nine feeds recorded on 11-12** (Coinbase, Kraken and Binance.US; BTC, ETH and SOL). Book snapshots
+  arrive every 1.00 s (median), with no crossed or empty books and no duplicate or out-of-order trades.
+- **One outage:** 07:00:33–10:04:04 UTC (3 h 3 min).
+  - The home internet went down while the WiFi stayed associated (NetworkManager CONNECTED_SITE; DNS failed).
+  - The collector retried every 64 s and resumed on its own, so there is no code fault.
+  - The PREREG17/18 rules already exclude these minutes: the book gaps are over 5 s, and the 16 failed clock
+    checks fall in the same window.
+- **No clock checks before 02:51 UTC** (collector restarts for deploys), so 00:00–02:51 on 11-12 is excluded by
+  the clock rule. Clock offsets otherwise peak at 30 ms against the 250 ms limit.
+- **Trade IDs:** Kraken's run in sequence, so the trade_id gap exclusion works for Kraken as well as Coinbase.
+  Outside the outage there are 5–9 short gaps per product per day (1–93 IDs each); each excludes a minute or two.
+- **About 6 of the first day's 24 hours are excluded** (roughly 1% of the 27-day window). This does not threaten
+  the 200-trade minimums unless outages recur.
