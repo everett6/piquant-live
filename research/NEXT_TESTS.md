@@ -11,6 +11,8 @@
   - signed trade-flow momentum at 30 s–15 min horizons.
 - **Before any code runs:** pre-register them, splitting the recorded weeks into a discovery half and a holdout
   half, with taker costs of 14 bps round trip and a maker model based on queue position from the book.
+- **Pre-registered already:** PREREG17 (maker entries with the owner's pre-fill defense, confluence and
+  breakeven ladder; 3 trials, 726 → 729). Run it once on or after 2026-12-09.
 - **Check first:** `trade_id_gaps` and reconnects in ticks_status.json. Exclude gap periods.
 
 ## Live state as of 2026-11-11
