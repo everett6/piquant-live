@@ -91,3 +91,38 @@ Once, after the synthetic tests pass and the data is downloaded with the owner's
   others.
 - M2 helps bear months more, about 1–2.5 points, mostly in 2022. It most likely still misses the +3.0 bar.
 - I expect both to fail check 1, with M2 the closer of the two.
+
+## Result (run once, 2026-11-13): both FAIL
+
+Data: Yahoo adjusted closes 2014-01-02..2026-11-12 (3,236 days each); FRED DTB3 to 2026-11-10. The fetch script's
+FRED read timed out, so DTB3 was fetched with curl from the same URL and saved in the same format. The ETF files came
+from the script, and nothing else changed.
+
+| | full %/mo | max DD | bear | flat | bull | 2022 | D | C | B | discovery | A | stress | checks failed |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| M1 always-on 10%/market | +8.30 | −88% | −8.3 | −3.1 | +38.5 | −9.56 | +26.66 | +6.79 | −0.06 | +6.39 | +3.62 | +0.85 | 1 (bear), 3 (DD) |
+| M2 idle-capital 40% | +4.42 | −97% | **−12.9** | −3.6 | +37.2 | −15.81 | +20.14 | +2.08 | −3.86 | +4.40 | +2.72 | −3.30 | 1, 2, 3, 5 |
+| P1 (comparator, reproduced exactly) | +8.50 | −84% | −8.0 | −3.9 | +38.2 | −9.57 | +27.99 | +6.24 | +0.77 | +6.25 | +3.32 | +1.19 | – |
+
+**The overlay alone:**
+
+| | full %/mo | Sharpe | bear-month mean | corr. with P1 | mean %/mo by market SPY / TLT / GLD / UUP |
+|---|---|---|---|---|---|
+| M1 | −0.11 | 0.06 | −0.28 | 0.05 | +0.41 / −0.33 / +0.05 / −0.02 |
+| M2 | −3.71 | −0.49 | −5.14 | 0.08 | −0.17 / −0.74 / −0.99 / −0.46 |
+
+**Reading:**
+- The prediction was wrong. I expected a small positive overlay and a 1–2.5 point bear-month gain from M2. Instead the
+  4-market overlay earned about nothing over 2016–2026 (Sharpe 0.06), and M2 made bear months 5 points worse.
+- It was nearly uncorrelated with crypto (0.05), as the theory says, but it had no return to add. Even in 2022 it made
+  only about +1% (M1). Short bonds and long dollar paid, but long gold into March and a late short on stocks gave it
+  back. Bond and gold trends whipsawed in 2016, 2018, 2021 and 2025.
+- Why the big funds' version differs (not tested): they trade 50–150 markets, including energy, metals, grains and
+  rates abroad, and blend several speeds. Most of their 2022 gain came from energy and rates. Four ETFs with one slow
+  12-month signal is too narrow to get that diversification.
+- M2 put the largest positions on exactly when crypto was weak. In those months the macro trends were also turning,
+  so the losses landed in bear months.
+- A diagnostic was run after the result, to check for a bug before writing this: yearly overlay P&L by market and the
+  2022 weights. It is descriptive only; nothing was changed or re-run.
+- **The multi-market trend overlay is closed for the daily core.** Trials charged: 744. P1 stays the live paper
+  variant.
