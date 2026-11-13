@@ -45,6 +45,9 @@
 - **Second copy:** the desktop collector rsyncs the Pi's `ticks/`, `book/`, `archive/` and clock checks into
   `~/piquant-backups/pi-collect` once a day after 03:00 (no delete; alert "Pi tick-data mirror failed" on errors).
   Before this, the Pi's SD card was the only copy of the Dec 9 test data.
+- **Daily checks:** `scripts/pipeline_status.sh` (one screen: Pi services, recorder age, venues, today's book gaps,
+  clock, alert.env, desktop mirror). Before any Pi run: `scripts/sync_pi.sh` (committed code only; writes
+  `.synced_commit` on the Pi). Both take `PI=everett@<ip>` if `raspberrypi.local` does not resolve.
 - **Monthly archive:** `scripts/collect_archive.sh pack YYYY-MM` packs a finished month into
   `archive/YYYY-MM.tar.zst` (zstd -19 --long; ~25% smaller than the daily gzip files, checked before the
   originals are deleted). `restore` unpacks it for a test and `drop` removes the unpacked copy again.
