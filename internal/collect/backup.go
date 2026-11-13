@@ -28,9 +28,17 @@ type BackupConfig struct {
 	Alert     func(key, subject, body string) // optional: called on failures (the caller rate-limits)
 	// ExtraFiles are local ledger files (e.g. the desktop carry ledger) copied into GitDir/desktop on each push.
 	ExtraFiles []string
+	// MirrorRemote (relative to the Pi's home) and MirrorPaths are rsynced into MirrorDest once a day after the
+	// backup hour: an incremental copy of the tick/book recording, too big to re-tar every night. Files deleted
+	// on the Pi (for example after a month is packed) are kept here. Empty MirrorRemote disables it.
+	MirrorRemote string
+	MirrorPaths  []string
+	MirrorDest   string
 
 	// command builds the fetch command; tests replace it.
 	command func(ctx context.Context) *exec.Cmd
+	// mirrorCommand builds the rsync command; tests replace it.
+	mirrorCommand func(ctx context.Context) *exec.Cmd
 }
 
 // backupRunner tracks the last attempt so a failed fetch retries after 30 minutes, not every check.
@@ -38,6 +46,8 @@ type backupRunner struct {
 	cfg         BackupConfig
 	logf        func(format string, a ...any)
 	lastAttempt time.Time
+	mirrorTry   time.Time
+	mirrorDay   string // local date of the last successful mirror
 }
 
 // RunBackups blocks until ctx ends.
@@ -78,6 +88,7 @@ func (b *backupRunner) due(now time.Time) bool {
 }
 
 func (b *backupRunner) tick(ctx context.Context, now time.Time) {
+	b.mirrorTick(ctx, now)
 	if !b.due(now) {
 		return
 	}
@@ -111,6 +122,49 @@ func (b *backupRunner) cmd(ctx context.Context) *exec.Cmd {
 	remote := fmt.Sprintf("cd %s && tar czf - --ignore-failed-read %s", shellQuote(b.cfg.RemoteDir),
 		strings.Join(quoteAll(b.cfg.Paths), " "))
 	return exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", b.cfg.Host, remote)
+}
+
+func (b *backupRunner) mirrorDue(now time.Time) bool {
+	return b.cfg.MirrorRemote != "" && now.Hour() >= b.cfg.Hour && now.Sub(b.mirrorTry) >= 30*time.Minute &&
+		b.mirrorDay != now.Format("2006-01-02")
+}
+
+func (b *backupRunner) mirrorCmd(ctx context.Context) *exec.Cmd {
+	if b.cfg.mirrorCommand != nil {
+		return b.cfg.mirrorCommand(ctx)
+	}
+	args := []string{"-a", "--partial", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=15"}
+	for _, p := range b.cfg.MirrorPaths {
+		args = append(args, b.cfg.Host+":"+filepath.Join(b.cfg.MirrorRemote, p))
+	}
+	return exec.CommandContext(ctx, "rsync", append(args, b.cfg.MirrorDest+"/")...)
+}
+
+// mirrorTick rsyncs the Pi's recording once a day; a failure alerts and retries after 30 minutes.
+func (b *backupRunner) mirrorTick(ctx context.Context, now time.Time) {
+	if !b.mirrorDue(now) {
+		return
+	}
+	b.mirrorTry = now
+	if err := os.MkdirAll(b.cfg.MirrorDest, 0o755); err != nil {
+		b.logf("[BACKUP] mirror: %v", err)
+		return
+	}
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Hour)
+	defer cancel()
+	c := b.mirrorCmd(cctx)
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	if err := c.Run(); err != nil {
+		msg := fmt.Sprintf("%v: %s", err, strings.TrimSpace(stderr.String()))
+		b.logf("[BACKUP] tick-data mirror failed: %s", msg)
+		if b.cfg.Alert != nil {
+			b.cfg.Alert("mirror", "Pi tick-data mirror failed", msg+"\n\nIt retries every 30 minutes.")
+		}
+		return
+	}
+	b.mirrorDay = now.Format("2006-01-02")
+	b.logf("[BACKUP] tick data mirrored to %s", b.cfg.MirrorDest)
 }
 
 // fetch streams the archive to a temp file, checks it is a non-empty gzip, then renames it into place.

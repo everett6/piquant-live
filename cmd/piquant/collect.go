@@ -34,6 +34,12 @@ func runCollect(ctx context.Context, args []string) error {
 	backupPaths := fs.String("backup-paths", "paper,trend,config,reports,macro", "Pi subdirs to back up")
 	backupDest := fs.String("backup-dest", filepath.Join(home, "piquant-backups", "pi"), "local backup folder")
 	backupKeep := fs.Int("backup-keep", 30, "nightly archives to keep")
+	mirrorRemote := fs.String("mirror-remote-dir", "piquant-collect",
+		"Pi tick-recording dir (relative to its home) mirrored nightly with rsync; empty = off")
+	mirrorPaths := fs.String("mirror-paths", "ticks,book,archive,clock_offsets.jsonl,ticks_status.json",
+		"entries of -mirror-remote-dir to mirror")
+	mirrorDest := fs.String("mirror-dest", filepath.Join(home, "piquant-backups", "pi-collect"),
+		"local folder for the tick-recording mirror")
 	backupHour := fs.Int("backup-hour", 3, "local hour after which the nightly backup runs")
 	backupGit := fs.String("backup-git-dir", "", "clone of a PRIVATE repo to push Pi ledgers to (empty = off)")
 	clockF := addClockFlags(fs)
@@ -133,8 +139,14 @@ func runCollect(ctx context.Context, args []string) error {
 	if *backupHost != "" {
 		bc := collect.BackupConfig{Host: *backupHost, RemoteDir: *backupRemote, Dest: *backupDest,
 			Keep: *backupKeep, Hour: *backupHour, GitDir: *backupGit,
-			Alert:      func(key, subject, body string) { al.Send(key, subject, body) },
-			ExtraFiles: []string{filepath.Join(*dir, "carry", "carry_state.json")}}
+			Alert:        func(key, subject, body string) { al.Send(key, subject, body) },
+			ExtraFiles:   []string{filepath.Join(*dir, "carry", "carry_state.json")},
+			MirrorRemote: *mirrorRemote, MirrorDest: *mirrorDest}
+		for _, p := range strings.Split(*mirrorPaths, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				bc.MirrorPaths = append(bc.MirrorPaths, p)
+			}
+		}
 		for _, p := range strings.Split(*backupPaths, ",") {
 			if p = strings.TrimSpace(p); p != "" {
 				bc.Paths = append(bc.Paths, p)
