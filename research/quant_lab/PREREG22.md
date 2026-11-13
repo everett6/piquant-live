@@ -80,3 +80,37 @@ Coinbase leads both other venues.
 - **Fix:** Binance.US (lead matrix only) uses the `USDT` pair when the `USD` pair is empty. If both fail, the day
   runs without Binance.US. Coinbase and Kraken are still required. The run then starts again from the first day.
 - The run moved from Kaggle (no internet in its notebooks) to the Pi.
+
+## Result (run once on the Pi, 2026-11-13 00:12–00:25 UTC): all three FAIL
+47 days, 94 day-coin pairs, no failed days. Binance.US used the USDT pair from 2023-08 (lead matrix only).
+
+| Rule | Discovery n / net / gross (bps) | Holdout n / net / gross | Holdout stress net | Verdict |
+|---|---|---|---|---|
+| L1 Coinbase→Kraken, Kraken spot long | 2412 / −77.2 / +3.46 | 1783 / −78.0 / +2.50 | −88.0 | FAIL (net < 0; win rate 0%) |
+| L2 Kraken→Coinbase, futures proxy | 8121 / −14.4 / +0.28 | 5439 / −14.4 / −0.10 | −18.4 | FAIL |
+| F1 60 s flow momentum, futures proxy | 5536 / −14.5 / −0.15 | 5891 / −14.1 / +0.08 | −18.1 | FAIL |
+
+**Lead matrix** (follower's mean signed mid move after a ≥ 5 bps leader second, bps at 1 s / 5 s / 30 s):
+
+| Leader → follower | BTC | ETH |
+|---|---|---|
+| Coinbase → Kraken | 1.96 / 3.77 / 5.29 | 2.09 / 3.65 / 4.65 |
+| Coinbase → Binance.US | 1.59 / 2.68 / 4.00 | 1.82 / 3.10 / 4.58 |
+| Kraken → Binance.US | 0.54 / 1.29 / 2.75 | 0.95 / 1.99 / 3.52 |
+| Binance.US → Kraken | 0.49 / 1.03 / 1.72 | 0.51 / 0.92 / 1.42 |
+| Kraken → Coinbase | 0.10 / 0.23 / 0.38 | 0.20 / 0.29 / 0.36 |
+| Binance.US → Coinbase | 0.06 / 0.05 / 0.09 | 0.10 / 0.15 / 0.19 |
+
+**Reading:**
+- The prediction held. **Coinbase leads**, and Kraken and Binance.US follow by about 4–5 bps within 30 s.
+  Nothing leads Coinbase (≤ 0.4 bps). So the follower venue, chosen by data as the owner asked, is Kraken (Binance.US
+  close behind).
+- The lead is real but small. It is far below Kraken's 80 bps round-trip retail fee (L1), and L1's gross capture
+  shrank from +4.2 bps (2023) to +0.9 (2026). Trading Coinbase on Kraken's signal (L2) has no edge, because
+  Coinbase does not follow.
+- Flow momentum (F1) has about 0 gross edge, like every directional short-horizon signal so far.
+- Trials charged: 740. PREREG18 still runs once on our recording on or after 2026-12-09, unchanged.
+- **Not tested, and it would need its own pre-registration:** catching the 4–5 bps follower move at a cost near
+  zero (for example a maker rebate tier on the follower). PREREG21 found passive fills lose about 1 bp to adverse
+  selection within 1 s, so the net margin would be thin even at zero fees.
+- **Runtime:** the full run took 12.5 minutes on the Pi 5 (2 workers, lowest priority), streaming every file.

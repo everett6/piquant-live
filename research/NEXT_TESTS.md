@@ -18,6 +18,10 @@
   tests only before the run).
 - **Check first:** `trade_id_gaps` and reconnects in ticks_status.json. Exclude gap periods.
 
+## PREREG22 done (2026-11-13): PREREG18's rules on Tardis free days 2023–2026 all FAIL
+- L1 −78 bps net (gross +2.5), L2 −14.4, F1 −14.1 on the holdout. Coinbase leads Kraken and Binance.US by 4–5 bps
+  within 30 s; nothing leads Coinbase. Full result in quant_lab/PREREG22.md. Trials: 740.
+
 ## Live state as of 2026-11-11
 - **Pi:** runs c23fe4a with `--mft-entries=false` (drop-in /etc/systemd/system/piquant.service.d/mft-off.conf).
   The in-process 2x/1x trend core ledger runs at ~/piquant-data/trend.

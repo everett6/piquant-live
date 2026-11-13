@@ -1,0 +1,1567 @@
+{
+  "n_trials": 740,
+  "synthetic": false,
+  "days_run": 47,
+  "discovery_days": 24,
+  "holdout_days": 23,
+  "errors": {},
+  "data": {
+    "2023-01-01 BTC": {
+      "trades": 269059,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2023-01-01 ETH": {
+      "trades": 247688,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 3,
+      "binance-us_gap_minutes": 0
+    },
+    "2023-02-01 BTC": {
+      "trades": 488618,
+      "id_gap_minutes": 50,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2023-02-01 ETH": {
+      "trades": 383412,
+      "id_gap_minutes": 45,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 2,
+      "binance-us_gap_minutes": 0
+    },
+    "2023-03-01 BTC": {
+      "trades": 349975,
+      "id_gap_minutes": 40,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 3,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2023-03-01 ETH": {
+      "trades": 335479,
+      "id_gap_minutes": 33,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 3,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2023-04-01 BTC": {
+      "trades": 272231,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2023-04-01 ETH": {
+      "trades": 209582,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2023-05-01 BTC": {
+      "trades": 385893,
+      "id_gap_minutes": 24,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2023-05-01 ETH": {
+      "trades": 256189,
+      "id_gap_minutes": 19,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86395,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2023-06-01 BTC": {
+      "trades": 307552,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 11,
+      "binance-us_gap_minutes": 0
+    },
+    "2023-06-01 ETH": {
+      "trades": 200301,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 11,
+      "binance-us_gap_minutes": 0
+    },
+    "2023-07-01 BTC": {
+      "trades": 198268,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 272
+    },
+    "2023-07-01 ETH": {
+      "trades": 148638,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86397,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 230
+    },
+    "2023-08-01 BTC": {
+      "trades": 316577,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 37,
+      "binance-us_gap_minutes": 39
+    },
+    "2023-08-01 ETH": {
+      "trades": 187478,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 39,
+      "binance-us_gap_minutes": 236
+    },
+    "2023-09-01 BTC": {
+      "trades": 309609,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 27
+    },
+    "2023-09-01 ETH": {
+      "trades": 147297,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 232
+    },
+    "2023-10-01 BTC": {
+      "trades": 197914,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 73
+    },
+    "2023-10-01 ETH": {
+      "trades": 129393,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86394,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 2,
+      "binance-us_gap_minutes": 314
+    },
+    "2023-11-01 BTC": {
+      "trades": 303582,
+      "id_gap_minutes": 3,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 2,
+      "binance-us_gap_minutes": 16
+    },
+    "2023-11-01 ETH": {
+      "trades": 195553,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 2,
+      "binance-us_gap_minutes": 72
+    },
+    "2023-12-01 BTC": {
+      "trades": 343877,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 4
+    },
+    "2023-12-01 ETH": {
+      "trades": 230560,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 84
+    },
+    "2024-01-01 BTC": {
+      "trades": 185058,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 6
+    },
+    "2024-01-01 ETH": {
+      "trades": 128211,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86396,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 173
+    },
+    "2024-02-01 BTC": {
+      "trades": 231222,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2024-02-01 ETH": {
+      "trades": 135950,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 108
+    },
+    "2024-03-01 BTC": {
+      "trades": 496658,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 3
+    },
+    "2024-03-01 ETH": {
+      "trades": 297279,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 18
+    },
+    "2024-04-01 BTC": {
+      "trades": 405034,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 27
+    },
+    "2024-04-01 ETH": {
+      "trades": 323384,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 69
+    },
+    "2024-05-01 BTC": {
+      "trades": 702480,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86396,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 20
+    },
+    "2024-05-01 ETH": {
+      "trades": 365846,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 7
+    },
+    "2024-06-01 BTC": {
+      "trades": 152698,
+      "id_gap_minutes": 2,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 143
+    },
+    "2024-06-01 ETH": {
+      "trades": 156661,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 92
+    },
+    "2024-07-01 BTC": {
+      "trades": 353867,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 8
+    },
+    "2024-07-01 ETH": {
+      "trades": 209567,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 10
+    },
+    "2024-08-01 BTC": {
+      "trades": 611924,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 20,
+      "binance-us_gap_minutes": 2
+    },
+    "2024-08-01 ETH": {
+      "trades": 298600,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 21,
+      "binance-us_gap_minutes": 0
+    },
+    "2024-09-01 BTC": {
+      "trades": 309353,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 61
+    },
+    "2024-09-01 ETH": {
+      "trades": 137925,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 18
+    },
+    "2024-10-01 BTC": {
+      "trades": 487347,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 79
+    },
+    "2024-10-01 ETH": {
+      "trades": 259679,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86397,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 80
+    },
+    "2024-11-01 BTC": {
+      "trades": 481401,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 38
+    },
+    "2024-11-01 ETH": {
+      "trades": 238843,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 64
+    },
+    "2024-12-01 BTC": {
+      "trades": 419144,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 79
+    },
+    "2024-12-01 ETH": {
+      "trades": 390051,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 5
+    },
+    "2025-01-01 BTC": {
+      "trades": 403692,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 69
+    },
+    "2025-01-01 ETH": {
+      "trades": 229209,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 46
+    },
+    "2025-02-01 BTC": {
+      "trades": 491655,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86398,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 24,
+      "binance-us_gap_minutes": 14
+    },
+    "2025-02-01 ETH": {
+      "trades": 375656,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86398,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 24,
+      "binance-us_gap_minutes": 0
+    },
+    "2025-03-01 BTC": {
+      "trades": 411926,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86396,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 140
+    },
+    "2025-03-01 ETH": {
+      "trades": 266865,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 20
+    },
+    "2025-04-01 BTC": {
+      "trades": 443210,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86396,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 11,
+      "binance-us_gap_minutes": 453
+    },
+    "2025-04-01 ETH": {
+      "trades": 331055,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 11,
+      "binance-us_gap_minutes": 51
+    },
+    "2025-05-01 BTC": {
+      "trades": 456322,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86395,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 677
+    },
+    "2025-05-01 ETH": {
+      "trades": 363131,
+      "id_gap_minutes": 2,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86395,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 204
+    },
+    "2025-06-01 BTC": {
+      "trades": 275248,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 810
+    },
+    "2025-06-01 ETH": {
+      "trades": 214402,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86397,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 52
+    },
+    "2025-07-01 BTC": {
+      "trades": 365739,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 608
+    },
+    "2025-07-01 ETH": {
+      "trades": 257769,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86397,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 23
+    },
+    "2025-08-01 BTC": {
+      "trades": 593230,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86396,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 11,
+      "binance-us_gap_minutes": 322
+    },
+    "2025-08-01 ETH": {
+      "trades": 669893,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86397,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 11,
+      "binance-us_gap_minutes": 217
+    },
+    "2025-09-01 BTC": {
+      "trades": 499149,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86395,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 6,
+      "binance-us_gap_minutes": 286
+    },
+    "2025-09-01 ETH": {
+      "trades": 438827,
+      "id_gap_minutes": 2,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 6,
+      "binance-us_gap_minutes": 0
+    },
+    "2025-10-01 BTC": {
+      "trades": 486971,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86396,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 633
+    },
+    "2025-10-01 ETH": {
+      "trades": 438585,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 15
+    },
+    "2025-11-01 BTC": {
+      "trades": 233845,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86399,
+      "binance-us_snapshots": 86397,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 398,
+      "binance-us_gap_minutes": 48
+    },
+    "2025-11-01 ETH": {
+      "trades": 313467,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86399,
+      "binance-us_snapshots": 86397,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 403,
+      "binance-us_gap_minutes": 116
+    },
+    "2025-12-01 BTC": {
+      "trades": 786393,
+      "id_gap_minutes": 8,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 8
+    },
+    "2025-12-01 ETH": {
+      "trades": 564226,
+      "id_gap_minutes": 9,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 2
+    },
+    "2026-01-01 BTC": {
+      "trades": 320125,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86399,
+      "binance-us_snapshots": 86392,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 822
+    },
+    "2026-01-01 ETH": {
+      "trades": 357317,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 473
+    },
+    "2026-02-01 BTC": {
+      "trades": 744240,
+      "id_gap_minutes": 2,
+      "coinbase_snapshots": 86398,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 14
+    },
+    "2026-02-01 ETH": {
+      "trades": 548569,
+      "id_gap_minutes": 2,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2026-03-01 BTC": {
+      "trades": 621229,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86396,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2026-03-01 ETH": {
+      "trades": 399312,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86393,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 2
+    },
+    "2026-04-01 BTC": {
+      "trades": 738710,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2026-04-01 ETH": {
+      "trades": 452906,
+      "id_gap_minutes": 2,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2026-05-01 BTC": {
+      "trades": 846821,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 61
+    },
+    "2026-05-01 ETH": {
+      "trades": 323524,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 26
+    },
+    "2026-06-01 BTC": {
+      "trades": 777068,
+      "id_gap_minutes": 11,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86399,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 36
+    },
+    "2026-06-01 ETH": {
+      "trades": 420991,
+      "id_gap_minutes": 5,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 6
+    },
+    "2026-07-01 BTC": {
+      "trades": 1003792,
+      "id_gap_minutes": 3,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 165
+    },
+    "2026-07-01 ETH": {
+      "trades": 375589,
+      "id_gap_minutes": 2,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 98
+    },
+    "2026-08-01 BTC": {
+      "trades": 352032,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86397,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 552
+    },
+    "2026-08-01 ETH": {
+      "trades": 156465,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 200
+    },
+    "2026-09-01 BTC": {
+      "trades": 593435,
+      "id_gap_minutes": 8,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 26
+    },
+    "2026-09-01 ETH": {
+      "trades": 210011,
+      "id_gap_minutes": 4,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86398,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 0
+    },
+    "2026-10-01 BTC": {
+      "trades": 489297,
+      "id_gap_minutes": 1,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 2,
+      "binance-us_gap_minutes": 37
+    },
+    "2026-10-01 ETH": {
+      "trades": 183882,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86398,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 2,
+      "binance-us_gap_minutes": 13
+    },
+    "2026-11-01 BTC": {
+      "trades": 317946,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86399,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 635
+    },
+    "2026-11-01 ETH": {
+      "trades": 125640,
+      "id_gap_minutes": 0,
+      "coinbase_snapshots": 86399,
+      "kraken_snapshots": 86399,
+      "binance-us_snapshots": 86399,
+      "coinbase_gap_minutes": 0,
+      "kraken_gap_minutes": 0,
+      "binance-us_gap_minutes": 270
+    }
+  },
+  "lead_matrix": {
+    "BTC": {
+      "binance-us->coinbase": {
+        "signals": 8789,
+        "1s": {
+          "n": 8789,
+          "mean_bps": 0.06221737483291203
+        },
+        "5s": {
+          "n": 8788,
+          "mean_bps": 0.054620624780463936
+        },
+        "30s": {
+          "n": 8786,
+          "mean_bps": 0.08582129644876269
+        }
+      },
+      "binance-us->kraken": {
+        "signals": 9617,
+        "1s": {
+          "n": 9617,
+          "mean_bps": 0.4851221820739928
+        },
+        "5s": {
+          "n": 9616,
+          "mean_bps": 1.0321346716220747
+        },
+        "30s": {
+          "n": 9614,
+          "mean_bps": 1.7249486772735274
+        }
+      },
+      "coinbase->binance-us": {
+        "signals": 4160,
+        "1s": {
+          "n": 4160,
+          "mean_bps": 1.5925358934444578
+        },
+        "5s": {
+          "n": 4160,
+          "mean_bps": 2.6828212037525616
+        },
+        "30s": {
+          "n": 4158,
+          "mean_bps": 3.9995675202272403
+        }
+      },
+      "coinbase->kraken": {
+        "signals": 4374,
+        "1s": {
+          "n": 4374,
+          "mean_bps": 1.9647774652858851
+        },
+        "5s": {
+          "n": 4374,
+          "mean_bps": 3.772200378222792
+        },
+        "30s": {
+          "n": 4372,
+          "mean_bps": 5.294403236740831
+        }
+      },
+      "kraken->binance-us": {
+        "signals": 7028,
+        "1s": {
+          "n": 7028,
+          "mean_bps": 0.5439674038278416
+        },
+        "5s": {
+          "n": 7028,
+          "mean_bps": 1.2865914859861385
+        },
+        "30s": {
+          "n": 7027,
+          "mean_bps": 2.753409296778494
+        }
+      },
+      "kraken->coinbase": {
+        "signals": 6532,
+        "1s": {
+          "n": 6532,
+          "mean_bps": 0.10424915095485779
+        },
+        "5s": {
+          "n": 6532,
+          "mean_bps": 0.23353641457723157
+        },
+        "30s": {
+          "n": 6531,
+          "mean_bps": 0.38313786343509226
+        }
+      }
+    },
+    "ETH": {
+      "binance-us->coinbase": {
+        "signals": 14376,
+        "1s": {
+          "n": 14376,
+          "mean_bps": 0.10229483839014748
+        },
+        "5s": {
+          "n": 14376,
+          "mean_bps": 0.14939571327617873
+        },
+        "30s": {
+          "n": 14376,
+          "mean_bps": 0.19349628085899426
+        }
+      },
+      "binance-us->kraken": {
+        "signals": 15362,
+        "1s": {
+          "n": 15362,
+          "mean_bps": 0.5087901872937196
+        },
+        "5s": {
+          "n": 15362,
+          "mean_bps": 0.9234469541443853
+        },
+        "30s": {
+          "n": 15362,
+          "mean_bps": 1.4159044150455287
+        }
+      },
+      "coinbase->binance-us": {
+        "signals": 8418,
+        "1s": {
+          "n": 8418,
+          "mean_bps": 1.8224811030886228
+        },
+        "5s": {
+          "n": 8417,
+          "mean_bps": 3.0993320031268126
+        },
+        "30s": {
+          "n": 8416,
+          "mean_bps": 4.583199566159228
+        }
+      },
+      "coinbase->kraken": {
+        "signals": 6915,
+        "1s": {
+          "n": 6915,
+          "mean_bps": 2.092498413681795
+        },
+        "5s": {
+          "n": 6914,
+          "mean_bps": 3.6480480330571936
+        },
+        "30s": {
+          "n": 6914,
+          "mean_bps": 4.648896283724911
+        }
+      },
+      "kraken->binance-us": {
+        "signals": 12144,
+        "1s": {
+          "n": 12144,
+          "mean_bps": 0.9528536591378934
+        },
+        "5s": {
+          "n": 12144,
+          "mean_bps": 1.9860879141913044
+        },
+        "30s": {
+          "n": 12143,
+          "mean_bps": 3.516260248295376
+        }
+      },
+      "kraken->coinbase": {
+        "signals": 10071,
+        "1s": {
+          "n": 10071,
+          "mean_bps": 0.19927096951847642
+        },
+        "5s": {
+          "n": 10071,
+          "mean_bps": 0.2866102305694767
+        },
+        "30s": {
+          "n": 10071,
+          "mean_bps": 0.35596456870376786
+        }
+      }
+    }
+  },
+  "rules": {
+    "L1": {
+      "base": {
+        "discovery": {
+          "n": 2412,
+          "mean_net_bps": -77.23164033934528,
+          "mean_gross_bps": 3.455846636439124,
+          "mean_spread_bps": 0.6874869757844019,
+          "spread_share_of_gross": 0.1989344574887683,
+          "t": -282.3916368899117,
+          "win_rate": 0.0008291873963515755,
+          "trades_per_day": 100.5,
+          "worst_bps": -226.26701601413106
+        },
+        "holdout": {
+          "n": 1783,
+          "mean_net_bps": -78.01371497998753,
+          "mean_gross_bps": 2.504847724247744,
+          "mean_spread_bps": 0.518562704235265,
+          "spread_share_of_gross": 0.20702364427801684,
+          "t": -265.65634983406363,
+          "win_rate": 0.0,
+          "trades_per_day": 77.52173913043478,
+          "worst_bps": -146.95936155027394
+        },
+        "by_year": {
+          "2023": {
+            "n": 820,
+            "mean_net_bps": -77.00750896850032,
+            "mean_gross_bps": 4.238436515701655,
+            "mean_spread_bps": 1.2459454842019702,
+            "spread_share_of_gross": 0.2939634649678619,
+            "t": -126.81196254324651,
+            "win_rate": 0.0024390243902439024,
+            "trades_per_day": 68.33333333333333,
+            "worst_bps": -226.26701601413106
+          },
+          "2024": {
+            "n": 1592,
+            "mean_net_bps": -77.34708488965488,
+            "mean_gross_bps": 3.052753859432041,
+            "mean_spread_bps": 0.3998387490869107,
+            "spread_share_of_gross": 0.1309764126090729,
+            "t": -284.4669696851878,
+            "win_rate": 0.0,
+            "trades_per_day": 132.66666666666666,
+            "worst_bps": -140.58049005715827
+          },
+          "2025": {
+            "n": 1245,
+            "mean_net_bps": -77.11620917144128,
+            "mean_gross_bps": 3.2087618033007446,
+            "mean_spread_bps": 0.32497097474203634,
+            "spread_share_of_gross": 0.10127612913110276,
+            "t": -262.3474443080472,
+            "win_rate": 0.0,
+            "trades_per_day": 103.75,
+            "worst_bps": -146.0098928844155
+          },
+          "2026": {
+            "n": 538,
+            "mean_net_bps": -80.09065686035937,
+            "mean_gross_bps": 0.8759015747663568,
+            "mean_spread_bps": 0.9665584351257291,
+            "spread_share_of_gross": 1.1035011957634107,
+            "t": -116.3645626580332,
+            "win_rate": 0.0,
+            "trades_per_day": 48.90909090909091,
+            "worst_bps": -146.95936155027394
+          }
+        }
+      },
+      "stress": {
+        "discovery": {
+          "n": 2412,
+          "mean_net_bps": -87.23164033934528,
+          "mean_gross_bps": 3.455846636439124,
+          "mean_spread_bps": 0.6874869757844019,
+          "spread_share_of_gross": 0.1989344574887683,
+          "t": -318.95587865004023,
+          "win_rate": 0.0008291873963515755,
+          "trades_per_day": 100.5,
+          "worst_bps": -236.26701601413106
+        },
+        "holdout": {
+          "n": 1783,
+          "mean_net_bps": -88.01371497998753,
+          "mean_gross_bps": 2.504847724247744,
+          "mean_spread_bps": 0.518562704235265,
+          "spread_share_of_gross": 0.20702364427801684,
+          "t": -299.7088686638887,
+          "win_rate": 0.0,
+          "trades_per_day": 77.52173913043478,
+          "worst_bps": -156.95936155027394
+        },
+        "by_year": {
+          "2023": {
+            "n": 820,
+            "mean_net_bps": -87.0075089685003,
+            "mean_gross_bps": 4.238436515701655,
+            "mean_spread_bps": 1.2459454842019702,
+            "spread_share_of_gross": 0.2939634649678619,
+            "t": -143.27944269445078,
+            "win_rate": 0.0024390243902439024,
+            "trades_per_day": 68.33333333333333,
+            "worst_bps": -236.26701601413106
+          },
+          "2024": {
+            "n": 1592,
+            "mean_net_bps": -87.34708488965488,
+            "mean_gross_bps": 3.052753859432041,
+            "mean_spread_bps": 0.3998387490869107,
+            "spread_share_of_gross": 0.1309764126090729,
+            "t": -321.2449516984744,
+            "win_rate": 0.0,
+            "trades_per_day": 132.66666666666666,
+            "worst_bps": -150.58049005715827
+          },
+          "2025": {
+            "n": 1245,
+            "mean_net_bps": -87.11620917144128,
+            "mean_gross_bps": 3.2087618033007446,
+            "mean_spread_bps": 0.32497097474203634,
+            "spread_share_of_gross": 0.10127612913110276,
+            "t": -296.3671980182961,
+            "win_rate": 0.0,
+            "trades_per_day": 103.75,
+            "worst_bps": -156.0098928844155
+          },
+          "2026": {
+            "n": 538,
+            "mean_net_bps": -90.09065686035937,
+            "mean_gross_bps": 0.8759015747663568,
+            "mean_spread_bps": 0.9665584351257291,
+            "spread_share_of_gross": 1.1035011957634107,
+            "t": -130.89366845134919,
+            "win_rate": 0.0,
+            "trades_per_day": 48.90909090909091,
+            "worst_bps": -156.95936155027394
+          }
+        }
+      },
+      "pass": false
+    },
+    "L2": {
+      "base": {
+        "discovery": {
+          "n": 8121,
+          "mean_net_bps": -14.38802837066665,
+          "mean_gross_bps": 0.2840010088952708,
+          "mean_spread_bps": 0.6720293795619217,
+          "spread_share_of_gross": 2.366292226129878,
+          "t": -144.48207547022295,
+          "win_rate": 0.04051225218569142,
+          "trades_per_day": 338.375,
+          "worst_bps": -165.86893478704056
+        },
+        "holdout": {
+          "n": 5439,
+          "mean_net_bps": -14.405944503631197,
+          "mean_gross_bps": -0.09749127908542232,
+          "mean_spread_bps": 0.30845322454577545,
+          "spread_share_of_gross": null,
+          "t": -124.0396028983321,
+          "win_rate": 0.039897039897039896,
+          "trades_per_day": 236.47826086956522,
+          "worst_bps": -108.9228118771761
+        },
+        "by_year": {
+          "2023": {
+            "n": 2400,
+            "mean_net_bps": -14.504177508915664,
+            "mean_gross_bps": 0.28307522296648585,
+            "mean_spread_bps": 0.7872527318821494,
+            "spread_share_of_gross": 2.7810725489576127,
+            "t": -72.89527593498107,
+            "win_rate": 0.03958333333333333,
+            "trades_per_day": 200.0,
+            "worst_bps": -73.14206953660455
+          },
+          "2024": {
+            "n": 5721,
+            "mean_net_bps": -14.339302984930306,
+            "mean_gross_bps": 0.28438938264620317,
+            "mean_spread_bps": 0.6236923675765089,
+            "spread_share_of_gross": 2.1930930113253146,
+            "t": -125.68433896038484,
+            "win_rate": 0.04090194022024122,
+            "trades_per_day": 476.75,
+            "worst_bps": -165.86893478704056
+          },
+          "2025": {
+            "n": 4706,
+            "mean_net_bps": -14.479581310422148,
+            "mean_gross_bps": -0.16016513551614356,
+            "mean_spread_bps": 0.31941617490600505,
+            "spread_share_of_gross": null,
+            "t": -130.78716835216864,
+            "win_rate": 0.030174245643858903,
+            "trades_per_day": 392.1666666666667,
+            "worst_bps": -108.9228118771761
+          },
+          "2026": {
+            "n": 733,
+            "mean_net_bps": -13.933182139704575,
+            "mean_gross_bps": 0.3048868496498768,
+            "mean_spread_bps": 0.23806898935445167,
+            "spread_share_of_gross": 0.7808437445821071,
+            "t": -28.596876097790815,
+            "win_rate": 0.10231923601637108,
+            "trades_per_day": 66.63636363636364,
+            "worst_bps": -73.99153771760196
+          }
+        }
+      },
+      "stress": {
+        "discovery": {
+          "n": 8121,
+          "mean_net_bps": -18.388028370666653,
+          "mean_gross_bps": 0.2840010088952708,
+          "mean_spread_bps": 0.6720293795619217,
+          "spread_share_of_gross": 2.366292226129878,
+          "t": -184.64937893892713,
+          "win_rate": 0.023519271025735748,
+          "trades_per_day": 338.375,
+          "worst_bps": -169.86893478704056
+        },
+        "holdout": {
+          "n": 5439,
+          "mean_net_bps": -18.405944503631197,
+          "mean_gross_bps": -0.09749127908542232,
+          "mean_spread_bps": 0.30845322454577545,
+          "spread_share_of_gross": null,
+          "t": -158.48083036996826,
+          "win_rate": 0.024085309799595514,
+          "trades_per_day": 236.47826086956522,
+          "worst_bps": -112.9228118771761
+        },
+        "by_year": {
+          "2023": {
+            "n": 2400,
+            "mean_net_bps": -18.504177508915664,
+            "mean_gross_bps": 0.28307522296648585,
+            "mean_spread_bps": 0.7872527318821494,
+            "spread_share_of_gross": 2.7810725489576127,
+            "t": -92.99852574426467,
+            "win_rate": 0.0275,
+            "trades_per_day": 200.0,
+            "worst_bps": -77.14206953660455
+          },
+          "2024": {
+            "n": 5721,
+            "mean_net_bps": -18.339302984930306,
+            "mean_gross_bps": 0.28438938264620317,
+            "mean_spread_bps": 0.6236923675765089,
+            "spread_share_of_gross": 2.1930930113253146,
+            "t": -160.74443611921356,
+            "win_rate": 0.021849327040727146,
+            "trades_per_day": 476.75,
+            "worst_bps": -169.86893478704056
+          },
+          "2025": {
+            "n": 4706,
+            "mean_net_bps": -18.479581310422148,
+            "mean_gross_bps": -0.16016513551614356,
+            "mean_spread_bps": 0.31941617490600505,
+            "spread_share_of_gross": null,
+            "t": -166.91726508584432,
+            "win_rate": 0.01551211219719507,
+            "trades_per_day": 392.1666666666667,
+            "worst_bps": -112.9228118771761
+          },
+          "2026": {
+            "n": 733,
+            "mean_net_bps": -17.933182139704574,
+            "mean_gross_bps": 0.3048868496498768,
+            "mean_spread_bps": 0.23806898935445167,
+            "spread_share_of_gross": 0.7808437445821071,
+            "t": -36.80659468498992,
+            "win_rate": 0.0791268758526603,
+            "trades_per_day": 66.63636363636364,
+            "worst_bps": -77.99153771760196
+          }
+        }
+      },
+      "pass": false
+    },
+    "F1": {
+      "base": {
+        "discovery": {
+          "n": 5536,
+          "mean_net_bps": -14.516299806426531,
+          "mean_gross_bps": -0.15492679054491765,
+          "mean_spread_bps": 0.36137301588161347,
+          "spread_share_of_gross": null,
+          "t": -75.6449047323272,
+          "win_rate": 0.09284682080924855,
+          "trades_per_day": 230.66666666666666,
+          "worst_bps": -188.67767809399405
+        },
+        "holdout": {
+          "n": 5891,
+          "mean_net_bps": -14.064284299434584,
+          "mean_gross_bps": 0.08052187629225423,
+          "mean_spread_bps": 0.14480617572683988,
+          "spread_share_of_gross": 1.7983457712940731,
+          "t": -69.14545587801555,
+          "win_rate": 0.11016805296214564,
+          "trades_per_day": 256.1304347826087,
+          "worst_bps": -97.52493407635441
+        },
+        "by_year": {
+          "2023": {
+            "n": 2782,
+            "mean_net_bps": -14.374711115526853,
+            "mean_gross_bps": -0.055753391983645165,
+            "mean_spread_bps": 0.3189577235432076,
+            "spread_share_of_gross": null,
+            "t": -62.59770853861696,
+            "win_rate": 0.06578001437814522,
+            "trades_per_day": 231.83333333333334,
+            "worst_bps": -188.67767809399405
+          },
+          "2024": {
+            "n": 2754,
+            "mean_net_bps": -14.65932803376237,
+            "mean_gross_bps": -0.25510848800223795,
+            "mean_spread_bps": 0.4042195457601338,
+            "spread_share_of_gross": null,
+            "t": -47.55955447406402,
+            "win_rate": 0.12018881626724764,
+            "trades_per_day": 229.5,
+            "worst_bps": -121.8467637429319
+          },
+          "2025": {
+            "n": 3119,
+            "mean_net_bps": -14.417471910380883,
+            "mean_gross_bps": -0.2155865479666785,
+            "mean_spread_bps": 0.20188536241420463,
+            "spread_share_of_gross": null,
+            "t": -52.938809794134144,
+            "win_rate": 0.11894838089131132,
+            "trades_per_day": 259.9166666666667,
+            "worst_bps": -87.85124905112006
+          },
+          "2026": {
+            "n": 2772,
+            "mean_net_bps": -13.66688453084097,
+            "mean_gross_bps": 0.41369726419399,
+            "mean_spread_bps": 0.0805817950349601,
+            "spread_share_of_gross": 0.19478445232640906,
+            "t": -44.84557585060629,
+            "win_rate": 0.10028860028860029,
+            "trades_per_day": 252.0,
+            "worst_bps": -97.52493407635441
+          }
+        }
+      },
+      "stress": {
+        "discovery": {
+          "n": 5536,
+          "mean_net_bps": -18.51629980642653,
+          "mean_gross_bps": -0.15492679054491765,
+          "mean_spread_bps": 0.36137301588161347,
+          "spread_share_of_gross": null,
+          "t": -96.48903326123465,
+          "win_rate": 0.06213872832369942,
+          "trades_per_day": 230.66666666666666,
+          "worst_bps": -192.67767809399405
+        },
+        "holdout": {
+          "n": 5891,
+          "mean_net_bps": -18.064284299434583,
+          "mean_gross_bps": 0.08052187629225423,
+          "mean_spread_bps": 0.14480617572683988,
+          "spread_share_of_gross": 1.7983457712940731,
+          "t": -88.81100142754495,
+          "win_rate": 0.07536920726531998,
+          "trades_per_day": 256.1304347826087,
+          "worst_bps": -101.52493407635441
+        },
+        "by_year": {
+          "2023": {
+            "n": 2782,
+            "mean_net_bps": -18.374711115526853,
+            "mean_gross_bps": -0.055753391983645165,
+            "mean_spread_bps": 0.3189577235432076,
+            "spread_share_of_gross": null,
+            "t": -80.01655140384909,
+            "win_rate": 0.039180445722501796,
+            "trades_per_day": 231.83333333333334,
+            "worst_bps": -192.67767809399405
+          },
+          "2024": {
+            "n": 2754,
+            "mean_net_bps": -18.65932803376237,
+            "mean_gross_bps": -0.25510848800223795,
+            "mean_spread_bps": 0.4042195457601338,
+            "spread_share_of_gross": null,
+            "t": -60.536835387494186,
+            "win_rate": 0.08533042846768336,
+            "trades_per_day": 229.5,
+            "worst_bps": -125.8467637429319
+          },
+          "2025": {
+            "n": 3119,
+            "mean_net_bps": -18.417471910380883,
+            "mean_gross_bps": -0.2155865479666785,
+            "mean_spread_bps": 0.20188536241420463,
+            "spread_share_of_gross": null,
+            "t": -67.62621411111904,
+            "win_rate": 0.07790958640589933,
+            "trades_per_day": 259.9166666666667,
+            "worst_bps": -91.85124905112006
+          },
+          "2026": {
+            "n": 2772,
+            "mean_net_bps": -17.66688453084097,
+            "mean_gross_bps": 0.41369726419399,
+            "mean_spread_bps": 0.0805817950349601,
+            "spread_share_of_gross": 0.19478445232640906,
+            "t": -57.97090101140847,
+            "win_rate": 0.07251082251082251,
+            "trades_per_day": 252.0,
+            "worst_bps": -101.52493407635441
+          }
+        }
+      },
+      "pass": false
+    }
+  }
+}
