@@ -105,3 +105,33 @@ Once, after this file is pushed and the synthetic tests pass.
 - Check 1 passes on both samples. Check 3 passes, because P1's −84% sits in the bear-heavy 2021–22 stretch.
 - Check 2 is the risk: P1's +8.50 less the drag lands near +7.5. Check 5 is close to zero either way.
 - Chance of a pass: about even. If it passes, most of the credit goes to how bear-heavy 2021–22 was.
+
+## Result (run once, 2026-11-13): FAIL. The spreads paid in bear months, but far less than they cost.
+
+| | full %/mo | max DD | Sharpe | bear | flat | bull | bear, 2021-04 on | 2022 | D | C | B | discovery | A | stress |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| S1 P1 + put-spread ladder | +6.80 | −83% | 1.31 | −6.6 | −5.3 | +32.6 | −9.2 | −9.44 | +24.15 | +4.49 | −0.27 | +4.96 | +2.71 | −1.40 |
+| P1 (comparator, reproduced exactly) | +8.50 | −84% | 1.49 | −8.0 | −3.9 | +38.2 | −11.2 | −9.57 | +27.99 | +6.24 | +0.77 | +6.25 | +3.32 | +1.19 |
+
+Checks: 1 fails on both samples (+1.4 points full, +2.0 since 2021-04; +3.0 needed). 2 fails (+6.80 < 7.0). 3 passes
+(−83% against −84%). 4 passes. 5 fails (−1.40).
+
+**The sleeve alone** (q = 0.5):
+
+| | bear | flat | bull | %/mo | worst day | corr. with P1 | paid back ÷ premium, BTC / ETH |
+|---|---|---|---|---|---|---|---|
+| full sample | +1.1 | −1.6 | −4.2 | −2.02 | −3.1% | −0.47 | 0.53 / 0.59 |
+| 2021-04 on (real implied volatility) | +1.8 | −1.4 | −3.5 | – | – | – | 0.66 / 0.71 |
+
+Deflated Sharpe Ratio at 749 trials: sleeve 0.00, portfolio 0.88.
+
+**Reading:**
+- The prediction was wrong by a factor of about three. I expected +4 to +5 points in bear months; the sleeve made
+  +1.1 to +1.8. It is the first thing tested here that made money in bear months on its own, and it is negatively
+  correlated with P1 (−0.47), but it cost 2%/month to hold.
+- The spreads returned 53–71 cents per dollar of premium. Bear months are 30% of months; in the other 70% the
+  whole premium is lost, and in a bear month a ladder opened over the previous 30 days is struck at many different
+  prices, so only part of it is in the money.
+- The loss cap worked: the sleeve's worst day was −3.1%.
+- **Always-on put spreads are closed.** As registered, I will not propose another bought-option test on this data.
+  Trials charged: 749. P1 stays the live paper variant.
