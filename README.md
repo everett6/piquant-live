@@ -84,6 +84,12 @@ such.
 
   Since 2018 the 1x version made about 22–64% a year, depending on the period.
 
+### R1: the same rule at 1x (forward comparison, added 2026-11-13)
+- BTC+ETH, each sleeve 1x while its close is above its 50-day average, otherwise cash.
+- Backtest 2016–2026: +5.18%/month, drawdown −57%, bear months −4.2 (P1: +8.50, −84%, −8.0).
+- Since 2021-04 it made +1.62%/month against P1's +2.01, with a third less drawdown.
+- Ledger name `R1_btc_eth_1x`. It failed PREREG13's −50% drawdown bar; it is tracked for comparison only.
+
 ### T1 / T2: forward test of the BTC trend filter (PREREG6)
 - **T1:** 1x BTC spot when the last daily close > SMA50, else flat (2 bps fee + 1 bp slippage).
 - **T2:** 2x under the same rule, on futures.

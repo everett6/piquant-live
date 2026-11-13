@@ -45,6 +45,10 @@ var Variants = []Variant{
 	// PREREG16 D2 uptrend pullback (failed: +162 bps/trade, t 1.30): BTC and ETH halves at 1x, tracked forward on
 	// paper at the user's request (2026-11-11), post hoc, for comparison only. SMA is unused (rule is fixed).
 	{Name: "D2_btc_eth_pullback_1x", Lev: 1, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 200, Pair: true, Pullback: true},
+	// PREREG13 R1, the P1 rule at 1x (backtest +5.18%/mo, drawdown -57%, bear months -4.2 against P1's +8.50, -84%,
+	// -8.0). Since 2021-04 it made +1.62%/mo against 2x's +2.01 with a third less drawdown (PREREG26). Tracked forward
+	// on paper (2026-11-13), post hoc, for comparison only.
+	{Name: "R1_btc_eth_1x", Lev: 1, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true},
 	{Name: "PAPER50_btc_eth_0p2x", Lev: 0.2, FeeBps: 120, SlipBps: 5, SMA: 50, Pair: true, DailyStop: 0.02, KillDD: 0.05, Capital: 50},
 }
 
