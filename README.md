@@ -1,10 +1,323 @@
-# PiQuant — Institutional Quantitative Research & Autonomous Paper Engine
+# PiQuant: crypto trading research and paper-trading engine
 
-PiQuant is an institutional-grade, low-latency quantitative research and market simulation platform engineered specifically for **Raspberry Pi 5** (`arm64`, BCM2712 Cortex-A76 @ 2.4 GHz) standalone execution and **Raspberry Pi 5 + 3B** (`armv7`) cooperative dual-node deployment.
+PiQuant is a personal crypto trading system with two parts:
 
-It features zero-allocation microstructure models, live Binance public L2 order book streaming, a 14-day autonomous paper money dry run engine, PREEMPT_RT/core-isolated Linux tuning, and an installable Progressive Web App (PWA).
+- a **Go engine** (`cmd/piquant`, `internal/`), which runs paper trading, records market data and sends alerts on a
+  Raspberry Pi 5 and a Linux desktop;
+- a **Python research lab** (`research/quant_lab`), where every strategy idea is pre-registered, tested once on
+  history and kept or closed by fixed rules.
+
+> **Paper money only.** Nothing here places real trades. None of this is financial advice. The results below are
+> backtests, and they come with large drawdowns.
+
+**Goal and where it stands (2026-11-13):** the owner's target is 7% a month, with drawdowns under 25%.
+- 25 pre-registrations and **746 charged trials** have found one strategy that reaches 7% a month in backtests:
+  P1, the BTC+ETH trend core at 2x. Its maximum drawdown is −84%.
+- One market-neutral strategy passed: C1, funding carry, at about +5–8% a year with a −1% drawdown.
+- Every attempt to cut P1's bear-market losses without cutting more profit has failed.
+- See [Results of every test](#results-of-every-test) and [What the research shows](#what-the-research-shows).
 
 ---
+
+## Contents
+- [What runs where](#what-runs-where)
+- [Strategies in paper trading](#strategies-in-paper-trading)
+- [How the research works](#how-the-research-works)
+- [Results of every test](#results-of-every-test)
+- [What the research shows](#what-the-research-shows)
+- [Scheduled and open tests](#scheduled-and-open-tests)
+- [Data pipeline](#data-pipeline)
+- [Daily operations](#daily-operations)
+- [Repository layout](#repository-layout)
+- [Engine, installation and hardware](#architecture--operational-modes)
+
+---
+
+## What runs where
+
+| Machine | Service | What it does |
+|---|---|---|
+| **Raspberry Pi 5** (wired Ethernet) | `piquant.service` | Paper engine on Coinbase. The medium-frequency entries are off (`--mft-entries=false`, drop-in `mft-off.conf`). The in-process 2x/1x trend ledger writes to `~/piquant-data/trend`. |
+| Pi | `piquant-collect.service` | Records Coinbase/Kraken/Binance.US trades and 1 s top-10 order books into `~/piquant-collect`. Unit copy: `deploy/piquant-collect-pi.service`. |
+| Pi | `wifi-watchdog` | Restarts networking when 1.1.1.1 and 8.8.8.8 both stop answering (`scripts/wifi-watchdog.sh`). |
+| **Desktop** | `piquant-collect` (user unit, `--ticks=false`) | Collects news, candles and the carry ledger, backs up the Pi every night, and mirrors the Pi's tick data to `~/piquant-backups/pi-collect`. |
+| Desktop | `piquant trend` | The daily trend paper ledger (PREREG6 + P1), `~/.local/bin/piquant-trend`. |
+
+Email alerts (venue down, mirror failed, …) need `~/.config/piquant/alert.env` on each machine. The owner fills this
+in; it is never committed.
+
+---
+
+## Strategies in paper trading
+
+All are paper only. Each one passed its pre-registered test, or was added at the owner's request and is labelled as
+such.
+
+### P1: BTC+ETH trend core at 2x (the main strategy)
+- **Rule:** at each daily close (00:00 UTC), for BTC and for ETH separately:
+  - if close > 50-day simple moving average, hold **2x long** over the next day;
+  - otherwise hold **cash**.
+- Two equal sleeves. ETH's half is cash before ETH had data.
+- **Costs modelled:** US futures, with 6 bps taker + 1 bp slippage per unit of turnover and funding 0.1 bp/hour. The
+  stress test uses 1 bp/hour.
+- **Source:** PREREG5 picked SMA50 from a grid of 20/50/100/200 days × 1/1.5/2x. PREREG11 tested and passed the
+  BTC+ETH pair.
+
+| Period | %/month (geometric) |
+|---|---|
+| 2016–17 | +27.99 |
+| 2018–20 | +6.24 |
+| 2021–2022-12 | +0.77 |
+| 2022-12 → 2025-06 (discovery) | +6.25 |
+| 2025-07 → now (A) | +3.32 |
+| **Full 2016–2026** | **+8.50** |
+
+- **Risk:** max drawdown −84%, worst month −49%, 43% of months losing.
+  - Bear months (BTC month < −5%) average **−8.0%**, flat months −3.9% and bull months +38.2%.
+  - At stress costs it makes only +1.19%/month.
+- **Lower-leverage versions of the same rule (PREREG13):**
+
+  | Version | %/month | Max drawdown |
+  |---|---|---|
+  | 1x (R1) | +5.18 (about 83%/year) | −57% |
+  | 1.5x (R2) | +7.09 | −73% |
+
+  Since 2018 the 1x version made about 22–64% a year, depending on the period.
+
+### T1 / T2: forward test of the BTC trend filter (PREREG6)
+- **T1:** 1x BTC spot when the last daily close > SMA50, else flat (2 bps fee + 1 bp slippage).
+- **T2:** 2x under the same rule, on futures.
+- **Verdict:** at 12 complete months (2027-11-30). T2 is stopped early as a FAIL if it falls 50% from its peak.
+
+### PAPER50: $50 profile (owner request, not a pre-registered strategy)
+- The P1 rule on spot at 20% of NAV in total, with a 1.2% retail fee, a 2% daily loss stop and a 5% drawdown kill.
+- **Historical diagnostic:** the kill switch fired from every one of 38 start dates, after a median of 111 days. The
+  1.2% fee costs more than the trend earns at 0.2x.
+
+### C1: funding-rate carry (PREREG19, passed)
+- **Rule:** long spot and short the perpetual future on BTC and ETH, always on, collecting the funding rate.
+
+| Base %/yr | Stress %/yr | Max DD (stress) | 2020 | 2021 | 2022 | 2023–24 | 2025–Oct 2026 |
+|---|---|---|---|---|---|---|---|
+| +8.15 | +5.06 | −1.0% | +9.8% | +16.3% | −0.6% | +8.7% | +1.6% |
+
+- **Not modelled:** basis swings and exchange failure (for example FTX, 2022).
+- **Command:** `piquant carry`.
+
+### Engine short-horizon core (live on the Pi, entries off)
+- The microstructure engine (order-book signals, VPIN, inventory skew) measured **zero gross edge**. Its trades lose
+  about their cost, roughly 14 bps a round trip (rounds 1–4).
+- Its medium-frequency entries are switched off, and an expectancy breaker (on by default, 50 trades) stops new entries
+  once the run's own trades show negative expectancy.
+
+---
+
+## How the research works
+
+Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
+
+1. **Pre-register first.** Each test is written as `PREREGnn.md` (rules, data, pass rule and a prediction),
+   committed and pushed **before** any code touches real data.
+2. **Run once.** The real run happens a single time, after synthetic tests pass. Failures are recorded with their
+   numbers.
+3. **No variants of a failed test.** A failed idea is closed. Re-running it with different parameters is not allowed.
+4. **Count every trial.** A running trial counter (now **746**) is used for multiple-testing corrections.
+5. **Never hand-edit results.** `results/roundNN.json` files are written only by the run scripts.
+
+**Standard daily-strategy setup** (PREREG7/11–16/23–25):
+- **Data:** Coinbase BTC-USD/ETH-USD 1-minute candles, resampled to daily.
+- **Timing:** decide at the close, hold over the next day (`lab.position_returns`).
+- **Periods:**
+
+  | Code | Dates |
+  |---|---|
+  | D | 2016–17 |
+  | C | 2018–20 |
+  | B | 2021-01 → 2022-12-16 |
+  | discovery | 2022-12-17 → 2025-06 |
+  | A | 2025-07 → now |
+
+- **Bear/flat/bull months:** BTC buy-and-hold month < −5% / between / > +5%.
+- **Usual pass rule for P1 overlays** (all five must hold):
+  1. bear months improve by at least 3 points over P1;
+  2. full return ≥ 7%/month;
+  3. max drawdown no worse than P1's;
+  4. period A > 0;
+  5. stress return > 0.
+
+**Python environments:**
+
+| Where | Python | Notes |
+|---|---|---|
+| Desktop | `~/miniconda3/envs/nerfstudio/bin/python` | Has pyarrow, which the parquet candle cache needs. |
+| Desktop | system `python3` | Runs the synthetic tests (`python3 -m pytest -q test_strategiesNN.py`). |
+| Pi | `~/piquant-research-env` | numpy, pandas, pytest. Run heavy jobs with `nice -n 19 ionice -c3`. |
+
+---
+
+## Results of every test
+
+| # | Idea | Result | Key numbers |
+|---|---|---|---|
+| 1 | Live engine core, 1h trend, vol-managed BTC, 4 "quantum-inspired" methods (10 families) | **FAIL** (all) | No holdout pass in 600 trials. The engine core has zero gross edge, and 1h trend died in the 2025–26 bear market. |
+| 2 | New algorithms with an untouched holdout | **FAIL** | – |
+| 3 | Wider take-profit/stop-loss brackets (S7, S8) | **FAIL** | Confirmed that with random entries the win rate = SL/(TP+SL) and the gross edge is 0 (24/24 cells). |
+| 4 | ≥55% win-rate geometry; LFM3 news model | Win rate **reached** (55.7–62.9%) but **loses money**; LFM3 **scrapped** | Every geometry loses about its 14.4 bps cost. No news output predicts returns (all \|ρ\| ≤ 0.03). |
+| 5 | ≥60% of months beating buy-and-hold (SMA trend grid) | **FAIL** the 60% rule | 56/52/64/62% of months (pooled 59.6%). Beat buy-and-hold total return on all holdouts. SMA50 2x chosen. |
+| 6 | Forward paper test of the trend filter (T1/T2) | **Running** | Verdict 2027-11-30. |
+| 7 | Long/short trend (short in downtrends) | **FAIL** | Bear months −12.7 → −6.6, but flat months −10 to −14, DD −87 to −93%. |
+| 8 | Medium-frequency maker entries | **FAIL** | Negative net in every cell. |
+| 9 | Bear-market minutes-horizon shorts | **FAIL** | −11.5 bps net per trade (t −65). |
+| 10 | Time-of-day effects | **FAIL** | Discovery picks lost −1.5 to −14 bps on every holdout. |
+| 11 | **BTC+ETH 2x trend (P1)**; vol targeting (P2) | **P1 PASS**; P2 fail | P1 +8.50%/mo, DD −84%. P2 +8.75%/mo, DD −88%. |
+| 12 | Drawdown brake (Q1); add SOL (Q2) | **FAIL** | Q1 DD −70% but only +5.88%/mo. Q2 DD −81%. |
+| 13 | Lower leverage (1x, 1.5x), fast exit, trailing stop | **FAIL** (DD ≤ 50% rule) | 1x +5.18%/mo, DD −57%. 1.5x +7.09, −73%. Fast exit +8.58, −76%. Trailing stop +6.29, −82%. |
+| 14 | Stop-loss + Grossman–Zhou sizing + ensemble | **FAIL** | Stops gap through: S1 DD −97%. GZ cut DD to −56% but return ≈ 0. |
+| 15 | #14 re-run with one bad print removed | **FAIL** | Closed. |
+| 16 | Buy the dip at the daily scale | **FAIL** | +200 bps/trade but t 1.34, and 3 of 5 periods lost. |
+| 17 | Maker entries with pre-fill defense, on tick data | **Scheduled** | Runs once on or after 2026-12-09 on the recorded ticks. |
+| 18 | Cross-venue lead-lag and trade-flow momentum, on tick data | **Scheduled** | Same date. |
+| 19 | **Funding carry (C1)**; high-funding-only (C2) | **C1 PASS**; C2 fail | C1 +5.06%/yr at stress, DD −1%. |
+| 20 | Beta-neutral BTC–ETH book | **FAIL** | Sharpe 0.42 (stress −2.36), DD −80%. |
+| 21 | Cascade short + VPIN filter, 531 M real Binance ticks (2024) | **FAIL** | 10 holdout trades, −0.8 bps. Passive fills lose about 1 bp to adverse selection. |
+| 22 | #18's rules on 47 Tardis.dev free days, 2023–2026 | **FAIL** (all 3) | Coinbase leads Kraken by 4–5 bps within 30 s; nothing leads Coinbase. Kraken's 80 bps round trip kills it (−78 bps net). |
+| 23 | Volatility-expansion exit (10/100-day vol > 1.5) | **FAIL** | Bear months got **worse** (−10.1 vs −8.0). The exit fires after the drop and misses rebounds. |
+| – | Partial exit (halve on the #23 gate) | **Not run** | A variant of a failed test. Its result is about the average of P1 and #23, so bear months ≈ −9.0. |
+| 24 | Multi-market trend overlay (SPY/TLT/GLD/UUP, the trend-fund "crisis alpha" method) | **FAIL** | The overlay earned ≈ 0 over 2016–26 (Sharpe 0.06). The idle-capital version made bear months −12.9. |
+| 25 | Long BTC / short a 14-altcoin basket | **FAIL** | The pair lost −2.5%/mo in bear months. It earned only in 2022–23. Worst day −83.6% (LTC squeeze, 2017-03-30). |
+
+Full rules, numbers and readings are in `research/quant_lab/PREREGnn.md`; machine output is in
+`research/quant_lab/results/`.
+
+---
+
+## What the research shows
+
+1. **Short-horizon direction has no edge at retail costs.** Minutes-to-hours signals all measured gross ≈ 0:
+   order flow, VPIN, time of day, news, brackets and lead-lag. Fees and spread decide the result.
+2. **Daily trend works but is fragile.** P1's return comes from leverage on a trend filter. Drawdown grows with
+   leverage: −57% (1x), −73% (1.5x), −84% (2x).
+3. **Bear markets: nothing tested makes money in them.** These were all tested and failed:
+   - shorting;
+   - volatility exits, full and partial;
+   - stops;
+   - drawdown brakes;
+   - trend in other markets;
+   - BTC vs altcoins.
+
+   The large drops start before any signal reacts, and the defences cost more in rebounds and sideways months than
+   they save.
+4. **The math of the goal.** 7%/month (about 125%/year) with drawdowns ≤ 25% needs a Sharpe ratio of about 4. P1
+   measures 1.5. At Sharpe 1.5, a 25% drawdown limit supports about 1.3%/month (`docs/PHASE1_TAIL_RISK_2026-11.md`).
+   80%/year (5%/month) is roughly P1 at 1x, with a −57% drawdown in history.
+5. **What professional funds do differently:**
+   - they trade 50–150 markets, not 4;
+   - they get maker rebates and very low fees;
+   - they run at 10–15% volatility;
+   - they buy crash insurance (put options), which has not been tested here yet.
+
+---
+
+## Scheduled and open tests
+
+| When | What |
+|---|---|
+| On or after **2026-12-09** | PREREG17 and PREREG18 run once, unchanged, on the Pi, using the recorded Coinbase/Kraken ticks from 2026-11-12 onward. `KEEP_MONTHS` blocks archiving those months. |
+| **2027-11-30** | PREREG6 (T1/T2) forward verdict. |
+| Ongoing | P1, PAPER50 and C1 paper ledgers. |
+| Open idea, not pre-registered | Crash insurance: monthly protective puts (for example on IBIT), priced from Deribit's DVOL index (free, 2021 on). |
+| Open idea, not pre-registered | A combined trend + carry portfolio. |
+
+Notes on scheduled work live in `research/NEXT_TESTS.md`.
+
+---
+
+## Data pipeline
+
+| Data | Where | Notes |
+|---|---|---|
+| Coinbase 1-minute candles (BTC, ETH) | `~/piquant-collect/candles/<product>/` → parquet cache `~/piquant-collect/train/` | Used by every daily test (`lab.load_candles`). |
+| Ticks + 1 s top-10 books (Coinbase, Kraken, Binance.US) | **Pi** `~/piquant-collect/ticks/<feed>/YYYY-MM-DD.jsonl.gz`, `book/<feed>/…` | Recorder moved from the desktop to the Pi on 2026-11-13 00:04 UTC. Multi-member gzip, flushed every 60 s. Data from 11-13 was merged by `scripts/merge_desktop_ticks.py`. |
+| Clock checks, recorder status | Pi `~/piquant-collect/clock_offsets.jsonl`, `ticks_status.json` | Trade-ID gaps and reconnects are read before any tick test. |
+| Second copy of the Pi data | Desktop `~/piquant-backups/pi-collect` | Daily rsync after 03:00, no delete. Alert "Pi tick-data mirror failed" on errors. |
+| Monthly archive | Pi `~/piquant-collect/archive/YYYY-MM.tar.zst` | `scripts/collect_archive.sh pack/restore/drop`. zstd -19 --long=27 is about 25% smaller than daily gzip. md5 is checked before the originals are deleted. |
+| Binance 2024 BTCUSDT trades | `~/piquant-collect/pqbin/spot/` (531 M ticks, about 21 GB) | `piquant import-ticks`. Used by PREREG21. |
+| Tardis.dev free first-of-month days | Streamed, not kept | PREREG22. |
+| ETF prices + T-bill rate | `~/piquant-data/macro/` | Yahoo adjusted closes and FRED DTB3. PREREG24. |
+| Altcoin daily closes (14 coins) | `~/piquant-data/alts/` | Coinbase public candles. PREREG25. |
+
+`data/historical/*_daily_full.csv` holds daily BTC/ETH history for the Go backtester. Files in
+`data/historical/ticks/*.pqbin` are **synthetic** and must never be used as market data.
+
+---
+
+## Daily operations
+
+**Check the whole system on one screen** (Pi services, recorder age, venues, book gaps, clock, alert.env and the
+desktop mirror):
+
+```bash
+scripts/pipeline_status.sh
+```
+
+**Sync committed code to the Pi before any research run there.** It refuses if research/ or scripts/ have
+uncommitted changes:
+
+```bash
+scripts/sync_pi.sh
+```
+
+Both scripts take `PI=everett@<ip>` if `raspberrypi.local` doesn't resolve.
+
+**Trend paper ledger:**
+
+```bash
+piquant trend --dir ~/piquant-data/trend
+```
+
+**Carry paper ledger:**
+
+```bash
+piquant carry
+```
+
+**Pack a finished month of tick data:**
+
+```bash
+scripts/collect_archive.sh pack 2026-10
+```
+
+**Run a lab test's synthetic checks** (desktop):
+
+```bash
+cd research/quant_lab && python3 -m pytest -q test_strategies25.py
+```
+
+Other CLI commands: `setup`, `doctor`, `dashboard`, `monitor`, `dry-run`, `backtest-history`, `backtest-ticks`,
+`bench`, `secrets`, `tax`, `import-ticks`, `alert-test`, `collect`, `news` (see `piquant help`).
+
+---
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `cmd/piquant/` | The CLI: paper engine, collector, trend/carry ledgers, backtests, alerts, tax. |
+| `internal/` | Engine packages, among them `collect` (recorder, backups, mirror), `trend`, `carry`, `paper`, `orderbook`, `models`, `alert` and `secrets`. |
+| `research/quant_lab/` | `PREREGnn.md` (pre-registrations with results), `strategiesNN.py` + `test_strategiesNN.py`, `run_roundNN.py`, `fetch_roundNN.py`, `lab.py` (data, costs, simulator), `results/`. |
+| `research/NEXT_TESTS.md` | Scheduled tests and operating notes. |
+| `research/AFK_REPORT_*.md` | Reports from unattended work blocks. |
+| `scripts/` | `pipeline_status.sh`, `sync_pi.sh`, `collect_archive.sh`, `merge_desktop_ticks.py`, `wifi-watchdog.sh`, installers, kernel tuning. |
+| `deploy/` | systemd unit copies. |
+| `docs/` | Deployment, dry run, kernel tuning, remote access, strategy notes (`STRATEGIES.md`, `TRADING_EXPLAINED.md`), tail-risk and tranche analyses. |
+
+---
+
+## Engine, installation and hardware
+
+The sections below describe the Go engine, its installation and its hardware tuning. The engine's models (lead-lag,
+VPIN, inventory decay, Kyle's lambda, adaptive ensemble, and so on) are components. Whether any of them makes money is
+decided only by the tests above, and the short-horizon ones measured no edge at retail costs.
 
 ## Architecture & Operational Modes
 
