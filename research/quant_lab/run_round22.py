@@ -39,12 +39,27 @@ def url(venue: str, kind: str, coin: str, day: str) -> str:
     return f"{BASE}/{venue}/{kind}/{y}/{m}/{d}/{symbol(venue, coin, day)}.csv.gz"
 
 
-def fetch_quotes(venue: str, coin: str, day: str) -> tuple:
-    df = pd.read_csv(url(venue, "quotes", coin, day), compression="gzip",
-                     usecols=["local_timestamp", "bid_price", "ask_price"])
+def fetch_quotes(venue: str, coin: str, day: str, sym: str | None = None) -> tuple:
+    u = url(venue, "quotes", coin, day)
+    if sym:
+        u = u.rsplit("/", 1)[0] + f"/{sym}.csv.gz"
+    df = pd.read_csv(u, compression="gzip", usecols=["local_timestamp", "bid_price", "ask_price"])
+    if df.empty:
+        raise ValueError("empty quotes file")
     t = (df["local_timestamp"].to_numpy(np.int64) // 1000)
     o = np.argsort(t, kind="stable")
     return t[o], df["bid_price"].to_numpy(float)[o], df["ask_price"].to_numpy(float)[o]
+
+
+def fetch_binance_us(coin: str, day: str) -> dict:
+    """Binance.US feeds only the lead matrix. Its USD pairs are empty from mid-2023 (it lost USD banking), so
+    fall back to the USDT pair; if both fail, the day runs without Binance.US (amendment, PREREG22)."""
+    for sym in (f"{coin}USD", f"{coin}USDT"):
+        try:
+            return {"binance-us": fetch_quotes("binance-us", coin, day, sym)}
+        except Exception as e:  # noqa: BLE001 - empty or missing file
+            print(day, coin, "binance-us", sym, "unavailable:", repr(e)[:80], flush=True)
+    return {}
 
 
 def fetch_trades(coin: str, day: str) -> pd.DataFrame:
@@ -81,7 +96,8 @@ def one(args: tuple) -> tuple:
             q = {v: synthetic(v, coin, day, seed) for v in T.VENUES}
             tr = synthetic_trades(day, seed)
         else:
-            q = {v: fetch_quotes(v, coin, day) for v in T.VENUES}
+            q = {v: fetch_quotes(v, coin, day) for v in ("coinbase", "kraken")}
+            q.update(fetch_binance_us(coin, day))
             tr = fetch_trades(coin, day)
         res = T.run_day(day, coin, q, tr)
         print(day, coin, json.dumps(res["data"]), flush=True)

@@ -71,3 +71,12 @@ A rule passes only if all of these hold:
 Same as PREREG18. L1: a real lead (Kraken follows Coinbase) but strongly negative net after 80 bps of fees. L2:
 a weaker lead, net about −10 to −15 bps. F1: net about −12 bps. I expect none to pass. In the lead matrix,
 Coinbase leads both other venues.
+
+## Amendment (2026-11-13 00:30 UTC, before any result existed)
+- **First attempt stopped for a code bug.** It processed 14 day-coin pairs (2023-01 to 2023-07 BTC/ETH), then every
+  later day failed: Binance.US's `BTCUSD`/`ETHUSD` quote files are empty from 2023-08 (Binance.US lost USD
+  banking). The code dropped the whole day when any venue's file was empty. It was stopped before writing any
+  result or verdict; only data-count lines were printed. No rule, threshold, cost or split changed.
+- **Fix:** Binance.US (lead matrix only) uses the `USDT` pair when the `USD` pair is empty. If both fail, the day
+  runs without Binance.US. Coinbase and Kraken are still required. The run then starts again from the first day.
+- The run moved from Kaggle (no internet in its notebooks) to the Pi.

@@ -73,3 +73,14 @@ def test_pool_leads_weights_by_count():
          "30s": {"n": 1, "mean_bps": 3.0}}
     p = T.pool_leads([a, b])
     assert p["signals"] == 3 and p["1s"]["mean_bps"] == 2.0 and p["5s"]["mean_bps"] == 3.0
+
+
+def test_run_day_without_binance_us():
+    t, mid = _walk(0)
+    q = {"coinbase": (t, mid * (1 - 1e-5), mid * (1 + 1e-5)),
+         "kraken": (t + 2000, mid * (1 - 1e-5), mid * (1 + 1e-5))}
+    tr = T.clean_trades(pd.DataFrame({"t": [D0 + 1000, D0 + 2000], "id": [1, 2], "side": ["buy", "sell"],
+                                      "amount": [1.0, 1.0]}))
+    r = T.run_day(DAY, "BTC", q, tr)
+    assert set(r["leads"]) == {"coinbase->kraken", "kraken->coinbase"}
+    assert r["trades"][("L1", "base")]
