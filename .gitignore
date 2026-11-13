@@ -29,3 +29,4 @@ piquant-data/
 graphify-out/
 antigravity-add-model/
 
+__pycache__/

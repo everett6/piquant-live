@@ -86,3 +86,60 @@ func TestPushLedgersRefusesPublicRepo(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestMirrorOncePerDayRetriesAndAlerts(t *testing.T) {
+	dest := t.TempDir()
+	runs, alerts := 0, 0
+	fail := true
+	b := &backupRunner{
+		cfg: BackupConfig{Hour: 3, MirrorRemote: "piquant-collect", MirrorDest: filepath.Join(dest, "m"),
+			Alert: func(key, _, _ string) {
+				if key == "mirror" {
+					alerts++
+				}
+			},
+			mirrorCommand: func(ctx context.Context) *exec.Cmd {
+				runs++
+				if fail {
+					return exec.CommandContext(ctx, "sh", "-c", "echo down >&2; exit 12")
+				}
+				return exec.CommandContext(ctx, "true")
+			}},
+		logf: func(string, ...any) {},
+	}
+	now := time.Date(2026, 11, 13, 2, 0, 0, 0, time.Local)
+	b.mirrorTick(context.Background(), now) // before the hour
+	if runs != 0 {
+		t.Fatal("ran before the backup hour")
+	}
+	now = now.Add(2 * time.Hour)
+	b.mirrorTick(context.Background(), now)
+	b.mirrorTick(context.Background(), now.Add(10*time.Minute)) // too soon to retry
+	if runs != 1 || alerts != 1 {
+		t.Fatalf("runs %d alerts %d after a failure", runs, alerts)
+	}
+	fail = false
+	b.mirrorTick(context.Background(), now.Add(31*time.Minute))
+	b.mirrorTick(context.Background(), now.Add(3*time.Hour)) // done for today
+	if runs != 2 {
+		t.Fatalf("runs %d, want 2", runs)
+	}
+	b.mirrorTick(context.Background(), now.Add(24*time.Hour))
+	if runs != 3 {
+		t.Fatalf("runs %d, want 3 on the next day", runs)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "m")); err != nil {
+		t.Fatal("mirror dest not created")
+	}
+}
+
+func TestMirrorCommandArgs(t *testing.T) {
+	b := &backupRunner{cfg: BackupConfig{Host: "pi", MirrorRemote: "piquant-collect",
+		MirrorPaths: []string{"ticks", "book"}, MirrorDest: "/x"}}
+	got := strings.Join(b.mirrorCmd(context.Background()).Args, " ")
+	if !strings.Contains(got, "pi:piquant-collect/ticks pi:piquant-collect/book /x/") ||
+		!strings.Contains(got, "BatchMode=yes") || !strings.Contains(got, "--ignore-missing-args") ||
+		strings.Contains(got, "--delete") {
+		t.Fatalf("args %q", got)
+	}
+}
