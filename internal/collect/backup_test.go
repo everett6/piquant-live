@@ -138,7 +138,8 @@ func TestMirrorCommandArgs(t *testing.T) {
 		MirrorPaths: []string{"ticks", "book"}, MirrorDest: "/x"}}
 	got := strings.Join(b.mirrorCmd(context.Background()).Args, " ")
 	if !strings.Contains(got, "pi:piquant-collect/ticks pi:piquant-collect/book /x/") ||
-		!strings.Contains(got, "BatchMode=yes") || strings.Contains(got, "--delete") {
+		!strings.Contains(got, "BatchMode=yes") || !strings.Contains(got, "--ignore-missing-args") ||
+		strings.Contains(got, "--delete") {
 		t.Fatalf("args %q", got)
 	}
 }

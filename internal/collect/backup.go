@@ -133,7 +133,7 @@ func (b *backupRunner) mirrorCmd(ctx context.Context) *exec.Cmd {
 	if b.cfg.mirrorCommand != nil {
 		return b.cfg.mirrorCommand(ctx)
 	}
-	args := []string{"-a", "--partial", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=15"}
+	args := []string{"-a", "--partial", "--ignore-missing-args", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=15"}
 	for _, p := range b.cfg.MirrorPaths {
 		args = append(args, b.cfg.Host+":"+filepath.Join(b.cfg.MirrorRemote, p))
 	}
