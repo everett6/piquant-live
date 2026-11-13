@@ -24,6 +24,25 @@
 - **Rollback:** /usr/local/bin/piquant.prev-b5fe076.
 - **Re-enable MFT:** remove the drop-in, then run `daemon-reload` and restart.
 
+## Recorder moved to the Pi (2026-11-13 00:04 UTC)
+- **Where:** the Pi records ticks and top-10 books (`piquant-collect.service`, system unit, copy in
+  `deploy/piquant-collect-pi.service`) into `~/piquant-collect` on the Pi. The Pi is on wired Ethernet (eth0).
+- **Desktop:** still runs its collector for news, candles, the carry ledger and the nightly Pi backup, with
+  `--ticks=false` (drop-in `~/.config/systemd/user/piquant-collect.service.d/ticks-off.conf`; delete it and
+  restart to record ticks there again).
+- **History moved:** 2026-11-11 and -12 copied unchanged (36 files, md5 identical). 2026-11-13 merged in time order
+  by `scripts/merge_desktop_ticks.py` (trades deduplicated by ID). The desktop copy stays in
+  `~/piquant-collect-desktop-import` on the Pi and in the desktop's `~/piquant-collect`.
+- **Research runs on the Pi:** repo copy in `~/PiQuant/piquant-live` (rsync from the desktop, no .git), Python env
+  `~/piquant-research-env` (numpy, pandas, pytest). PREREG17/18 read `~/piquant-collect` there unchanged. Run heavy
+  jobs with `nice -n 19 ionice -c3` so the paper bot keeps priority.
+- **Alerts:** the Pi recorder sends the "venue down" emails now, but only once `~/.config/piquant/alert.env` exists
+  on the Pi as well.
+- **Monthly archive:** `scripts/collect_archive.sh pack YYYY-MM` packs a finished month into
+  `archive/YYYY-MM.tar.zst` (zstd -19 --long; ~25% smaller than the daily gzip files, checked before the
+  originals are deleted). `restore` unpacks it for a test and `drop` removes the unpacked copy again.
+  `~/piquant-collect/KEEP_MONTHS` (2026-11, 2026-12) blocks packing months that PREREG17/18 still read.
+
 ## Paper $50 profile (added 2026-11-11, user request; not a pre-registered strategy)
 - **Ledger variant:** `PAPER50_btc_eth_0p2x`. It uses the P1 rule on spot at 20% of NAV in total ($5 per
   sleeve).

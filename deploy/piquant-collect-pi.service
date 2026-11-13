@@ -1,0 +1,13 @@
+[Unit]
+Description=PiQuant tick + top-10 book recorder (Pi copy, wired Ethernet; desktop recorder keeps running)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=everett
+ExecStart=/usr/local/bin/piquant collect --dir /home/everett/piquant-collect --symbols BTCUSDT,ETHUSDT --no-backfill --gdelt-days 0 --min-free-gb 20
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
