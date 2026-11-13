@@ -83,3 +83,34 @@ Once, after this file is pushed and the synthetic tests pass.
 - I expect a FAIL on check 1.
 - Check 5 almost certainly fails as well: stress funding of 1 bp/h on 2x gross is 1 × 24 × 30 × 2 = 14% a month,
   more than any plausible edge. The stress profile was built for books that are flat half the time.
+
+## Result (run once, 2026-11-13): FAIL on all five checks. The ranking book lost money in bear months.
+
+Book active from 2019-04-29. Coins per leg: 1–2 (2019–20), 3 (2021), 4 (2022), 5 (2023 on).
+
+| | full %/mo | max DD | Sharpe | bear | flat | bull | 2022 | D | C | B | discovery | A | stress |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| X1 P1 + momentum book | +6.59 | −92% | 1.24 | −10.0 | −1.4 | +35.7 | −9.85 | +27.99 | +6.52 | −2.83 | +5.38 | −4.36 | −9.30 |
+| P1 (comparator, reproduced exactly) | +8.50 | −84% | 1.49 | −8.0 | −3.9 | +38.2 | −9.57 | +27.99 | +6.24 | +0.77 | +6.25 | +3.32 | +1.19 |
+
+**The book alone:**
+
+| %/mo | Sharpe | max DD | worst day | worst month | bear / flat / bull | corr. with P1 | long leg bear / bull | short leg bear / bull |
+|---|---|---|---|---|---|---|---|---|
+| −1.62 | −0.17 | −92% | −30.9% (2021-02-13) | −50% | −1.9 / +2.2 / −1.0 | −0.07 | −11.8 / +16.3 | +8.7 / −12.9 |
+
+By year: 2019 −40%, 2020 +101%, 2021 −58%, 2022 +1%, 2023 +48%, 2024 −44%, 2025 −19%, 2026 −67%. Deflated Sharpe
+Ratio at 751 trials: 0.00. Costs averaged 6.4 bps a day at base.
+
+**Reading:**
+- The prediction was right on the verdict and a little too kind on the size: I expected the book alone at 0 to
+  +1%/month; it made −1.6.
+- In bear months the shorts made +8.7 and the longs lost −11.8. Recent winners fell harder than recent losers when
+  the market turned, so the book was not neutral where it mattered.
+- It is uncorrelated with P1 (−0.07) but has nothing to add, and its years swing between +101% and −67%. With 1–5
+  coins per leg, one coin decides the week; the worst day (−30.9%) was a squeeze of a shorted coin.
+- **Cross-sectional momentum on this universe is closed.** Trials charged: 751. P1 stays the live paper variant.
+
+**Bookkeeping, not a test:** Treasury-bill interest on the sleeves P1 leaves in cash (47% of the time on average)
+would have added +0.12%/month in bear months, +0.14 in flat and +0.05 in bull over 2016–2026. It is real and free of
+market risk, but it is a tenth of a point.

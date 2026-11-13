@@ -11,7 +11,7 @@ PiQuant is a personal crypto trading system with two parts:
 > backtests, and they come with large drawdowns.
 
 **Goal and where it stands (2026-11-13):** the owner's target is 7% a month, with drawdowns under 25%.
-- 28 pre-registrations and **750 charged trials** have found one strategy that reaches 7% a month in backtests:
+- 29 pre-registrations and **751 charged trials** have found one strategy that reaches 7% a month in backtests:
   P1, the BTC+ETH trend core at 2x. Its maximum drawdown is −84%.
 - One market-neutral strategy passed: C1, funding carry, at about +5–8% a year with a −1% drawdown.
 - Every attempt to cut P1's bear-market losses without cutting more profit has failed.
@@ -121,7 +121,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 2. **Run once.** The real run happens a single time, after synthetic tests pass. Failures are recorded with their
    numbers.
 3. **No variants of a failed test.** A failed idea is closed. Re-running it with different parameters is not allowed.
-4. **Count every trial.** A running trial counter (now **750**) is used for multiple-testing corrections.
+4. **Count every trial.** A running trial counter (now **751**) is used for multiple-testing corrections.
 5. **Never hand-edit results.** `results/roundNN.json` files are written only by the run scripts.
 
 **Standard daily-strategy setup** (PREREG7/11–16/23–25):
@@ -188,6 +188,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 | 26 | Convex leverage: P1 plus bought 30-day at-the-money puts priced from Deribit DVOL (2021-04 on) | **FAIL** | K1 +0.18%/mo, DD −83% against 1x +1.62, −57%. The puts paid back 76–81% of their premium. The drawdown is whipsaw bleed, not single-day gaps. |
 | 27 | Always-on ladder of 30-day put spreads beside P1 (capped loss, no short) | **FAIL** | Sleeve alone +1.1 in bear months but −2.0%/mo overall. Portfolio +6.80%/mo, bear −6.6 (needed −5.0). Spreads paid back 53–71% of premium. |
 | 28 | Sold 30-day iron butterflies, loss capped at 25% (the seller's side of #26–27) | **FAIL** | Sleeve −1.59%/mo, paid out 109–118% of the credit. Correlation with P1 −0.70, but no premium to harvest. Options closed, bought and sold. |
+| 29 | Cross-sectional momentum: 16 coins, weekly, long the strongest third and short the weakest | **FAIL** (all 5) | Book alone −1.62%/mo, bear −1.9, DD −92%, worst day −30.9%. In bear months the longs lost more (−11.8) than the shorts made (+8.7). |
 
 Full rules, numbers and readings are in `research/quant_lab/PREREGnn.md`; machine output is in
 `research/quant_lab/results/`.
