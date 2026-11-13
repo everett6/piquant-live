@@ -82,3 +82,12 @@
   Outside the outage there are 5–9 short gaps per product per day (1–93 IDs each); each excludes a minute or two.
 - **About 6 of the first day's 24 hours are excluded** (roughly 1% of the 27-day window). This does not threaten
   the 200-trade minimums unless outages recur.
+
+## Partial volatility exit (halve 2x→1x on a PREREG23 gate): not run (2026-11-13)
+- The owner picked "partial exit, not all" after PREREG23 failed. It was not pre-registered or run, for two reasons:
+  1. **It is a variant of a failed test** (same 10/100 > 1.5 gate, different size), which the rules forbid.
+  2. **The result is already known from arithmetic.** Daily returns are linear in the position
+     (`lab.position_returns`), and halving on the gate is exactly the average of the P1 and V1 positions. So its daily
+     return equals the average of theirs, plus at most a little saved cost. Bear months would be about
+     (−8.0 + −10.1) / 2 ≈ −9.0%/month: worse than P1, far from the −5.0 needed. It cannot pass.
+- No trial charged (742). Any partial de-risk built on the same volatility-expansion gate is closed with it.
