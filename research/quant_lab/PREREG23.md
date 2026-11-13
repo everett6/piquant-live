@@ -59,3 +59,26 @@ Once, on the desktop or the Pi, after synthetic tests pass.
 - V2 reacts only to down moves, so it keeps more of the bull months. Volatility usually jumps after the first big
   drop, not before, so I expect a bear-month gain of about 1–2 points: short of check 1.
 - I expect both to fail, V2 closer than V1.
+
+## Result (run once, 2026-11-13): both FAIL check 1 (bad markets got worse, not better)
+
+| | full %/mo | max DD | bear | flat | bull | 2022 | D | C | B | discovery | A | stress | gate-flat days BTC/ETH |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| V1 total-vol exit | +8.01 | −83% | **−10.1** | −1.0 | +35.6 | −8.94 | +26.48 | +6.23 | +0.67 | +5.08 | +3.71 | +1.47 | 225 / 156 |
+| V2 downside-vol exit | +7.98 | −84% | **−10.0** | −2.3 | +35.6 | −9.57 | +24.27 | +5.69 | +2.74 | +5.52 | +3.57 | +1.37 | 190 / 149 |
+| P1 (comparator, reproduced exactly) | +8.50 | −84% | −8.0 | −3.9 | +38.2 | −9.57 | +27.99 | +6.24 | +0.77 | +6.25 | +3.32 | +1.19 | – |
+
+Checks 2–5 pass for both (≥ 7%/month, drawdown no worse than P1, A > 0, stress > 0). Check 1 fails: bear months
+are about 2 points **worse** than P1 instead of 3 points better.
+
+**Reading:**
+- The prediction was wrong in direction. I expected a small bear-month gain; the gate made bear months worse.
+- Where it helped: flat months (−3.9 → −1.0 for V1), period A (+3.32 → +3.71) and stress costs. Where it hurt:
+  bear and bull months, discovery, and the full return (−0.5%/month).
+- A likely cause, not tested: the gate fires after a big move, so inside bear months it mostly cuts the sharp
+  rebounds that P1 catches, while the large drops that start a bear month happen before volatility has risen.
+- The drawdown did not move (−83/−84%). Volatility-expansion exits are closed for the daily core.
+- **Process note:** the runner's first run wrote its output over `results/round13.json` (a copied path not
+  changed). It was moved unchanged to `results/round23.json` and round13.json restored from git before this
+  commit. The run itself happened once.
+- Trials charged: 742. P1 stays the live paper variant.
