@@ -11,7 +11,7 @@ PiQuant is a personal crypto trading system with two parts:
 > backtests, and they come with large drawdowns.
 
 **Goal and where it stands (2026-11-13):** the owner's target is 7% a month, with drawdowns under 25%.
-- 25 pre-registrations and **746 charged trials** have found one strategy that reaches 7% a month in backtests:
+- 26 pre-registrations and **748 charged trials** have found one strategy that reaches 7% a month in backtests:
   P1, the BTC+ETH trend core at 2x. Its maximum drawdown is −84%.
 - One market-neutral strategy passed: C1, funding carry, at about +5–8% a year with a −1% drawdown.
 - Every attempt to cut P1's bear-market losses without cutting more profit has failed.
@@ -121,7 +121,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 2. **Run once.** The real run happens a single time, after synthetic tests pass. Failures are recorded with their
    numbers.
 3. **No variants of a failed test.** A failed idea is closed. Re-running it with different parameters is not allowed.
-4. **Count every trial.** A running trial counter (now **746**) is used for multiple-testing corrections.
+4. **Count every trial.** A running trial counter (now **748**) is used for multiple-testing corrections.
 5. **Never hand-edit results.** `results/roundNN.json` files are written only by the run scripts.
 
 **Standard daily-strategy setup** (PREREG7/11–16/23–25):
@@ -185,6 +185,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 | – | Partial exit (halve on the #23 gate) | **Not run** | A variant of a failed test. Its result is about the average of P1 and #23, so bear months ≈ −9.0. |
 | 24 | Multi-market trend overlay (SPY/TLT/GLD/UUP, the trend-fund "crisis alpha" method) | **FAIL** | The overlay earned ≈ 0 over 2016–26 (Sharpe 0.06). The idle-capital version made bear months −12.9. |
 | 25 | Long BTC / short a 14-altcoin basket | **FAIL** | The pair lost −2.5%/mo in bear months. It earned only in 2022–23. Worst day −83.6% (LTC squeeze, 2017-03-30). |
+| 26 | Convex leverage: P1 plus bought 30-day at-the-money puts priced from Deribit DVOL (2021-04 on) | **FAIL** | K1 +0.18%/mo, DD −83% against 1x +1.62, −57%. The puts paid back 76–81% of their premium. The drawdown is whipsaw bleed, not single-day gaps. |
 
 Full rules, numbers and readings are in `research/quant_lab/PREREGnn.md`; machine output is in
 `research/quant_lab/results/`.

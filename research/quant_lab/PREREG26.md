@@ -134,3 +134,40 @@ Once, after this file is pushed and the synthetic tests pass.
   earns in this window. Fails check 2.
 - Either way the single-day loss is bounded, and the measured gap between implied and realized volatility is new
   information for this repo.
+
+## Result (run once, 2026-11-13): both FAIL. Buying the puts cost more than the protection was worth.
+
+Data: Deribit DVOL daily closes for BTC and ETH, 2021-03-24 to 2026-11-13 (2,061 days each, no gaps). Window
+2021-04-01 on: 67 complete months (23 bear, 16 flat, 28 bull).
+
+| | %/mo | max DD | worst day | bear | flat | bull | 2022 | B | discovery | A | stress | checks failed |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| K1 convex leverage (q = 1) | +0.18 | −83% | −22.5% | −10.7 | −5.1 | +17.2 | −9.46 | −5.82 | +3.92 | +1.17 | −8.21 | 1, 2, 3, 5 |
+| K2 full call (q = 2) | −1.78 | −86% | −17.3% | −10.3 | −6.2 | +11.6 | −9.55 | −7.01 | +1.46 | −1.01 | −11.89 | 1, 2, 3, 4, 5 |
+| 1x (R1) | +1.62 | −57% | −13.8% | −5.5 | −1.8 | +11.0 | −4.42 | −1.60 | +3.67 | +2.05 | −1.69 | – |
+| 1.5x (R2) | +1.97 | −73% | −20.7% | −8.3 | −2.9 | +16.9 | −6.91 | −3.02 | +5.10 | +2.78 | −2.98 | – |
+| 2x (P1) | +2.01 | −84% | −27.6% | −11.2 | −4.1 | +23.0 | −9.57 | −4.85 | +6.25 | +3.32 | −4.54 | – |
+
+Pass bars in this window: bear ≥ −8.2, return ≥ +1.97, drawdown no worse than −57%. All worst days are 2021-05-19.
+
+**The puts alone (base costs, per coin sleeve):**
+
+| | puts bought | days held | proceeds ÷ premium | overlay %/mo (K1) | mean DVOL / next-30-day realized, trend on |
+|---|---|---|---|---|---|
+| BTC | 79 | 1,042 | 0.76 | −2.35 | 57% / 49% |
+| ETH | 71 | 1,012 | 0.81 | −2.56 | 72% / 68% |
+
+**Reading:**
+- The prediction was too kind. I expected K1 between 1x and 1.5x on return with a drawdown near 1x's. It returned
+  less than 1x (+0.18 against +1.62) and its drawdown stayed at 2x's (−83%).
+- The puts did what the contract says on the worst day: −27.6% for P1 became −22.5% (K1) and −17.3% (K2). That was
+  not where the drawdown came from. P1's −84% is a long run of small losses from trend whipsaws in 2021–22, and no
+  single day. A put bought at each entry and sold at each exit adds a premium loss to every whipsaw.
+- The puts returned 76–81 cents per dollar of premium. Implied volatility ran 4–8 points above what followed, and
+  about 75 purchases per coin each paid the spread twice. The drag was about 2.4%/month for K1, three times my
+  estimate, because the trend flips far more often than once per 30-day put.
+- In this window the linear line itself is flat: 1x, 1.5x and 2x all made 1.6–2.0%/month, so the only thing extra
+  leverage bought was drawdown.
+- Outside the verdict (2016–2021-03, premiums from trailing realized volatility × 1.2, no market price behind it):
+  K1 +11.27%/mo with a −79% drawdown, against 1x +9.03 / −50% and P1 +15.73 / −79%. Same picture.
+- **Bought-option protection is closed for the daily core.** Trials charged: 748. P1 stays the live paper variant.
