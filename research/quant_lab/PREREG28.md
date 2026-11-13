@@ -105,3 +105,36 @@ Once, after this file is pushed and the synthetic tests pass.
 - Check 2 passes (correlation with P1 near zero or negative). Check 3 is likely. Check 4 is likely.
 - Check 6 fails: a 25% spread on volatility is larger than the edge. So I expect a FAIL on stress alone.
 - Its worst months are the crash months of 2021-05 and 2022, each bounded by the wings.
+
+## Result (run once, 2026-11-13): FAIL. Selling the options lost money too.
+
+Window 2021-04-01 on, 67 months (23 bear, 16 flat, 28 bull).
+
+| | %/mo | max DD | Sharpe | worst day | bear | flat | bull | B | discovery | A | stress |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| H1 sleeve alone | −1.59 | −67% | −0.90 | −8.6% | −2.0 | +3.6 | −3.7 | −0.88 | −1.92 | −2.38 | −3.46 |
+| H1 + P1 | +1.11 | −84% | 0.53 | −28.1% | −13.1 | −0.4 | +18.2 | −5.21 | +5.17 | +1.55 | −7.24 |
+| P1 | +2.01 | −84% | 0.69 | −27.6% | −11.2 | −4.1 | +23.0 | −4.85 | +6.25 | +3.32 | −4.54 |
+| H1 + 1x / 1x alone | +0.37 / +1.62 | −59% / −57% | 0.27 / 0.69 | | | | | | | | |
+| H1 + 1.5x / 1.5x alone | +0.90 / +1.97 | −74% / −73% | 0.45 / 0.69 | | | | | | | | |
+
+Checks: 1 fails (−1.59), 2 passes (correlation −0.70), 3 fails (0.53 against 0.69 + 0.20), 4 fails (a fraction of a
+point worse than P1), 5 fails (−2.38), 6 fails (−3.46). Deflated Sharpe Ratio at 750 trials: sleeve 0.00, portfolio
+0.03.
+
+Per coin, paid out ÷ credit received: BTC 1.09, ETH 1.18. Mean notional sold: 0.97x (BTC), 0.74x (ETH).
+
+**Reading:**
+- The prediction was wrong. I expected a small gain at base costs and a fail on stress only. The sleeve lost at base
+  costs, in every period.
+- The sleeve paid out 9–18% more than it collected. The credit is taken at 0.9 × DVOL, so at mid prices the payout
+  was about equal to the credit: there was no premium to harvest in 30-day at-the-money options held to expiry.
+- This does not contradict PREREG26, where implied volatility ran 4–8 points above *daily* realized volatility. A
+  sold butterfly held to expiry pays out on the 30-day move, not on daily wiggles, and 30-day moves in crypto are
+  larger than daily volatility implies because prices trend within the month. The gap in daily terms only goes to
+  someone who hedges daily, which is a different and costlier trade.
+- It did what the theory said on shape: it earned in flat months (+3.6) and was strongly negatively correlated with
+  P1 (−0.70). It lost in both bear (−2.0) and bull (−3.7) months, which is where the months are.
+- Taken with PREREG26 and 27: at these modelled spreads, buyers got back 53–81% and sellers paid out 109–118%. Both
+  sides lose roughly the spread. **Options are closed for this repo**, bought and sold. Trials charged: 750. P1 stays
+  the live paper variant.
