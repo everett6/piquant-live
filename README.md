@@ -40,7 +40,7 @@ PiQuant is a personal crypto trading system with two parts:
 | **Raspberry Pi 5** (wired Ethernet) | `piquant.service` | Paper engine on Coinbase. The medium-frequency entries are off (`--mft-entries=false`, drop-in `mft-off.conf`). The in-process 2x/1x trend ledger writes to `~/piquant-data/trend`. |
 | Pi | `piquant-collect.service` | Records Coinbase/Kraken/Binance.US trades and 1 s top-10 order books into `~/piquant-collect`. Unit copy: `deploy/piquant-collect-pi.service`. |
 | Pi | `wifi-watchdog` | Restarts networking when 1.1.1.1 and 8.8.8.8 both stop answering (`scripts/wifi-watchdog.sh`). |
-| **Desktop** | `piquant-collect` (user unit, `--ticks=false`) | Collects news, candles and the carry ledger, backs up the Pi every night, and mirrors the Pi's tick data to `~/piquant-backups/pi-collect`. |
+| **Desktop** | `piquant-collect` (user unit) | Collects news, candles and the carry ledger, backs up the Pi every night, mirrors the Pi's tick data to `~/piquant-backups/pi-collect`, and since 2026-11-13 records ticks and books itself as a second copy (`~/piquant-collect`). The Pi's copy is the main one. |
 | Desktop | `piquant trend` | The daily trend paper ledger (PREREG6 + P1), `~/.local/bin/piquant-trend`. |
 
 Email alerts (venue down, mirror failed, …) need `~/.config/piquant/alert.env` on each machine. The owner fills this

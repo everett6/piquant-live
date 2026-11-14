@@ -105,3 +105,7 @@
   sha256 on the Pi's disk with the build, keeps the old binary, installs by rename, then watches both services and
   the recorder for 90 seconds and rolls back if either is unhealthy. A status check that is interrupted is repeated
   before anything else.
+- **Second copy (2026-11-14 02:15 UTC on):** the desktop records ticks and books again (`ticks-off.conf` renamed to
+  `ticks-off.conf.disabled-2026-11-13` in the user unit's drop-in folder). The Pi's copy stays the main one;
+  `scripts/merge_desktop_ticks.py` fills Pi gaps from the desktop's files. The desktop was itself switched off from
+  2026-11-13 07:00 to 22:57 UTC, so it would not have covered most of this gap.
