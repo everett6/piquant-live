@@ -63,3 +63,39 @@ Once, after this file is pushed and the synthetic tests pass. The download happe
 - It misses the first half of P1's 2021–22 drawdown, and it halves the 2023 rally. The drawdown barely changes.
 - Bear months improve by less than 1 point. Checks 1 and 3 fail; check 2 probably fails.
 - Chance of a pass: about 1 in 6.
+
+## Result (run once, 2026-11-13): FAIL. The signal pointed the right way, but too late and too weakly to pay.
+
+Supply data: DefiLlama, 3,273 daily rows from 2017-11-29, no missing day in the window. Window 2019-01-01 to
+2026-10-31 as registered: 94 months (31 bear, 19 flat, 44 bull).
+
+| | %/mo | max DD | Sharpe | worst day | bear | flat | bull | 2022 | A | stress |
+|---|---|---|---|---|---|---|---|---|---|---|
+| H1 supply gate (average 1.80x) | +5.34 | −79.2% | 1.15 | −32.5% | −12.6 | −2.0 | +29.4 | −7.64 | +1.92 | −1.28 |
+| the line at 1.80x | +5.50 | −80.3% | 1.19 | −29.3% | −11.2 | −2.6 | +27.9 | −8.51 | +3.14 | −1.12 |
+| P1 (2x) | +5.74 | −83.9% | 1.19 | −32.5% | −12.5 | −3.0 | +31.1 | −9.57 | +3.32 | −1.59 |
+| 1.5x | +4.99 | −73.2% | 1.19 | −24.4% | −9.2 | −2.0 | +23.0 | −6.91 | +2.78 | −0.52 |
+| 1x | +3.76 | −56.9% | 1.19 | −16.2% | −6.1 | −1.2 | +15.0 | −4.42 | +2.05 | +0.10 |
+
+Checks: 1 fails (bear −12.6 against P1's −12.5; −9.5 needed). 2 fails (+5.34 against the line's +5.50). 3 passes
+(−79.2% against −80.3%). 4 passes. 5 passes (−1.28 against −1.59).
+
+**What the gate saw:** it was on for 26% of all days and 19–20% of trend-on days: 65% of 2022, 74% of 2023, 48% of
+2026, and almost never in 2019–21 or 2024–25. It switched 63 times.
+
+| trend-on days | next day, gated / not | next 7 days, gated / not |
+|---|---|---|
+| BTC | +0.25% / +0.30% | +1.1% / +2.1% |
+| ETH | +0.27% / +0.32% | +1.0% / +2.4% |
+
+**Reading:**
+- Unlike funding, the sign was right: returns after shrinking-supply days were about half those after growing-supply
+  days. But they were still positive, so holding 1x on them gave up return. It did not avoid loss.
+- Bear months did not move at all. The gate was off through 2021 and the first months of 2022, when the drawdown
+  began, as predicted.
+- It beat the line on drawdown by 1 point and lost to it on return, Sharpe (1.15 against 1.19) and period A (+1.92
+  against +3.14; the gate was on for half of 2026).
+- 63 switches is far more than the "handful" I expected: the 30-day change hovered around zero in 2023 and 2026.
+- The prediction held on checks 1 and 2 and on where the gate was on. It was wrong on check 3, which passed.
+- **Stablecoin supply as a leverage gate is closed, and with it non-price leverage gates on the daily core**
+  (PREREG31–32). Trials charged: 758. P1 stays the live paper variant.

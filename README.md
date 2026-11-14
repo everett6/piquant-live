@@ -11,7 +11,7 @@ PiQuant is a personal crypto trading system with two parts:
 > backtests, and they come with large drawdowns.
 
 **Goal and where it stands (2026-11-13):** the owner's target is 7% a month, with drawdowns under 25%.
-- 31 pre-registrations and **757 charged trials** have found one strategy that reaches 7% a month in backtests:
+- 32 pre-registrations and **758 charged trials** have found one strategy that reaches 7% a month in backtests:
   P1, the BTC+ETH trend core at 2x. Its maximum drawdown is −84%.
 - One market-neutral strategy passed: C1, funding carry, at about +5–8% a year with a −1% drawdown.
 - Every attempt to cut P1's bear-market losses without cutting more profit has failed.
@@ -130,7 +130,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 2. **Run once.** The real run happens a single time, after synthetic tests pass. Failures are recorded with their
    numbers.
 3. **No variants of a failed test.** A failed idea is closed. Re-running it with different parameters is not allowed.
-4. **Count every trial.** A running trial counter (now **757**) is used for multiple-testing corrections.
+4. **Count every trial.** A running trial counter (now **758**) is used for multiple-testing corrections.
 5. **Never hand-edit results.** `results/roundNN.json` files are written only by the run scripts.
 
 **Standard daily-strategy setup** (PREREG7/11–16/23–25):
@@ -200,6 +200,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 | 29 | Cross-sectional momentum: 16 coins, weekly, long the strongest third and short the weakest | **FAIL** (all 5) | Book alone −1.62%/mo, bear −1.9, DD −92%, worst day −30.9%. In bear months the longs lost more (−11.8) than the shorts made (+8.7). |
 | 30 | **P1 on four clocks** (daily closes at 00/06/12/18 UTC, equal split) | **PASS**, small margins | Split +8.61%/mo, DD −82.3%, Sharpe 1.50 against the 00:00 clock's +8.43, −83.5%, 1.48. Clocks are 98% correlated; the gain is mostly removing dependence on the hour. First run invalid (ETH funding bug), re-run after the fix. |
 | 31 | Funding crowding gate: P1 cut from 2x to 1x while 7-day funding is high (2021-01 on) | **FAIL** (both) | Wrong in sign: high-funding days were followed by higher returns. Fixed level +3.70%/mo, DD −82.6%, bear −9.7 against P1 +3.64, −83.9%, −11.2. The gate was never on in 2022. |
+| 32 | Stablecoin supply gate: P1 cut from 2x to 1x while total stablecoin supply shrinks over 30 days (2019-01 on) | **FAIL** | +5.34%/mo, DD −79.2%, bear −12.6 against P1 +5.74, −83.9%, −12.5 and constant 1.8x +5.50, −80.3%. Right in sign but the gated days still had positive returns; off when the 2021–22 drawdown began. |
 
 Full rules, numbers and readings are in `research/quant_lab/PREREGnn.md`; machine output is in
 `research/quant_lab/results/`.
