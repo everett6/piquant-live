@@ -61,3 +61,34 @@ Once, after this file is pushed and the synthetic tests pass.
 - I1's carry leg: about 0 at base costs, negative at stress. I2's: slightly positive at base.
 - Both lose to T-bills (check 1). Checks 2 and 3 pass, because the leg is nearly riskless.
 - Chance of a pass: about 1 in 5 for I1, 1 in 4 for I2.
+
+## Result (run once, 2026-11-13): both FAIL. There is almost no funding to collect while the trend is off.
+
+Window 2020-01-01 to 2026-10-31: 82 months (26 bear, 18 flat, 38 bull). The sleeves were idle 45% of the time.
+
+| | %/mo | max DD | Sharpe | bear | A | stress %/mo | checks failed |
+|---|---|---|---|---|---|---|---|
+| I1 immediate | +6.17 | −84.1% | 1.250 | −11.36 | +3.28 | −1.42 | 1, 2, 4, 5 |
+| I2 patient (5 flat closes) | +6.20 | −83.9% | 1.255 | −11.35 | +3.32 | −1.32 | 1, 4, 5 |
+| P1 + T-bills on idle sleeves | +6.32 | −83.7% | 1.269 | −11.24 | +3.48 | −1.10 | – |
+| P1 (idle cash at 0) | +6.20 | −83.9% | 1.255 | −11.38 | +3.32 | −1.21 | – |
+
+**The carry leg alone** (share of the whole book, 6.8 years):
+
+| | total, base | total, stress | period A | switches per coin | funding earned ÷ switching cost (per coin, base) |
+|---|---|---|---|---|---|
+| I1 | −2.2% | −14.9% | −0.6% | 131–137 | 8.2–9.1% ÷ 8.7–9.1% |
+| I2 | +0.02% | −8.4% | −0.06% | 73 | 6.3–6.7% ÷ 4.9% |
+
+Mean funding on idle days was 4.0–4.5% a year, against 17–22% on trend-on days.
+
+**Reading:**
+- The prediction held. Funding is paid when prices rise, and that is when the sleeve is in the trend, not idle. On
+  idle days the carry earned about a quarter of what it earns on trend-on days.
+- Switching ate it. I1 opened or closed the pair about 20 times a year per coin and paid all of its funding back in
+  costs. I2 halved the switches and came out at zero before stress.
+- T-bills on the idle sleeves added +0.12%/month for no cost and no risk. Neither carry variant came close.
+- What I told the owner beforehand ("likely to work", +0.2–0.4%/month) was wrong; the correction written above
+  before the run was right.
+- **Carry on idle capital is closed. Idle sleeves should hold T-bills.** C1 as a standalone always-on book
+  (PREREG19) is unaffected. Trials charged: 760. P1 stays the live paper variant.
