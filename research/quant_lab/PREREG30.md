@@ -116,5 +116,8 @@ the single clocks. Turnover is the same as one clock (0.10 a day).
 - Not everything improved: flat months are worse (−5.2 against −4.0) and period A is lower (+2.65 against +3.41).
 - What it is worth: the single clocks' results differ by 0.3%/month, 2 points of drawdown and 1.8 points of bear-month
   return for no reason but the hour. The split removes that dependence. It does not fix bear months or the drawdown.
-- **Per the pass rule,** a four-clock variant can join the paper ledger beside P1. That needs the ledger to step
-  every 6 hours on 6-hour candles (a Go change and a Pi deploy); not done yet. Trials charged: 755.
+- **Per the pass rule,** a four-clock variant joined the paper ledger beside P1 on 2026-11-14 UTC, paper only:
+  `E4_btc_eth_4clock_2x`, stepped every 6 hours on Coinbase 6-hour candles (`internal/trend/grid.go`,
+  `State.AdvanceGrid`). It starts flat at equity 1. One difference from the backtest: a tranche is flat when any of
+  its 50 daily closes is missing, where the backtest dropped days with fewer than four 6-hour bars.
+  Trials charged: 755.

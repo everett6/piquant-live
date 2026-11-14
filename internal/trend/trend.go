@@ -27,6 +27,7 @@ type Variant struct {
 	DailyStop   float64 `json:"daily_stop,omitempty"` // flatten at the close of a day losing this fraction (re-enter next close)
 	Capital     float64 `json:"capital,omitempty"`    // display only: starting dollars for equity_usd
 	Pullback    bool    `json:"pullback,omitempty"`   // PREREG16 D2: 15% pullback above SMA200; exit > SMA20 or day 10
+	Clocks      bool    `json:"clocks,omitempty"`     // PREREG30 E4: four daily clocks on 6-hour bars (stepped by AdvanceGrid)
 }
 
 // Variants are frozen by PREREG6.
@@ -49,6 +50,9 @@ var Variants = []Variant{
 	// -8.0). Since 2021-04 it made +1.62%/mo against 2x's +2.01 with a third less drawdown (PREREG26). Tracked forward
 	// on paper (2026-11-13), post hoc, for comparison only.
 	{Name: "R1_btc_eth_1x", Lev: 1, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true},
+	// PREREG30 E4 (passed 2026-11-13 by small margins: +8.61%/mo, drawdown -82.3%, Sharpe 1.499 against the
+	// 00:00 clock's +8.43, -83.5%, 1.476): P1's rule on four clocks, stepped every 6 hours by AdvanceGrid.
+	{Name: "E4_btc_eth_4clock_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true, Clocks: true},
 	{Name: "PAPER50_btc_eth_0p2x", Lev: 0.2, FeeBps: 120, SlipBps: 5, SMA: 50, Pair: true, DailyStop: 0.02, KillDD: 0.05, Capital: 50},
 }
 
@@ -94,6 +98,9 @@ type State struct {
 	Ledgers    map[string]*Ledger `json:"ledgers"`
 	ETHHistory []Day              `json:"eth_history,omitempty"` // ETH closes for pair variants (capped)
 	ETHLast    string             `json:"eth_last,omitempty"`
+	GridB      []Bar              `json:"grid_btc,omitempty"` // 6-hour closes for the four-clock variants (capped)
+	GridE      []Bar              `json:"grid_eth,omitempty"`
+	GridLast   int64              `json:"grid_last,omitempty"` // start of the last 6-hour bar applied
 }
 
 const historyCap = 400
@@ -245,7 +252,7 @@ func (st *State) AdvanceETH(days []Day) int {
 		barB := btcHist[bi].Close/btcHist[bi-1].Close - 1
 		barE := d.Close/prevE - 1
 		for _, name := range sortedKeys(st.Ledgers) {
-			if l := st.Ledgers[name]; l.Variant.Pair {
+			if l := st.Ledgers[name]; l.Variant.Pair && !l.Variant.Clocks {
 				l.stepPair(d.Date, barB, barE, btcHist, st.ETHHistory)
 			}
 		}
@@ -446,7 +453,7 @@ func (st *State) Score(asOf time.Time) []Summary {
 	var out []Summary
 	for _, name := range sortedKeys(st.Ledgers) {
 		l := st.Ledgers[name]
-		s := Summary{Name: name, Equity: l.Equity, MaxDD: l.MaxDD, Sharpe: sharpe(l.Days), Killed: l.Killed, CurrentPos: l.Pos,
+		s := Summary{Name: name, Equity: l.Equity, MaxDD: l.MaxDD, Sharpe: sharpe(l.Days) * l.Variant.sharpeScale(), Killed: l.Killed, CurrentPos: l.Pos,
 			EquityUSD: l.Variant.Capital * l.Equity, DailyStops: l.Stops}
 		if bhM != nil && name != "BH" {
 			for m, r := range l.Monthly() {
@@ -483,6 +490,14 @@ func sharpe(days []DayRec) float64 {
 		return 0
 	}
 	return mu / math.Sqrt(v) * math.Sqrt(365)
+}
+
+// sharpeScale corrects the daily annualisation for variants whose records are 6-hour bars.
+func (v Variant) sharpeScale() float64 {
+	if v.Clocks {
+		return 2 // sqrt(4 bars per day)
+	}
+	return 1
 }
 
 // Load reads a state file; a missing file returns (nil, nil).

@@ -105,6 +105,17 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 		// PREREG16 D2 needs SMA200: extend both histories backwards (no ledger is touched).
 		st.Backfill(append(pre, post...), append(epre, epost...))
 	}
+	// PREREG30 E4: four clocks on 6-hour bars. A failed fetch is retried on the next pass; bars are never skipped.
+	g0 := now.Add(-299 * 6 * time.Hour)
+	gb, gbErr := collect.FetchCoinbase6hCandles(ctx, client, "BTC-USD", g0, now)
+	ge, geErr := collect.FetchCoinbase6hCandles(ctx, client, "ETH-USD", g0, now)
+	if gbErr == nil && geErr == nil {
+		if k := st.AdvanceGrid(gridBars(gb, now), gridBars(ge, now)); k > 0 {
+			fmt.Printf("[TREND] four-clock ledger advanced %d six-hour bar(s)\n", k)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "[TREND] fetch 6h candles:", gbErr, geErr)
+	}
 	if err := st.Save(path); err != nil {
 		return st, err
 	}
@@ -113,6 +124,17 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 		return st, fmt.Errorf("fetch ETH daily candles: %w", ethErr)
 	}
 	return st, nil
+}
+
+// gridBars keeps completed 6-hour candles.
+func gridBars(rows []collect.CandleRow, now time.Time) []trend.Bar {
+	var out []trend.Bar
+	for _, r := range rows {
+		if !time.Unix(r.T, 0).Add(6 * time.Hour).After(now) {
+			out = append(out, trend.Bar{T: r.T, Close: r.Close})
+		}
+	}
+	return out
 }
 
 // splitDays keeps completed daily candles and splits them at the registration date (seed vs forward days).
