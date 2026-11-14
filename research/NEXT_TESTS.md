@@ -91,3 +91,16 @@
      return equals the average of theirs, plus at most a little saved cost. Bear months would be about
      (−8.0 + −10.1) / 2 ≈ −9.0%/month: worse than P1, far from the −5.0 needed. It cannot pass.
 - No trial charged (742). Any partial de-risk built on the same volatility-expansion gate is closed with it.
+
+## Recording gap, 2026-11-13 06:59 UTC to 2026-11-14 00:55 UTC (about 18 hours, all venues)
+- **What happened:** a new binary (6d93f8e, adds the R1 1x paper ledger) was installed on the Pi at 06:59:40 UTC and
+  `piquant` was restarted. Seconds later the Pi hard-reset (cause not established; the hardware watchdog has a
+  1-minute timeout). The freshly written `/usr/local/bin/piquant` and its backup copy had not reached the SD card and
+  came back as 0-byte files. Both `piquant` and `piquant-collect` then failed to start (`Exec format error`) in a
+  restart loop until the binary was reinstalled at 00:55:51 UTC.
+- **Lost:** every tick and order-book record in that window. The desktop collector runs with `--ticks=false`, so
+  there is no second copy. PREREG17/18 will have this gap in their data.
+- **Not lost:** the trend ledger state (8 ledgers, including the new `R1_btc_eth_1x`) and earlier tick files.
+- **Deploy rule from now on:** copy, `sync`, compare the sha256 on the Pi's disk with the build, keep the previous
+  binary until the new one has run for a minute, and check both services afterwards. A status check that is
+  interrupted is repeated before anything else.
