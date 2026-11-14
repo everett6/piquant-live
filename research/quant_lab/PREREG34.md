@@ -84,3 +84,39 @@ Once, after this file is pushed and the synthetic tests pass.
 - QB: average leverage about 1.6–1.7x on trend-on days. If days just above the line really are the losing ones, it
   beats its line; trend research says returns are also thinnest there, so I lean yes on drawdown, unsure on return.
   Chance of a pass: about 1 in 4.
+
+## Result (run once, 2026-11-13): both PASS all six checks. QA by margins too small to mean anything; QB by modest ones.
+
+E4 and P1 reproduced exactly (+8.61 / −82.3% / 1.499 and +8.50 / −83.9% / 1.489).
+
+| | %/mo | max DD | Sharpe | bear | flat | bull | 2022 | D | C | B | discovery | A | stress |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **QA interference** | +8.59 | −81.4% | 1.501 | −6.2 | −5.3 | +36.7 | −8.89 | +27.00 | +6.94 | +2.03 | +5.86 | +2.49 | +1.42 |
+| QA's line (E4 × 0.979) | +8.51 | −81.6% | 1.499 | −6.9 | −5.1 | +36.7 | −9.09 | +27.06 | +6.66 | +1.89 | +5.91 | +2.62 | +1.34 |
+| E4 split (base) | +8.61 | −82.3% | 1.499 | −7.0 | −5.2 | +37.6 | −9.31 | +27.55 | +6.72 | +1.83 | +5.99 | +2.65 | +1.29 |
+| **QB tunnelling** | +8.55 | −79.8% | 1.516 | −6.2 | −4.0 | +35.8 | −8.21 | +28.05 | +6.15 | +2.54 | +5.59 | +2.36 | +1.74 |
+| QB's line (P1 × 0.929) | +8.15 | −81.3% | 1.489 | −7.5 | −3.6 | +35.0 | −8.79 | +26.23 | +6.09 | +1.06 | +5.95 | +3.19 | +1.37 |
+| P1 (base) | +8.50 | −83.9% | 1.489 | −8.0 | −3.9 | +38.2 | −9.57 | +27.99 | +6.24 | +0.77 | +6.25 | +3.32 | +1.19 |
+
+- QA holds 2.1% less than the split on average and differs from it on 5.5% of bars. Turnover 0.102/day against 0.101.
+- QB holds 7.1% less than P1 on average (1.86x on trend-on days). Turnover 0.104/day against 0.099.
+
+**Reading:**
+- **The shared hypothesis held:** exposure near the SMA crossing earned less than its share. Cutting it kept the
+  return and trimmed the drawdown and bear months, with both rules and on both grids.
+- **QA's pass is not evidence of much.** +0.08%/month, 0.2 points of drawdown and 0.002 of Sharpe over its line are
+  far inside the noise. It passed because the rule asked only for "no worse", and it differs from the split on one
+  bar in eighteen.
+- **QB's margins are real-sized but still small:** +0.40%/month over its line, drawdown −79.8% against −81.3% (and
+  −83.9% for P1), bear months −6.2 against P1's −8.0, stress +1.74 against +1.19. P1's full return was kept (+8.55
+  against +8.50) at 7% less average size.
+- **Against it:** QB was worse than P1 in the two most recent periods (discovery +5.59 against +6.25, A +2.36
+  against +3.32). The gain comes from 2016–17 and 2021–22. A Sharpe gap of 0.03 over eleven years is well inside
+  the sampling error, and this is trial 762. The Deflated Sharpe view does not change: it is P1 with a slightly
+  better shape, not a new source of return.
+- **Prediction check:** I gave QA 1 in 5 and QB 1 in 4. I expected QB's average leverage on trend-on days to be
+  1.6–1.7x; it was 1.86x, so the rule cuts less often than I thought.
+- **Neither fixes the owner's problem.** Bear months are still −6.2% and the drawdown is still about −80%.
+- **Per the pass rule,** either can join the paper ledger beside P1, paper only. QB is the one worth tracking; QA
+  adds almost nothing over the E4 ledger already running. That needs a Go change and a Pi deploy, which the owner
+  is asked for first. Trials charged: 762.
