@@ -101,6 +101,7 @@
 - **Lost:** every tick and order-book record in that window. The desktop collector runs with `--ticks=false`, so
   there is no second copy. PREREG17/18 will have this gap in their data.
 - **Not lost:** the trend ledger state (8 ledgers, including the new `R1_btc_eth_1x`) and earlier tick files.
-- **Deploy rule from now on:** copy, `sync`, compare the sha256 on the Pi's disk with the build, keep the previous
-  binary until the new one has run for a minute, and check both services afterwards. A status check that is
-  interrupted is repeated before anything else.
+- **Deploy rule from now on:** use `scripts/deploy_pi.sh` (added 2026-11-13). It copies, runs `sync`, compares the
+  sha256 on the Pi's disk with the build, keeps the old binary, installs by rename, then watches both services and
+  the recorder for 90 seconds and rolls back if either is unhealthy. A status check that is interrupted is repeated
+  before anything else.

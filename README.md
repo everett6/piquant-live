@@ -277,7 +277,15 @@ uncommitted changes:
 scripts/sync_pi.sh
 ```
 
-Both scripts take `PI=everett@<ip>` if `raspberrypi.local` doesn't resolve.
+**Install a new binary on the Pi.** It checks the copy on the Pi's disk, keeps the old binary, restarts the paper
+engine, watches both services for 90 seconds and rolls back if either is unhealthy. `--collect` also restarts the
+recorder; `--dry-run` installs nothing:
+
+```bash
+scripts/deploy_pi.sh
+```
+
+All three scripts take `PI=everett@<ip>` if `raspberrypi.local` doesn't resolve.
 
 **Trend paper ledger:**
 
