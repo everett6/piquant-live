@@ -11,7 +11,7 @@ PiQuant is a personal crypto trading system with two parts:
 > backtests, and they come with large drawdowns.
 
 **Goal and where it stands (2026-11-13):** the owner's target is 7% a month, with drawdowns under 25%.
-- 29 pre-registrations and **751 charged trials** have found one strategy that reaches 7% a month in backtests:
+- 30 pre-registrations and **755 charged trials** have found one strategy that reaches 7% a month in backtests:
   P1, the BTC+ETH trend core at 2x. Its maximum drawdown is −84%.
 - One market-neutral strategy passed: C1, funding carry, at about +5–8% a year with a −1% drawdown.
 - Every attempt to cut P1's bear-market losses without cutting more profit has failed.
@@ -127,7 +127,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 2. **Run once.** The real run happens a single time, after synthetic tests pass. Failures are recorded with their
    numbers.
 3. **No variants of a failed test.** A failed idea is closed. Re-running it with different parameters is not allowed.
-4. **Count every trial.** A running trial counter (now **751**) is used for multiple-testing corrections.
+4. **Count every trial.** A running trial counter (now **755**) is used for multiple-testing corrections.
 5. **Never hand-edit results.** `results/roundNN.json` files are written only by the run scripts.
 
 **Standard daily-strategy setup** (PREREG7/11–16/23–25):
@@ -195,6 +195,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 | 27 | Always-on ladder of 30-day put spreads beside P1 (capped loss, no short) | **FAIL** | Sleeve alone +1.1 in bear months but −2.0%/mo overall. Portfolio +6.80%/mo, bear −6.6 (needed −5.0). Spreads paid back 53–71% of premium. |
 | 28 | Sold 30-day iron butterflies, loss capped at 25% (the seller's side of #26–27) | **FAIL** | Sleeve −1.59%/mo, paid out 109–118% of the credit. Correlation with P1 −0.70, but no premium to harvest. Options closed, bought and sold. |
 | 29 | Cross-sectional momentum: 16 coins, weekly, long the strongest third and short the weakest | **FAIL** (all 5) | Book alone −1.62%/mo, bear −1.9, DD −92%, worst day −30.9%. In bear months the longs lost more (−11.8) than the shorts made (+8.7). |
+| 30 | **P1 on four clocks** (daily closes at 00/06/12/18 UTC, equal split) | **PASS**, small margins | Split +8.61%/mo, DD −82.3%, Sharpe 1.50 against the 00:00 clock's +8.43, −83.5%, 1.48. Clocks are 98% correlated; the gain is mostly removing dependence on the hour. First run invalid (ETH funding bug), re-run after the fix. |
 
 Full rules, numbers and readings are in `research/quant_lab/PREREGnn.md`; machine output is in
 `research/quant_lab/results/`.

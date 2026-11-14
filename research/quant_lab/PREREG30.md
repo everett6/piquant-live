@@ -75,3 +75,46 @@ Once, after this file is pushed and the synthetic tests pass.
 - E4 beats the median clock on Sharpe (the proof says it must beat the average).
 - Against P1 itself it is about a coin flip, tilted against E4 by the 00:00 selection: I put a pass at 40%.
 - Checks 2 and 4 are the likeliest to fail: the drawdown and bear-month figures of one path are noisy.
+
+## Result (2026-11-14): PASS on all six checks, by small margins. Read the process note first.
+
+**Process note: the first run was invalid and was re-run after a bug fix.**
+- The first run failed one check (stress return −2.32). Before recording it I compared the 00:00 clock on the grid
+  with P1 as published: +8.04 against +8.50, and at stress −2.48 against +1.19. Those should agree.
+- Cause: `lab.position_returns` reads the bar length from the first two rows. ETH's first two 6-hour bars are 12
+  hours apart (a missing bar on 2016-05-18), so ETH's funding was charged at twice the rate in every grid variant,
+  the comparator included.
+- Fix: the grid formula now uses a fixed 6-hour bar (`strategies30.grid_returns`, commit after ca5059f), with a
+  synthetic test that reproduces the gap. No rule, parameter, clock or check was changed.
+- After the fix the 00:00 clock on the grid gives +8.43 and +1.12 at stress, against P1's +8.50 and +1.19.
+- The other five checks had the same outcome in both runs. The stress check is the one that changed, from fail to
+  pass. The first run's output is kept unchanged as `results/round30_invalid_first_run.json`.
+
+| | full %/mo | max DD | Sharpe | bear | flat | bull | 2022 | D | C | B | discovery | A | stress |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **E4, four-clock split** | +8.61 | −82.3% | 1.499 | −7.0 | −5.2 | +37.6 | −9.31 | +27.55 | +6.72 | +1.83 | +5.99 | +2.65 | +1.29 |
+| Clock 00:00 (P1 on the grid, comparator) | +8.43 | −83.5% | 1.476 | −7.8 | −4.0 | +37.5 | −9.39 | +27.01 | +6.48 | +0.72 | +6.30 | +3.41 | +1.12 |
+| Clock 06:00 | +8.51 | −85.5% | 1.485 | −7.0 | −5.8 | +37.9 | −8.02 | +26.71 | +5.86 | +2.13 | +6.44 | +3.35 | +1.20 |
+| Clock 12:00 | +8.74 | −85.4% | 1.509 | −6.0 | −5.7 | +37.2 | −11.04 | +29.16 | +7.18 | +1.02 | +5.58 | +2.48 | +1.41 |
+| Clock 18:00 | +8.54 | −83.5% | 1.490 | −7.3 | −5.4 | +37.8 | −8.97 | +27.03 | +7.15 | +3.11 | +5.52 | +1.27 | +1.22 |
+| P1 as published (daily bars) | +8.50 | −83.9% | 1.489 | −8.0 | −3.9 | +38.2 | −9.57 | +27.99 | +6.24 | +0.77 | +6.25 | +3.32 | +1.19 |
+
+Checks: 1 Sharpe 1.499 > 1.476. 2 drawdown −82.3% against −83.5%. 3 return +8.61, above 7.0 and above P1's.
+4 bear months −7.0 against −7.8. 5 period A +2.65 and stress +1.29, both positive.
+
+Correlation between clocks (daily returns): 0.983 on average. E4's volatility 96.5% a year against 96.8–97.4% for
+the single clocks. Turnover is the same as one clock (0.10 a day).
+
+**Reading:**
+- The proof held: E4's Sharpe (1.499) is above the average clock's (1.490) and the median's (1.487), and its
+  volatility and drawdown are the lowest of the five.
+- **The gain is small.** The clocks are 98% correlated, so the split removes 0.6% of the volatility, not the 3–6% I
+  predicted. The Sharpe gain over P1 is 0.02 and the drawdown gain is 1 point.
+- **Most of the margin over P1 is luck of the comparator.** 00:00 was the weakest of the four clocks on Sharpe, the
+  opposite of the selection tilt I expected. Against the best clock (12:00, 1.509) E4 is behind. The spread between
+  single clocks (1.476 to 1.509) is larger than E4's edge over their average, which is the honest size of the effect.
+- Not everything improved: flat months are worse (−5.2 against −4.0) and period A is lower (+2.65 against +3.41).
+- What it is worth: the single clocks' results differ by 0.3%/month, 2 points of drawdown and 1.8 points of bear-month
+  return for no reason but the hour. The split removes that dependence. It does not fix bear months or the drawdown.
+- **Per the pass rule,** a four-clock variant can join the paper ledger beside P1. That needs the ledger to step
+  every 6 hours on 6-hour candles (a Go change and a Pi deploy); not done yet. Trials charged: 755.
