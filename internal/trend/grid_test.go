@@ -125,3 +125,52 @@ func TestAdvanceGridWaitsForBothCoinsAndLeavesDailyLedgersAlone(t *testing.T) {
 		t.Fatalf("daily stepper touched the four-clock ledger: %d records", got)
 	}
 }
+
+func TestTunnelShareMatchesTheFormulaAndTheSleeveUsesIt(t *testing.T) {
+	// alternating +2% / -1% days: a rising series with a known, non-zero volatility
+	var hist []Day
+	p := 100.0
+	for i := 0; i < 80; i++ {
+		if i%2 == 0 {
+			p *= 1.02
+		} else {
+			p *= 0.99
+		}
+		hist = append(hist, Day{Date: "d", Close: p})
+	}
+	c := hist[len(hist)-1].Close
+	m, _ := sma(hist, 50)
+	var rs []float64
+	for i := len(hist) - 30; i < len(hist); i++ {
+		rs = append(rs, hist[i].Close/hist[i-1].Close-1)
+	}
+	mean := 0.0
+	for _, r := range rs {
+		mean += r / 30
+	}
+	v := 0.0
+	for _, r := range rs {
+		v += (r - mean) * (r - mean) / 29
+	}
+	want := 1 - math.Exp(-2*math.Log(c/m)/math.Sqrt(v))
+	got := tunnelShare(hist, c, m)
+	if math.Abs(got-want) > 1e-12 || got <= 0 || got >= 1 {
+		t.Fatalf("share: got %v want %v", got, want)
+	}
+	qb := Variant{Lev: 2, SMA: 50, Tunnel: true}
+	if _, target := qb.sleeve(0, 0, hist); math.Abs(target-2*want) > 1e-12 {
+		t.Fatalf("sleeve target: got %v want %v", target, 2*want)
+	}
+	if _, target := (Variant{Lev: 2, SMA: 50}).sleeve(0, 0, hist); target != 2 {
+		t.Fatalf("P1 must be unchanged, got %v", target)
+	}
+	if tunnelShare(hist[:30], c, m) != 0 || tunnelShare(hist, m, m) != 0 {
+		t.Fatal("no size without 31 closes or at the line")
+	}
+	// below the SMA the sleeve is flat
+	down := append([]Day{}, hist...)
+	down[len(down)-1].Close = 1
+	if _, target := qb.sleeve(2, 0, down); target != 0 {
+		t.Fatalf("below the SMA: got %v", target)
+	}
+}

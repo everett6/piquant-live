@@ -28,6 +28,7 @@ type Variant struct {
 	Capital     float64 `json:"capital,omitempty"`    // display only: starting dollars for equity_usd
 	Pullback    bool    `json:"pullback,omitempty"`   // PREREG16 D2: 15% pullback above SMA200; exit > SMA20 or day 10
 	Clocks      bool    `json:"clocks,omitempty"`     // PREREG30 E4: four daily clocks on 6-hour bars (stepped by AdvanceGrid)
+	Tunnel      bool    `json:"tunnel,omitempty"`     // PREREG34 QB: size = Lev * (1 - exp(-2 ln(close/SMA) / sigma30)) above the SMA
 }
 
 // Variants are frozen by PREREG6.
@@ -53,6 +54,9 @@ var Variants = []Variant{
 	// PREREG30 E4 (passed 2026-11-13 by small margins: +8.61%/mo, drawdown -82.3%, Sharpe 1.499 against the
 	// 00:00 clock's +8.43, -83.5%, 1.476): P1's rule on four clocks, stepped every 6 hours by AdvanceGrid.
 	{Name: "E4_btc_eth_4clock_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true, Clocks: true},
+	// PREREG34 QB tunnelling (passed 2026-11-13 by small margins: +8.55%/mo, drawdown -79.8%, Sharpe 1.516, bear months
+	// -6.2 against P1's +8.50, -83.9%, 1.489, -8.0; worse than P1 since 2023): P1's rule, sized by the gap above SMA50.
+	{Name: "QB_btc_eth_tunnel_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true, Tunnel: true},
 	{Name: "PAPER50_btc_eth_0p2x", Lev: 0.2, FeeBps: 120, SlipBps: 5, SMA: 50, Pair: true, DailyStop: 0.02, KillDD: 0.05, Capital: 50},
 }
 
@@ -270,6 +274,9 @@ func (v Variant) sleeve(pos, bar float64, hist []Day) (ret, target float64) {
 		case v.ExitSMA <= 0:
 			if c > m {
 				target = v.Lev
+				if v.Tunnel {
+					target = v.Lev * tunnelShare(hist, c, m)
+				}
 			}
 		default:
 			if f, ok2 := sma(hist, v.ExitSMA); ok2 {
@@ -281,6 +288,30 @@ func (v Variant) sleeve(pos, bar float64, hist []Day) (ret, target float64) {
 	}
 	ret -= math.Abs(target-pos) * (v.FeeBps + v.SlipBps) * 1e-4
 	return ret, target
+}
+
+// tunnelShare is PREREG34 QB's size as a share of full leverage: 1 - exp(-2 ln(close/sma) / sigma), with sigma the
+// sample standard deviation of the last 30 daily returns (strategies34.tunnel_positions). 0 without 31 closes.
+func tunnelShare(hist []Day, c, m float64) float64 {
+	const n = 30
+	if len(hist) < n+1 || c <= m || m <= 0 {
+		return 0
+	}
+	h := hist[len(hist)-n-1:]
+	var s, s2 float64
+	for i := 1; i < len(h); i++ {
+		if h[i-1].Close <= 0 {
+			return 0
+		}
+		r := h[i].Close/h[i-1].Close - 1
+		s += r
+		s2 += r * r
+	}
+	v := (s2 - s*s/n) / (n - 1)
+	if v <= 0 {
+		return 0
+	}
+	return 1 - math.Exp(-2*math.Log(c/m)/math.Sqrt(v))
 }
 
 // pullbackTarget is PREREG16 D2 for one sleeve: enter at a close above SMA200 and at or below 85% of the highest

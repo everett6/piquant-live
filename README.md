@@ -92,6 +92,8 @@ such.
 - Ledger name `E4_btc_eth_4clock_2x` (PREREG30, passed by small margins): P1's rule decided on four clocks
   (daily closes at 00, 06, 12 and 18 UTC), a quarter of each sleeve per clock. It steps every 6 hours, so its
   records are 6-hour bars, not days.
+- Ledger name `QB_btc_eth_tunnel_2x` (PREREG34, passed by small margins): P1's rule with the size scaled by how
+  far the close is above SMA50, measured in typical daily moves. Near the line it holds almost nothing.
 
 ### T1 / T2: forward test of the BTC trend filter (PREREG6)
 - **T1:** 1x BTC spot when the last daily close > SMA50, else flat (2 bps fee + 1 bp slippage).

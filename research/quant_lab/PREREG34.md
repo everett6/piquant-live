@@ -120,3 +120,5 @@ E4 and P1 reproduced exactly (+8.61 / −82.3% / 1.499 and +8.50 / −83.9% / 1.
 - **Per the pass rule,** either can join the paper ledger beside P1, paper only. QB is the one worth tracking; QA
   adds almost nothing over the E4 ledger already running. That needs a Go change and a Pi deploy, which the owner
   is asked for first. Trials charged: 762.
+- **Added to the paper ledger on 2026-11-14 UTC** at the owner's request: `QB_btc_eth_tunnel_2x`, paper only, daily
+  (`internal/trend/trend.go`, `tunnelShare`). It starts flat at equity 1. QA was not added.
