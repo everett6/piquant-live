@@ -98,3 +98,19 @@ def test_costs_turnover_and_stress_funding_accounting():
     assert np.allclose(base - stress, held * 0.9e-4 * 6)
     one = S.clock_held(b6, 0)
     assert turn.sum() <= one.diff().abs().fillna(one.abs()).sum() * 1.5  # the split does not multiply trading
+
+
+def test_grid_returns_equal_lab_on_a_full_grid_and_ignore_a_missing_second_bar():
+    b6 = S.bars_6h(minute_frame(11, mu=0.0006))
+    held = S.split_held(b6)
+    dec = held.shift(-1).fillna(held.iloc[-1]).to_numpy()
+    for costs in (lab.US_FUTURES, lab.US_FUTURES_STRESS):
+        assert np.allclose(S.grid_returns(b6, held, costs), lab.position_returns(b6, dec, costs))
+    gap = b6.drop(b6.index[1])  # first two bars now 12 hours apart, as in the real ETH data
+    hg = pd.Series(1.0, index=gap.index)
+    r = S.grid_returns(gap, hg, lab.US_FUTURES_STRESS)
+    expect = gap["c"].pct_change().fillna(0) - 1e-4 * 6
+    expect.iloc[0] -= 7e-4
+    assert np.allclose(r, expect)  # funding stays at 6 hours per bar
+    wrong = lab.position_returns(gap, np.ones(len(gap)), lab.US_FUTURES_STRESS)
+    assert not np.allclose(wrong.iloc[2:], expect.iloc[2:])  # lab would charge 12 hours per bar here

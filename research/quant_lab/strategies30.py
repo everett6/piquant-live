@@ -40,7 +40,17 @@ def split_held(b6: pd.DataFrame, clocks=CLOCKS, lev: float = LEV, n: int = SMA_N
     return sum(clock_held(b6, h, lev, n) for h in clocks) / len(clocks)
 
 
+BAR_H = 6.0
+
+
 def grid_returns(b6: pd.DataFrame, held: pd.Series, costs: lab.Costs) -> pd.Series:
-    """6-hour returns of a position series given as 'held over this bar' (lab.position_returns' formula)."""
-    dec = held.shift(-1).fillna(held.iloc[-1] if len(held) else 0.0).to_numpy()  # decided at the previous bar's close
-    return lab.position_returns(b6, dec, costs)
+    """6-hour returns of a position series given as 'held over this bar': lab.position_returns' formula with the
+    bar length fixed at 6 hours. lab infers the bar length from the first two rows, which is wrong when the data
+    starts with a missing bar (ETH's first two 6-hour bars are 12 hours apart)."""
+    h = held.reindex(b6.index).fillna(0.0).to_numpy(dtype=float)
+    if not costs.can_short:
+        h = np.clip(h, 0, None)
+    ret = b6["c"].pct_change().fillna(0).to_numpy()
+    turnover = np.abs(np.diff(np.concatenate([[0.0], h])))
+    r = h * ret - turnover * (costs.taker_bps + costs.slip_bps) * 1e-4 - np.abs(h) * costs.funding_bps_h * 1e-4 * BAR_H
+    return pd.Series(r, index=b6.index)
