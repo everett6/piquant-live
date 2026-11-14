@@ -1,0 +1,65 @@
+# Pre-registration 32: a stablecoin supply gate on P1's leverage (committed before the supply data is downloaded or any round-32 code reads real data)
+
+Approved by the owner on 2026-11-13 ("Yes, stablecoin gate"). Only synthetic tests had run when this was committed.
+
+## Why
+The owner asked for ways to beat the market that need no order-book data. PREREG31 tried the first non-price gate
+(funding) and it was wrong in sign. This is the second and last idea of that kind on the list.
+
+**The idea:** the total supply of dollar stablecoins is the amount of dollars sitting inside crypto. When it grows,
+new money is arriving. When it shrinks, money is leaving. The gate holds each sleeve at 1x instead of 2x while the
+supply has shrunk over the last 30 days.
+
+## Limits stated before the run
+- **What I already know.** It is public knowledge that stablecoin supply grew through 2020–21, peaked around
+  May 2022, shrank until late 2023 and has grown since. So I expect the gate to be on from about mid-2022 to late
+  2023. P1's drawdown began in November 2021, six months earlier. I have not seen the series against P1's returns.
+- **PREREG31 lowered my confidence** in "cut leverage on a non-price signal". There the signal marked strength, not
+  danger.
+- **The series is not point-in-time.** DefiLlama publishes today's version of history. Past values may have been
+  revised, and coins added later are back-filled. The signal is lagged one day; revisions cannot be undone.
+- **One slow signal.** A 30-day supply change switches a handful of times in the whole window. Few switches means
+  the result rests on a few episodes.
+
+## Data
+- **Supply:** DefiLlama `stablecoins.llama.fi/stablecoincharts/all` (free, no key), total circulating USD-pegged
+  supply, daily. Downloaded once to `~/piquant-data/stablecoins/`, not committed.
+- **Prices and P1:** as PREREG13/23–31.
+- **Window:** 2019-01-01 to 2026-10-31. If the supply series gives no signal by 2019-01-01, the window starts on the
+  first day of the first month that has one for the whole month; that is the only permitted change.
+- Live Pi tick data is not used.
+
+## Rule (1 fixed trial, 757 + 1 = 758; nothing is searched)
+At each daily close t, with `U_d` the supply stamped on day d:
+
+    growth_t = U_{t−1} / U_{t−31} − 1
+
+P1's position is computed as always. If it is 2x and `growth_t ≤ 0`, the sleeve holds 1x. If P1 is flat it stays
+flat. The gate never raises a position. A day with no signal is not gated. Both coins use the same signal.
+
+**H1** is this rule. 30 days, the zero threshold, the one-day lag and the 1x floor are fixed here. Costs are P1's:
+6 + 1 bps per unit of turnover, funding 0.1 bp/h; stress 1 bp/h.
+
+## Pass rule (PREREG31's five checks; every comparator rebuilt in the same run on the same window)
+Let `L̄` be H1's average leverage on trend-on days, and "the line" the P1 rule run at constant `L̄`.
+1. **Bad markets:** mean bear-month return ≥ P1's + 3.0 points.
+2. **Beats the line on return:** geometric monthly return ≥ the line's.
+3. **Beats the line on drawdown:** max drawdown no worse than the line's.
+4. **Recent data:** period A (2025-07 on) geometric return > 0.
+5. **Stress:** geometric return at stress costs ≥ P1's at stress costs.
+
+**Also reported:** share of trend-on days gated per coin; `L̄`; the dates the gate switched; P1, 1x and 1.5x on the
+window; flat and bull months; 2022; worst day; mean next-day and next-7-day return on gated and ungated trend-on
+days.
+
+**If it passes:** it joins the paper ledger beside P1, paper only. **If it fails:** stablecoin supply as a leverage
+gate is closed, and with it non-price leverage gates on the daily core.
+
+## Run
+Once, after this file is pushed and the synthetic tests pass. The download happens after the push.
+
+## Prediction (written now)
+- The gate is on for 10–20% of trend-on days, almost all of them between mid-2022 and late 2023.
+- It misses the first half of P1's 2021–22 drawdown, and it halves the 2023 rally. The drawdown barely changes.
+- Bear months improve by less than 1 point. Checks 1 and 3 fail; check 2 probably fails.
+- Chance of a pass: about 1 in 6.
