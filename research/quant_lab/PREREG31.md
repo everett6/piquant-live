@@ -70,3 +70,43 @@ Once, after this file is pushed and the synthetic tests pass.
 - Both improve the drawdown by a few points and bear months by about 1 point. Check 1 (+3.0) fails for both.
 - Checks 2 and 3 are the real question: about even for G1, a little worse for G2.
 - Chance of a pass: about 1 in 4 for G1, 1 in 6 for G2.
+
+## Result (run once, 2026-11-13): both FAIL. High funding came before higher returns, not lower.
+
+Window 2021-01-01 to 2026-10-31: 70 months (23 bear, 16 flat, 31 bull).
+
+| | %/mo | max DD | Sharpe | worst day | bear | flat | bull | 2022 | A | stress | checks failed |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| G1 fixed level (average 1.81x) | +3.70 | −82.6% | 0.97 | −24.9% | −9.7 | −4.9 | +24.1 | −9.57 | +3.32 | −2.56 | 1, 3 |
+| the line at 1.81x | +3.56 | −80.5% | 0.93 | −29.5% | −10.1 | −3.7 | +23.2 | −8.56 | +3.15 | −2.69 | – |
+| G2 relative level (average 1.70x) | +2.48 | −83.9% | 0.77 | −27.6% | −10.7 | −4.1 | +21.2 | −9.57 | +3.71 | −3.33 | 1, 2, 3, 5 |
+| the line at 1.70x | +3.49 | −78.1% | 0.93 | −27.6% | −9.5 | −3.4 | +21.7 | −7.95 | +3.02 | −2.38 | – |
+| P1 (2x) | +3.64 | −83.9% | 0.93 | −32.5% | −11.2 | −4.1 | +25.6 | −9.57 | +3.32 | −3.24 | – |
+| 1.5x | +3.30 | −73.2% | 0.93 | −24.4% | −8.3 | −2.9 | +19.1 | −6.91 | +2.78 | −1.88 | – |
+| 1x | +2.57 | −56.9% | 0.93 | −16.2% | −5.5 | −1.8 | +12.6 | −4.42 | +2.05 | −0.89 | – |
+
+Bear months needed −8.2 or better; G1 reached −9.7 and G2 −10.7.
+
+**What the gate saw** (trend-on days only, mean return of the coin after the day):
+
+| | days gated | next day, gated / not | next 7 days, gated / not |
+|---|---|---|---|
+| G1 BTC | 17% | +0.25% / +0.19% | +1.2% / +1.1% |
+| G1 ETH | 20% | +0.36% / +0.26% | +3.1% / +1.3% |
+| G2 BTC | 29% | +0.37% / +0.13% | +2.1% / +0.8% |
+| G2 ETH | 30% | +0.50% / +0.18% | +3.1% / +1.0% |
+
+**Reading:**
+- The idea was wrong in sign. Days with high funding were followed by higher returns than other trend-on days, in
+  all eight cells. High funding marked the strong part of a rally, not its end. Cutting leverage there gave up the
+  best days.
+- The gate was never on in 2022: both variants' 2022 is P1's −9.57 exactly. The drawdown and most bear months came
+  when funding was low, so the gate could not touch them.
+- G1's one real effect was the worst day (2021-05-19): −32.5% became −24.9%. Its return and Sharpe edge over P1
+  (+0.06 points, 0.97 against 0.93) is too small to mean anything, and it failed the drawdown check against the line.
+- G2, with the lower and adaptive threshold, cut more of the good days and lost 1.2 points a month.
+- The prediction held on check 1 and on the share of days gated. I expected checks 2 and 3 to be a coin flip for
+  G1; it split them.
+- **Not to be tested next:** the opposite rule (more leverage when funding is high) was suggested by this result on
+  this data. Running it here would be fitting to what was just seen. It could only be judged on new data.
+- **Funding as a leverage gate is closed.** Trials charged: 757. P1 stays the live paper variant.
