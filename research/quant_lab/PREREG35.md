@@ -137,3 +137,5 @@ places. Market-wide gates on P1's leverage are closed.
   passed or nearly passed. They share one data set and one base rule, so they are not independent confirmations.
   None changes the size of the problem: drawdowns are still −76% to −81% and bear months −5% to −6%.
 - **Per the pass rule,** QD can join the paper ledger, paper only, asked first. Trials charged: 765.
+- **Added to the paper ledger on 2026-11-14 UTC** at the owner's request: `QD_btc_eth_coherence_2x`, paper only, daily
+  (`internal/trend/trend.go`, `coherenceShare`). It starts flat at equity 1. QC and QE were not added.

@@ -29,6 +29,7 @@ type Variant struct {
 	Pullback    bool    `json:"pullback,omitempty"`   // PREREG16 D2: 15% pullback above SMA200; exit > SMA20 or day 10
 	Clocks      bool    `json:"clocks,omitempty"`     // PREREG30 E4: four daily clocks on 6-hour bars (stepped by AdvanceGrid)
 	Tunnel      bool    `json:"tunnel,omitempty"`     // PREREG34 QB: size = Lev * (1 - exp(-2 ln(close/SMA) / sigma30)) above the SMA
+	Coherence   bool    `json:"coherence,omitempty"`  // PREREG35 QD: size = Lev * (1 - exp(-age / 5)), age = closes in a row above the SMA
 }
 
 // Variants are frozen by PREREG6.
@@ -57,6 +58,9 @@ var Variants = []Variant{
 	// PREREG34 QB tunnelling (passed 2026-11-13 by small margins: +8.55%/mo, drawdown -79.8%, Sharpe 1.516, bear months
 	// -6.2 against P1's +8.50, -83.9%, 1.489, -8.0; worse than P1 since 2023): P1's rule, sized by the gap above SMA50.
 	{Name: "QB_btc_eth_tunnel_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true, Tunnel: true},
+	// PREREG35 QD coherence time (passed 2026-11-13: +8.45%/mo, drawdown -76.5%, Sharpe 1.525, bear months -5.3
+	// against P1's +8.50, -83.9%, 1.489, -8.0; worse than P1 since 2023): P1's rule, ramped in with the trend's age.
+	{Name: "QD_btc_eth_coherence_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true, Coherence: true},
 	{Name: "PAPER50_btc_eth_0p2x", Lev: 0.2, FeeBps: 120, SlipBps: 5, SMA: 50, Pair: true, DailyStop: 0.02, KillDD: 0.05, Capital: 50},
 }
 
@@ -277,6 +281,9 @@ func (v Variant) sleeve(pos, bar float64, hist []Day) (ret, target float64) {
 				if v.Tunnel {
 					target = v.Lev * tunnelShare(hist, c, m)
 				}
+				if v.Coherence {
+					target = v.Lev * coherenceShare(hist, v.SMA)
+				}
 			}
 		default:
 			if f, ok2 := sma(hist, v.ExitSMA); ok2 {
@@ -312,6 +319,22 @@ func tunnelShare(hist []Day, c, m float64) float64 {
 		return 0
 	}
 	return 1 - math.Exp(-2*math.Log(c/m)/math.Sqrt(v))
+}
+
+// coherenceShare is PREREG35 QD's size as a share of full leverage: 1 - exp(-age / 5), with age the number of
+// consecutive closes above their own SMA(n), the latest included (strategies35.coherence_positions). The count stops
+// at 200 closes, where the share is 1 to 17 decimal places, so the stored history is always long enough.
+func coherenceShare(hist []Day, n int) float64 {
+	const tau, maxAge = 5.0, 200
+	age := 0
+	for k := len(hist); k >= n && age < maxAge; k-- {
+		m, ok := sma(hist[:k], n)
+		if !ok || hist[k-1].Close <= m {
+			break
+		}
+		age++
+	}
+	return 1 - math.Exp(-float64(age)/tau)
 }
 
 // pullbackTarget is PREREG16 D2 for one sleeve: enter at a close above SMA200 and at or below 85% of the highest

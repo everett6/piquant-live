@@ -94,6 +94,8 @@ such.
   records are 6-hour bars, not days.
 - Ledger name `QB_btc_eth_tunnel_2x` (PREREG34, passed by small margins): P1's rule with the size scaled by how
   far the close is above SMA50, measured in typical daily moves. Near the line it holds almost nothing.
+- Ledger name `QD_btc_eth_coherence_2x` (PREREG35, passed): P1's rule ramped in with the trend's age,
+  2x × (1 − e^(−days above SMA50 / 5)). Day 1 holds 0.36x, day 10 holds 1.73x.
 
 ### T1 / T2: forward test of the BTC trend filter (PREREG6)
 - **T1:** 1x BTC spot when the last daily close > SMA50, else flat (2 bps fee + 1 bp slippage).

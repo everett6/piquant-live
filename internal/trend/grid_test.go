@@ -174,3 +174,43 @@ func TestTunnelShareMatchesTheFormulaAndTheSleeveUsesIt(t *testing.T) {
 		t.Fatalf("below the SMA: got %v", target)
 	}
 }
+
+func TestCoherenceShareRampsWithTrendAgeAndResets(t *testing.T) {
+	var hist []Day
+	for i := 0; i < 60; i++ { // flat, then a rise: the close first exceeds its SMA50 on the first rising day
+		hist = append(hist, Day{Date: "d", Close: 100})
+	}
+	p := 100.0
+	for age := 1; age <= 12; age++ {
+		p *= 1.01
+		hist = append(hist, Day{Date: "d", Close: p})
+		want := 1 - math.Exp(-float64(age)/5)
+		if got := coherenceShare(hist, 50); math.Abs(got-want) > 1e-12 {
+			t.Fatalf("age %d: got %v want %v", age, got, want)
+		}
+	}
+	qd := Variant{Lev: 2, SMA: 50, Coherence: true}
+	if _, target := qd.sleeve(0, 0, hist); math.Abs(target-2*(1-math.Exp(-12.0/5))) > 1e-12 {
+		t.Fatalf("sleeve target %v", target)
+	}
+	hist = append(hist, Day{Date: "d", Close: 1}) // one close below the SMA resets the age
+	if coherenceShare(hist, 50) != 0 {
+		t.Fatal("below the SMA the share is 0")
+	}
+	if _, target := qd.sleeve(2, 0, hist); target != 0 {
+		t.Fatalf("below the SMA the sleeve is flat, got %v", target)
+	}
+	if coherenceShare(hist[:40], 50) != 0 {
+		t.Fatal("no SMA, no size")
+	}
+	// a long trend saturates at full size and the 200-close cap does not matter
+	long := make([]Day, 0, 400)
+	q := 100.0
+	for i := 0; i < 400; i++ {
+		q *= 1.002
+		long = append(long, Day{Date: "d", Close: q})
+	}
+	if got := coherenceShare(long, 50); got != 1 {
+		t.Fatalf("long trend: got %v", got)
+	}
+}
