@@ -11,7 +11,7 @@ PiQuant is a personal crypto trading system with two parts:
 > backtests, and they come with large drawdowns.
 
 **Goal and where it stands (2026-11-13):** the owner's target is 7% a month, with drawdowns under 25%.
-- 34 pre-registrations and **762 charged trials** have found one strategy that reaches 7% a month in backtests:
+- 35 pre-registrations and **765 charged trials** have found one strategy that reaches 7% a month in backtests:
   P1, the BTC+ETH trend core at 2x. Its maximum drawdown is −84%.
 - One market-neutral strategy passed: C1, funding carry, at about +5–8% a year with a −1% drawdown.
 - Every attempt to cut P1's bear-market losses without cutting more profit has failed.
@@ -132,7 +132,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 2. **Run once.** The real run happens a single time, after synthetic tests pass. Failures are recorded with their
    numbers.
 3. **No variants of a failed test.** A failed idea is closed. Re-running it with different parameters is not allowed.
-4. **Count every trial.** A running trial counter (now **762**) is used for multiple-testing corrections.
+4. **Count every trial.** A running trial counter (now **765**) is used for multiple-testing corrections.
 5. **Never hand-edit results.** `results/roundNN.json` files are written only by the run scripts.
 
 **Standard daily-strategy setup** (PREREG7/11–16/23–25):
@@ -205,6 +205,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 | 32 | Stablecoin supply gate: P1 cut from 2x to 1x while total stablecoin supply shrinks over 30 days (2019-01 on) | **FAIL** | +5.34%/mo, DD −79.2%, bear −12.6 against P1 +5.74, −83.9%, −12.5 and constant 1.8x +5.50, −80.3%. Right in sign but the gated days still had positive returns; off when the 2021–22 drawdown began. |
 | 33 | Funding carry on P1's idle sleeves (immediate; after 5 flat closes), 2020-01 on | **FAIL** (both) | Carry leg −2.2% and +0.02% in total over 6.8 years. Funding on idle days was 4% a year against 17–22% on trend-on days, and switching costs ate it. T-bills on idle sleeves add +0.12%/mo for free. |
 | 34 | Two quantum-shaped sizing rules: **QA interference** (2x × squared share of the four clocks on) and **QB tunnelling** (2x × (1 − e^(−2·gap/σ)) above SMA50) | **PASS** (both), small margins | QB +8.55%/mo, DD −79.8%, Sharpe 1.516, bear −6.2 against P1 +8.50, −83.9%, 1.489, −8.0, but worse than P1 since 2023. QA +8.59, −81.4%, 1.501 against the split's +8.61, −82.3%, 1.499: inside the noise. |
+| 35 | Three more quantum-shaped sizing rules on P1: **QC entanglement** (1x unless the other coin also trends), **QD coherence time** (2x × (1 − e^(−trend age/5 days))), **QE entropy gate** (1x while the 16-coin correlation entropy is low) | **QD PASS**; QC fail (one check); QE fail | QD +8.45%/mo, DD −76.5%, Sharpe 1.525, bear −5.3 against P1 +8.50, −83.9%, 1.489, −8.0, but worse than P1 since 2023. QC +9.10, −80.9%, 1.587: failed the drawdown margin by 0.8 points. QE lost to constant leverage on four checks. |
 
 Full rules, numbers and readings are in `research/quant_lab/PREREGnn.md`; machine output is in
 `research/quant_lab/results/`.

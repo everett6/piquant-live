@@ -90,3 +90,50 @@ Once, after this file is pushed and the synthetic tests pass.
   of strong breakouts. Return check is the risk. Chance of a pass: about 1 in 4.
 - QE: gated about 20% of days by construction. As with funding and stablecoins, I expect the signal to arrive with
   the fall and not before it. Chance of a pass: about 1 in 8.
+
+## Result (run once, 2026-11-13): QD PASSES all six checks. QC FAILS one (drawdown margin). QE FAILS five.
+
+P1 reproduced exactly on 2016–2026 (+8.50 / −83.9% / 1.489). QE's window starts 2020-08-01 (first signal
+2019-08-26, 16 coins by the end).
+
+| | size vs P1 | %/mo | max DD | Sharpe | bear | flat | bull | 2022 | D | C | B | discovery | A | stress |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **QD coherence time** | 0.872 | +8.45 | −76.5% | 1.525 | −5.3 | −3.3 | +33.9 | −6.65 | +28.73 | +5.92 | +2.80 | +4.96 | +2.05 | +2.05 |
+| QD's line | 0.872 | +7.84 | −79.0% | 1.489 | −7.1 | −3.3 | +32.5 | −8.18 | +24.78 | +5.94 | +1.25 | +5.70 | +3.07 | +1.48 |
+| **QC entanglement** | 0.922 | +9.10 | −80.9% | 1.587 | −5.5 | −3.9 | +36.6 | −9.20 | +27.13 | +8.56 | +1.53 | +6.04 | +3.20 | +2.32 |
+| QC's line | 0.922 | +8.11 | −81.1% | 1.489 | −7.4 | −3.5 | +34.7 | −8.72 | +26.05 | +6.08 | +1.09 | +5.92 | +3.18 | +1.38 |
+| P1 | 1 | +8.50 | −83.9% | 1.489 | −8.0 | −3.9 | +38.2 | −9.57 | +27.99 | +6.24 | +0.77 | +6.25 | +3.32 | +1.19 |
+| QB tunnelling (PREREG34, for scale) | 0.929 | +8.55 | −79.8% | 1.516 | −6.2 | −4.0 | +35.8 | −8.21 | +28.05 | +6.15 | +2.54 | +5.59 | +2.36 | +1.74 |
+| **QE entropy gate** (2020-08 on) | 0.913 | +4.59 | −84.0% | 1.064 | −11.6 | −2.8 | +26.8 | −8.74 | – | – | −0.43 | +6.24 | +3.74 | −1.89 |
+| QE's line | 0.913 | +4.71 | −80.7% | 1.091 | −11.2 | −3.7 | +26.8 | −8.63 | – | – | +1.11 | +5.89 | +3.16 | −1.77 |
+| P1 on QE's window | 1 | +4.88 | −83.9% | 1.091 | −12.3 | −4.1 | +29.4 | −9.57 | – | – | +0.77 | +6.25 | +3.32 | −2.21 |
+
+**QD, pass.** Checks: return +0.61 over its line (0.10 needed); drawdown 2.5 points better (1.0 needed); Sharpe
++0.036 over P1 (0.02 needed); bear −5.3 against −7.1; A positive; stress +2.05 against +1.48.
+- Mean next-day return by trend age: BTC +0.24% (days 1–5), +0.41% (6–10), +0.28% (11–20), +0.37% (21+); ETH
+  +0.04%, +0.50%, +0.62%, +0.55%. The first five days are the weak ones, clearly for ETH and mildly for BTC.
+- Turnover fell to 0.061/day from P1's 0.099: the ramp enters in small steps and a whipsaw exits a small position.
+- **Against it:** worse than P1 in the two latest periods (discovery +4.96 against +6.25, A +2.05 against +3.32),
+  the same pattern as QB. The whole gain is 2016–17 and 2021–22.
+
+**QC, fail by one check.** It beat its line on return by +0.99, Sharpe by +0.098, bear months by 1.9 and stress, and
+even beat P1's return outright (+9.10 against +8.50) at 8% less size. Its drawdown was −80.9% against the line's
+−81.1%: 0.2 points better where 1.0 was required. A coin was on without the other on 13–18% of trend-on days.
+- The registered rule stands: QC is not adopted. Its return is the best of any variant tested here, and most of the
+  gap to P1 is period C (2018–20, +8.56 against +6.24). That is worth knowing and is not a pass.
+
+**QE, fail.** Gated 28% of days (0% of 2020, 39% of 2022, 2% of 2023, 42–50% of 2024–25). It lost to its line on
+return, drawdown, bear months and stress. As with funding and stablecoin supply, the signal was on in the wrong
+places. Market-wide gates on P1's leverage are closed.
+
+**Reading:**
+- Three rules now point the same way (QB by distance, QD by age, the clocks by agreement): P1 is paid least just
+  after it enters. QB and QD pass on that; they are probably two measurements of one effect.
+- QC is a different effect (confirmation by the other coin) and was the strongest on return, but did nothing for
+  the drawdown.
+- **Prediction check:** QD 1 in 4 (passed), QC 1 in 6 (failed, though far closer than I expected and on the check I
+  did not flag), QE 1 in 8 (failed).
+- **Caution on the count:** five sizing variants of one base rule have now been tried in two rounds, and three
+  passed or nearly passed. They share one data set and one base rule, so they are not independent confirmations.
+  None changes the size of the problem: drawdowns are still −76% to −81% and bear months −5% to −6%.
+- **Per the pass rule,** QD can join the paper ledger, paper only, asked first. Trials charged: 765.
