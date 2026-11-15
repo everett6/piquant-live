@@ -11,7 +11,7 @@ PiQuant is a personal crypto trading system with two parts:
 > backtests, and they come with large drawdowns.
 
 **Goal and where it stands (2026-11-13):** the owner's target is 7% a month, with drawdowns under 25%.
-- 40 pre-registrations and **775 charged trials** have found one strategy that reaches 7% a month in backtests:
+- 41 pre-registrations and **778 charged trials** have found one strategy that reaches 7% a month in backtests:
   P1, the BTC+ETH trend core at 2x. Its maximum drawdown is −84%.
 - One market-neutral strategy passed: C1, funding carry, at about +5–8% a year with a −1% drawdown.
 - Every attempt to cut P1's bear-market losses without cutting more profit has failed.
@@ -138,7 +138,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 2. **Run once.** The real run happens a single time, after synthetic tests pass. Failures are recorded with their
    numbers.
 3. **No variants of a failed test.** A failed idea is closed. Re-running it with different parameters is not allowed.
-4. **Count every trial.** A running trial counter (now **775**) is used for multiple-testing corrections.
+4. **Count every trial.** A running trial counter (now **778**) is used for multiple-testing corrections.
 5. **Never hand-edit results.** `results/roundNN.json` files are written only by the run scripts.
 
 **Standard daily-strategy setup** (PREREG7/11–16/23–25):
@@ -217,6 +217,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 | 38 | Ping-adapted bull accelerators on `S36_qd_carry_blend`: `Q38_kuramoto_booster` (`1.65x` when 16-coin breadth `>= 0.70`) & `Q38_bull_leader_blend` (`40% Safe-QD + 30% BTC-gated Top-4 Leaders + 30% C1`) | **FAIL** (both on strict bull margin) | `Q38_kuramoto_booster` `+2.37%/mo`, DD `−35.5%`, Sharpe `0.952`. `Q38_bull_leader_blend` beat `S36` on geo (`+2.85%` vs `+2.64%`), Sharpe (`1.377` vs `1.285`), DSR (`0.663`), bull (`+8.7%` vs `+8.0%`), stress (`+1.06%`), DD `−30.0%` (failed `+2.0%/mo` bull margin); US Spot check **`+3.14%/mo`, DD `−29.6%`, Sharpe `1.493`, DSR `0.766`**. |
 | 39 | Quiet-bull vol-calm scaling (`0.50–1.35x` inv 20d vol) on `80% QD + 20% C1` (`Q39_volcalm_qd_carry`) & `40% QD + 40% Leaders + 20% C1` (`Q39_volcalm_leader_blend`) | **FAIL** (both) | `Q39_volcalm_qd_carry` `+2.49%/mo`, DD `−30.1%`, Sharpe `1.261` (clipped bull breakouts). `Q39_volcalm_leader_blend` `+2.95%/mo`, DD `−32.6%`, Sharpe `1.362`, bull `+9.3%`, stress `+1.12%`, failed `A = −0.13%/mo` (Spot+margin `+3.28%/mo`, `A +0.16%`, Sharpe `1.482`). |
 | 40 | Multi-clock `6h` `Safe-QD + C1` (`Q40_6h_qd_carry`) & fast-exit `R3 × QD + C1` (`Q40_r3_fastexit_blend`) | **FAIL** (both) | `Q40_6h_qd_carry` `+2.60%/mo`, DD `−27.4%`, Sharpe `1.282`, bear `−2.2%`, stress `+0.81%` (matches `S36`). `Q40_r3_fastexit_blend` `+2.10%/mo`, DD **`−21.0%`**, bear **`−0.7%`**, Sharpe `1.254` (gave up bull return). |
+| 41 | `91`-day `16`-coin `1s` L2 (`45d` disc / `46d` hold): `Q41_l2_4h_flow_rotation`, `Q41_l2_quantum_walk` (`expm(-i tau H)`), & `Q41_l2_smart_exec` (`15m` passive vs `00:00` MOC) | **FAIL** (all 3) | Discovery bull: Flow `+11.57%` (`Sharpe 3.91`), QWalk `+12.89%` (`Sharpe 3.29`) vs BH `+36.01%`; Holdout bear (`BH −31.12%`): Flow `−10.73%`, QWalk `−18.30%` (`EMA_18` 3d gate caught bear bounces). Execution: `00:00` MOC beat `15m` passive slicing (`BTC+ETH` MOC `0.023 bps` vs Smart `0.408 bps` adverse drift). |
 
 Full rules, numbers and readings are in `research/quant_lab/PREREGnn.md`; machine output is in
 `research/quant_lab/results/`.
@@ -315,6 +316,8 @@ All three scripts take `PI=everett@<ip>` if `raspberrypi.local` doesn't resolve.
 piquant trend --dir ~/piquant-data/trend --report --blend --ping
 piquant ping
 ```
+
+The live web dashboard also exposes `/api/paper/trend-blend` (rendered in the Paper Trading tab), and `internal/execution/schwab.go` provides updated Charles Schwab Developer API v1 OAuth2/quotes/ETF rebalance preview helpers (`IBIT`/`ETHA`/`SGOV`).
 
 **Carry paper ledger:**
 

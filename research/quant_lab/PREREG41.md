@@ -59,3 +59,21 @@
 - **`Q41_l2_4h_flow_rotation` & `Q41_l2_quantum_walk`:** `4h` holding horizons cut `PREREG22`'s `14 bps` turnover drag dramatically, but `91` days (`Aug–Nov 2026`) is a short sample heavily influenced by macro BTC trend (`Nov` `-10%` dip). `Q41_l2_quantum_walk` has a fair chance (`~1 in 3`) of beating `Buy&Hold` on Holdout Sharpe and max drawdown (`cash exit`), while clearing `Sharpe >= 1.0` in BOTH Discovery and Holdout under `US_SPOT` is roughly `~1 in 4`.
 - **`Q41_l2_smart_exec`:** At `51–160 ms` RTT over a `15-minute` (`4x` slice) post-close window with trade-through confirmation, `BTC+ETH` L2 top-of-book spreads tighten quickly after `00:00:05 UTC` funding/rollover volatility settles. Waiting patiently with favorable OBI3 tilt should save `~0.4–1.5 bps` across all 16 coins (`~0.2–0.5 bps` on `BTC+ETH` where spread is 1 tick, larger on alts) cleanly (`~3 in 4` chance to PASS).
 - One run only after synthetic unit tests pass.
+
+## Result (run once, 2026-11-15, `172.4s`): ALL 3 FAIL (`PREREG41` closed, trials `775 -> 778`)
+
+Evaluated across `91` frozen days (`2026-08-15..2026-11-13`, `546 × 4h` bars, `16` coins in `~/piquant-collect/historical_l2`):
+- **Discovery (`2026-08-15..2026-09-28`, `45d`, bull leg `EW_BuyHold +36.01%`, Sharpe `4.895`):**
+  - `Q41_l2_4h_flow_rotation`: `US_SPOT` **`+11.57%`**, DD `−6.49%`, Sharpe **`3.906`**, `87/233` active bars (`US_FUT` `+8.31%`, Sharpe `2.882`).
+  - `Q41_l2_quantum_walk`: `US_SPOT` **`+12.89%`**, DD `−9.69%`, Sharpe **`3.294`**, `129/233` active bars (`US_FUT` `+6.68%`, Sharpe `1.842`).
+- **Holdout (`2026-09-29..2026-11-13`, `46d`, bear drop `EW_BuyHold −31.12%`, DD `−32.93%`, Sharpe `−4.671`):**
+  - `Q41_l2_4h_flow_rotation` (**FAIL** checks `1, 2, 4`): `US_SPOT` **`−10.73%`**, DD `−10.73%`, Sharpe `−6.519`, `49/276` active bars (`US_FUT` `−12.23%`).
+  - `Q41_l2_quantum_walk` (**FAIL** checks `1, 2, 4`): `US_SPOT` **`−18.30%`**, DD `−18.51%`, Sharpe `−6.496`, `78/276` active bars (`US_FUT` `−20.54%`).
+- **`Q41_l2_smart_exec` (`00:00:00..00:15:00` 4x post-only slices vs `00:00:01` MOC, **FAIL** checks `1, 2, 3`):**
+  - **Discovery `16`-coin pooled (`n=1,408`):** MOC `1.178 bps` vs Smart `1.602 bps` (`−0.425 bps` saved, `t = −0.665`, `81.8%` passive fill).
+  - **Holdout `16`-coin pooled (`n=1,472`):** MOC `1.013 bps` vs Smart `1.249 bps` (`−0.236 bps` saved, `t = −0.484`, `81.5%` passive fill).
+  - **Holdout `BTC+ETH` (`n=184`):** MOC `0.023 bps` vs Smart `0.408 bps` (`−0.385 bps` saved, `t = −0.570`, `90.4%` passive fill).
+
+**Reading:**
+1. **`4h` L2 flow & quantum-walk strategies fail out-of-sample bear defense:** Both earned `+11.6%` to `+12.9%` (`Sharpe > 3.2`) in Discovery's bull leg and cut Holdout drawdown cleanly vs buy-and-hold (`−10.7%` and `−18.5%` vs `−32.9%`), **but a `3-day` `EMA_18` (`4h`) gate enters dead-cat L2 rallies inside a `-31%` bear regime** — confirming why daily `SMA50` (`S36_qd_carry_blend`) remains structurally superior.
+2. **Tight L2 books punish `15m` passive execution drift:** On `BTC+ETH`, the `00:00 UTC` top-of-book half-spread is only `0.014–0.023 bps`, while waiting 15 minutes for passive queue fills incurs `~0.41 bps` implementation shortfall from adverse selection and chase risk on unfilled slices. Passive limit slicing only makes sense when an exchange's maker-vs-taker fee discount exceeds `~1–2 bps` (e.g., US Spot taker vs maker tiers), not to reduce `1`-tick mid-price drift. `PREREG41` closed (`775 -> 778`).
