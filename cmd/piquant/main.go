@@ -82,6 +82,8 @@ func main() {
 		err = runTrend(args)
 	case "news":
 		err = runNews(ctx, args)
+	case "ping":
+		err = runPing(ctx, args)
 	case "version", "-v", "--version":
 		printVersion()
 	case "help", "-h", "--help":
@@ -122,6 +124,7 @@ func usage() {
   piquant trend       PREREG6 forward paper test of the SMA50 trend filter (--once, --report)
   piquant extract     score stored headlines with a local LLM (Ollama)
   piquant news        macro & micro news intelligence oracle with exploit defense
+  piquant ping        measure venue TCP/HTTP ping and compute latency-safe execution plan
   piquant version     print build information
 
 Run "piquant <command> -h" for the options of one command.

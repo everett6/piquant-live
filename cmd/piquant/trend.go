@@ -12,7 +12,9 @@ import (
 	"syscall"
 	"time"
 
+	"piquant-live/internal/carry"
 	"piquant-live/internal/collect"
+	"piquant-live/internal/execution"
 	"piquant-live/internal/paper"
 	"piquant-live/internal/trend"
 )
@@ -26,8 +28,12 @@ func runTrend(args []string) error {
 	fs := flag.NewFlagSet("trend", flag.ContinueOnError)
 	home, _ := os.UserHomeDir()
 	dir := fs.String("dir", filepath.Join(home, "piquant-trend"), "state directory")
+	carryDir := fs.String("carry-dir", filepath.Join(home, "piquant-collect", "carry"), "carry state directory for S36 blend")
+	dtb3Path := fs.String("dtb3", filepath.Join(home, "piquant-data", "macro", "DTB3.csv"), "FRED DTB3 CSV path")
 	once := fs.Bool("once", false, "advance once and exit")
 	report := fs.Bool("report", false, "print the scorecard and exit")
+	blend := fs.Bool("blend", false, "include S36_qd_carry_blend composite scorecard + ping execution plan")
+	pingSample := fs.Bool("ping", false, "measure live exchange ping for S36 execution guidance (only with --blend)")
 	reset := fs.String("reset", "", "restart one variant flat at equity 1 (e.g. after its kill switch) and exit")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -52,6 +58,9 @@ func runTrend(args []string) error {
 		if st == nil {
 			return fmt.Errorf("no state in %s", *dir)
 		}
+		if *blend {
+			return printTrendWithBlend(context.Background(), st, *carryDir, *dtb3Path, *pingSample)
+		}
 		return printTrend(st)
 	}
 	path := filepath.Join(*dir, "trend_state.json")
@@ -66,6 +75,10 @@ func runTrend(args []string) error {
 		st, err = advanceTrend(ctx, client, st, path)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "[TREND]", err)
+		} else if *blend {
+			if perr := printTrendWithBlend(ctx, st, *carryDir, *dtb3Path, *pingSample); perr != nil {
+				fmt.Fprintln(os.Stderr, "[TREND]", perr)
+			}
 		} else if perr := printTrend(st); perr != nil {
 			fmt.Fprintln(os.Stderr, "[TREND]", perr)
 		}
@@ -182,6 +195,40 @@ func runTrendCore(ctx context.Context, dir string, gate *paper.TrendGate) {
 
 func printTrend(st *trend.State) error {
 	b, err := json.MarshalIndent(st.Score(time.Now()), "", " ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(b))
+	return nil
+}
+
+func printTrendWithBlend(ctx context.Context, st *trend.State, carryDir, dtb3Path string, probePing bool) error {
+	var cs *carry.State
+	if loaded, err := carry.Load(filepath.Join(carryDir, "carry_state.json")); err == nil {
+		cs = loaded
+	}
+	rates, _ := trend.LoadDTB3Rates(dtb3Path)
+	var planPtr *execution.PingExecutionPlan
+	if probePing {
+		venues := execution.ProbeEndpoints(ctx, execution.DefaultEndpoints, 2, 3*time.Second)
+		p := execution.PlanForLatency(venues, time.Now().UTC())
+		planPtr = &p
+	}
+	var blends []trend.BlendSummary
+	if bs, ok := trend.ComputeS36Blend(st, cs, rates, "S36_safe_qd_spot_1x", "S36_qd_carry_blend_spot", planPtr); ok {
+		blends = append(blends, bs)
+	}
+	if bf, ok := trend.ComputeS36Blend(st, cs, rates, "S36_safe_qd_fut_1x", "S36_qd_carry_blend_fut", planPtr); ok {
+		blends = append(blends, bf)
+	}
+	payload := struct {
+		Scorecard []trend.Summary      `json:"scorecard"`
+		S36Blend  []trend.BlendSummary `json:"s36_qd_carry_blend,omitempty"`
+	}{
+		Scorecard: st.Score(time.Now()),
+		S36Blend:  blends,
+	}
+	b, err := json.MarshalIndent(payload, "", " ")
 	if err != nil {
 		return err
 	}

@@ -30,6 +30,9 @@ type Variant struct {
 	Clocks      bool    `json:"clocks,omitempty"`     // PREREG30 E4: four daily clocks on 6-hour bars (stepped by AdvanceGrid)
 	Tunnel      bool    `json:"tunnel,omitempty"`     // PREREG34 QB: size = Lev * (1 - exp(-2 ln(close/SMA) / sigma30)) above the SMA
 	Coherence   bool    `json:"coherence,omitempty"`  // PREREG35 QD: size = Lev * (1 - exp(-age / 5)), age = closes in a row above the SMA
+	TaperStart  float64 `json:"taper_start,omitempty"` // PREREG36: drawdown where soft taper starts (e.g. 0.10)
+	TaperFull   float64 `json:"taper_full,omitempty"`  // PREREG36: drawdown where soft taper reaches TaperFloor (e.g. 0.28)
+	TaperFloor  float64 `json:"taper_floor,omitempty"` // PREREG36: minimum leverage multiplier above TaperFull (e.g. 0.40)
 }
 
 // Variants are frozen by PREREG6.
@@ -61,6 +64,11 @@ var Variants = []Variant{
 	// PREREG35 QD coherence time (passed 2026-11-13: +8.45%/mo, drawdown -76.5%, Sharpe 1.525, bear months -5.3
 	// against P1's +8.50, -83.9%, 1.489, -8.0; worse than P1 since 2023): P1's rule, ramped in with the trend's age.
 	{Name: "QD_btc_eth_coherence_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true, Coherence: true},
+	// PREREG36 (PASS 5/5 on 70/30 carry blend): 1x Safe-QD (coherence trend with 10%->28% non-locking soft DD
+	// taper to 0.40 floor) tracked on both US spot (0 funding, 3 bps/side; standalone +3.20%/mo, DD -32.7%,
+	// Sharpe 1.224) and US futures (6+1 bps, 0.1 bp/h), and combined with 30% C1 carry + DTB3 in S36_qd_carry_blend.
+	{Name: "S36_safe_qd_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, Pair: true, Coherence: true, TaperStart: 0.10, TaperFull: 0.28, TaperFloor: 0.40},
+	{Name: "S36_safe_qd_fut_1x", Lev: 1, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true, Coherence: true, TaperStart: 0.10, TaperFull: 0.28, TaperFloor: 0.40},
 	{Name: "PAPER50_btc_eth_0p2x", Lev: 0.2, FeeBps: 120, SlipBps: 5, SMA: 50, Pair: true, DailyStop: 0.02, KillDD: 0.05, Capital: 50},
 }
 
@@ -383,6 +391,16 @@ func (l *Ledger) stepPair(date string, barB, barE float64, histB, histE []Day) {
 	} else if v.DailyStop > 0 && held <= -v.DailyStop {
 		tb, te = 0, 0 // daily loss stop: flat at this close, normal rule again from the next close
 		l.Stops++
+	} else if v.TaperFull > v.TaperStart {
+		eqPre := l.Equity * (1 + held)
+		peakPre := math.Max(l.Peak, eqPre)
+		ddPre := 0.0
+		if peakPre > 0 {
+			ddPre = 1 - eqPre/peakPre
+		}
+		m := softTaper(ddPre, v.TaperStart, v.TaperFull, v.TaperFloor)
+		tb *= m
+		te *= m
 	}
 	ret := held - 0.5*math.Abs(tb-l.Pos)*c - 0.5*math.Abs(te-l.PosAlt)*c
 	l.Equity *= 1 + ret
@@ -403,6 +421,17 @@ func (l *Ledger) stepPair(date string, barB, barE float64, histB, histE []Day) {
 	l.Pos, l.PosAlt = tb, te
 	l.Days = append(l.Days, DayRec{Date: date, Ret: ret, PosOut: 0.5*tb + 0.5*te, Equity: l.Equity,
 		PosB: tb, PosE: te, CloseB: histB[len(histB)-1].Close, CloseE: histE[len(histE)-1].Close})
+}
+
+func softTaper(dd, start, full, floor float64) float64 {
+	if full <= start || start <= 0 || dd <= start {
+		return 1
+	}
+	if dd >= full {
+		return floor
+	}
+	frac := (dd - start) / (full - start)
+	return 1 - (1-floor)*frac
 }
 
 // Reset restarts one variant flat at equity 1 (the manual restart after a kill switch).

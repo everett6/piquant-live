@@ -11,7 +11,7 @@ PiQuant is a personal crypto trading system with two parts:
 > backtests, and they come with large drawdowns.
 
 **Goal and where it stands (2026-11-13):** the owner's target is 7% a month, with drawdowns under 25%.
-- 35 pre-registrations and **765 charged trials** have found one strategy that reaches 7% a month in backtests:
+- 40 pre-registrations and **775 charged trials** have found one strategy that reaches 7% a month in backtests:
   P1, the BTC+ETH trend core at 2x. Its maximum drawdown is −84%.
 - One market-neutral strategy passed: C1, funding carry, at about +5–8% a year with a −1% drawdown.
 - Every attempt to cut P1's bear-market losses without cutting more profit has failed.
@@ -96,6 +96,10 @@ such.
   far the close is above SMA50, measured in typical daily moves. Near the line it holds almost nothing.
 - Ledger name `QD_btc_eth_coherence_2x` (PREREG35, passed): P1's rule ramped in with the trend's age,
   2x × (1 − e^(−days above SMA50 / 5)). Day 1 holds 0.36x, day 10 holds 1.73x.
+- Ledger names `S36_safe_qd_spot_1x` and `S36_safe_qd_fut_1x` (PREREG36, passed): 1x coherence with continuous
+  drawdown soft-taper (`10% -> 28%` peak-to-trough scaling down to a `40%` floor, never locking out).
+  `piquant trend --report --blend --ping` scores the combined `S36_qd_carry_blend` portfolio (70% Safe-QD +
+  idle `DTB3` interest + 30% `C1` carry) alongside live venue-latency execution guidance (`piquant ping`).
 
 ### T1 / T2: forward test of the BTC trend filter (PREREG6)
 - **T1:** 1x BTC spot when the last daily close > SMA50, else flat (2 bps fee + 1 bp slippage).
@@ -134,7 +138,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 2. **Run once.** The real run happens a single time, after synthetic tests pass. Failures are recorded with their
    numbers.
 3. **No variants of a failed test.** A failed idea is closed. Re-running it with different parameters is not allowed.
-4. **Count every trial.** A running trial counter (now **765**) is used for multiple-testing corrections.
+4. **Count every trial.** A running trial counter (now **775**) is used for multiple-testing corrections.
 5. **Never hand-edit results.** `results/roundNN.json` files are written only by the run scripts.
 
 **Standard daily-strategy setup** (PREREG7/11–16/23–25):
@@ -208,6 +212,11 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 | 33 | Funding carry on P1's idle sleeves (immediate; after 5 flat closes), 2020-01 on | **FAIL** (both) | Carry leg −2.2% and +0.02% in total over 6.8 years. Funding on idle days was 4% a year against 17–22% on trend-on days, and switching costs ate it. T-bills on idle sleeves add +0.12%/mo for free. |
 | 34 | Two quantum-shaped sizing rules: **QA interference** (2x × squared share of the four clocks on) and **QB tunnelling** (2x × (1 − e^(−2·gap/σ)) above SMA50) | **PASS** (both), small margins | QB +8.55%/mo, DD −79.8%, Sharpe 1.516, bear −6.2 against P1 +8.50, −83.9%, 1.489, −8.0, but worse than P1 since 2023. QA +8.59, −81.4%, 1.501 against the split's +8.61, −82.3%, 1.499: inside the noise. |
 | 35 | Three more quantum-shaped sizing rules on P1: **QC entanglement** (1x unless the other coin also trends), **QD coherence time** (2x × (1 − e^(−trend age/5 days))), **QE entropy gate** (1x while the 16-coin correlation entropy is low) | **QD PASS**; QC fail (one check); QE fail | QD +8.45%/mo, DD −76.5%, Sharpe 1.525, bear −5.3 against P1 +8.50, −83.9%, 1.489, −8.0, but worse than P1 since 2023. QC +9.10, −80.9%, 1.587: failed the drawdown margin by 0.8 points. QE lost to constant leverage on four checks. |
+| 36 | Combined risk-capped QD (`1x` + `10%→28%` soft DD taper to `0.40` floor) + `DTB3` T-bills (`S36_safe_qd`) vs **`70% Safe-QD + 30% Always-On C1 Carry + DTB3`** (`S36_qd_carry_blend`), 2020-01 on | **`S36_qd_carry_blend` PASS** (5/5); `S36_safe_qd` fail (Sharpe) | Blend **`+2.64%/mo`**, max DD **`−27.8%`**, Sharpe **`1.285`**, Calmar `1.14`, bear `−2.4%`, flat `+0.0%`, 2022 `−1.35%`, stress **`+0.76%/mo`** against `QD_2x` `+5.60%/mo`, DD `−73.1%`, Sharpe `1.208`, stress `−0.81%`. `S36_safe_qd` spot check: `+3.20%/mo`, DD `−32.7%`, Sharpe `1.224`. `S36_qd_carry_blend` spot check (`PREREG40`): `+2.93%/mo`, DD `−27.3%`, Sharpe `1.400`, `A +1.30%/mo`. |
+| 37 | Quantum-inspired L2 pre-fill defenses on 50 frozen Bybit `1s` L2 days (`16` coins): `QT_barrier` (sell flow vs top-3 bid wall) & `QM_ising` (16-coin spin magnetization `M <= −0.50`) | **FAIL** (both) | Holdout `QT_barrier` `−9.76 bps` (`t −32.79`, gross `−2.45`), `QM_ising` `−9.66 bps` (`t −32.97`, gross `−2.34`) vs `K2_base` `−9.65 bps` (`−2.33` gross) and `K3_flow` `−9.84 bps`. Immediate `+5s` post-fill markout `−1.2` to `−1.4 bps` confirms `100 ms` maker adverse selection. |
+| 38 | Ping-adapted bull accelerators on `S36_qd_carry_blend`: `Q38_kuramoto_booster` (`1.65x` when 16-coin breadth `>= 0.70`) & `Q38_bull_leader_blend` (`40% Safe-QD + 30% BTC-gated Top-4 Leaders + 30% C1`) | **FAIL** (both on strict bull margin) | `Q38_kuramoto_booster` `+2.37%/mo`, DD `−35.5%`, Sharpe `0.952`. `Q38_bull_leader_blend` beat `S36` on geo (`+2.85%` vs `+2.64%`), Sharpe (`1.377` vs `1.285`), DSR (`0.663`), bull (`+8.7%` vs `+8.0%`), stress (`+1.06%`), DD `−30.0%` (failed `+2.0%/mo` bull margin); US Spot check **`+3.14%/mo`, DD `−29.6%`, Sharpe `1.493`, DSR `0.766`**. |
+| 39 | Quiet-bull vol-calm scaling (`0.50–1.35x` inv 20d vol) on `80% QD + 20% C1` (`Q39_volcalm_qd_carry`) & `40% QD + 40% Leaders + 20% C1` (`Q39_volcalm_leader_blend`) | **FAIL** (both) | `Q39_volcalm_qd_carry` `+2.49%/mo`, DD `−30.1%`, Sharpe `1.261` (clipped bull breakouts). `Q39_volcalm_leader_blend` `+2.95%/mo`, DD `−32.6%`, Sharpe `1.362`, bull `+9.3%`, stress `+1.12%`, failed `A = −0.13%/mo` (Spot+margin `+3.28%/mo`, `A +0.16%`, Sharpe `1.482`). |
+| 40 | Multi-clock `6h` `Safe-QD + C1` (`Q40_6h_qd_carry`) & fast-exit `R3 × QD + C1` (`Q40_r3_fastexit_blend`) | **FAIL** (both) | `Q40_6h_qd_carry` `+2.60%/mo`, DD `−27.4%`, Sharpe `1.282`, bear `−2.2%`, stress `+0.81%` (matches `S36`). `Q40_r3_fastexit_blend` `+2.10%/mo`, DD **`−21.0%`**, bear **`−0.7%`**, Sharpe `1.254` (gave up bull return). |
 
 Full rules, numbers and readings are in `research/quant_lab/PREREGnn.md`; machine output is in
 `research/quant_lab/results/`.
@@ -249,7 +258,7 @@ Full rules, numbers and readings are in `research/quant_lab/PREREGnn.md`; machin
 | **2027-11-30** | PREREG6 (T1/T2) forward verdict. |
 | Ongoing | P1, PAPER50 and C1 paper ledgers. |
 | Open idea, not pre-registered | Crash insurance: monthly protective puts (for example on IBIT), priced from Deribit's DVOL index (free, 2021 on). |
-| Open idea, not pre-registered | A combined trend + carry portfolio. |
+| Tested (PREREG36) | Combined `70% Safe-QD + 30% Always-On C1 Carry + DTB3` portfolio (`S36_qd_carry_blend` **PASS**, 2020–26: `+2.64%/mo`, DD `−27.8%`, Sharpe `1.285`). |
 
 Notes on scheduled work live in `research/NEXT_TESTS.md`.
 
@@ -300,10 +309,11 @@ scripts/deploy_pi.sh
 
 All three scripts take `PI=everett@<ip>` if `raspberrypi.local` doesn't resolve.
 
-**Trend paper ledger:**
+**Trend paper ledger & PREREG36 blend + ping report:**
 
 ```bash
-piquant trend --dir ~/piquant-data/trend
+piquant trend --dir ~/piquant-data/trend --report --blend --ping
+piquant ping
 ```
 
 **Carry paper ledger:**
