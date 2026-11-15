@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"piquant-live/internal/backtest"
+	"piquant-live/internal/carry"
 	"piquant-live/internal/cluster"
 	"piquant-live/internal/discovery"
+	"piquant-live/internal/execution"
 	"piquant-live/internal/experiment"
 	"piquant-live/internal/macro"
 	"piquant-live/internal/models"
@@ -26,6 +28,7 @@ import (
 	"piquant-live/internal/quant/orchestrator"
 	"piquant-live/internal/secrets"
 	"piquant-live/internal/tax"
+	"piquant-live/internal/trend"
 )
 
 // routes registers every handler.
@@ -57,6 +60,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/paper/blotter", s.handlePaperBlotter)
 	s.mux.HandleFunc("/api/paper/dryrun", s.handlePaperDryRun)
 	s.mux.HandleFunc("/api/paper/tearsheet", s.handlePaperTearSheet)
+	s.mux.HandleFunc("/api/paper/trend-blend", s.handlePaperTrendBlend)
 	s.mux.HandleFunc("/api/paper/reports", s.handlePaperReports)
 	s.mux.HandleFunc("/api/paper/reports/latest", s.handlePaperReportsLatest)
 	s.mux.HandleFunc("/api/paper/recent-windows", s.handlePaperRecentWindows)
@@ -1827,6 +1831,114 @@ func (s *Server) handlePaperMFT(w http.ResponseWriter, r *http.Request) {
 		"positions":       st.Positions,
 		"leverage":        st.Leverage,
 		"scalping_state":  st.ScalpingState,
+	})
+}
+
+func (s *Server) resolveTrendDir() string {
+	if s.opts.TrendDir != "" {
+		return s.opts.TrendDir
+	}
+	for _, dp := range s.opts.DataDirs {
+		cand := filepath.Join(dp, "trend")
+		if _, err := os.Stat(filepath.Join(cand, "trend_state.json")); err == nil {
+			return cand
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "piquant-data", "trend")
+	}
+	return "data/trend"
+}
+
+func (s *Server) resolveCarryDir() string {
+	if s.opts.CarryDir != "" {
+		return s.opts.CarryDir
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "piquant-collect", "carry")
+	}
+	return "data/carry"
+}
+
+func (s *Server) resolveDTB3Path() string {
+	if s.opts.DTB3Path != "" {
+		return s.opts.DTB3Path
+	}
+	for _, dp := range s.opts.DataDirs {
+		cand := filepath.Join(dp, "macro", "DTB3.csv")
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "piquant-data", "macro", "DTB3.csv")
+	}
+	return ""
+}
+
+func (s *Server) resolvePingPlan(r *http.Request) *execution.PingExecutionPlan {
+	force := r.URL.Query().Get("probe") == "1"
+	s.pingMu.Lock()
+	defer s.pingMu.Unlock()
+	if !force && s.cachedPingPlan != nil && time.Since(s.cachedPingAt) < 10*time.Minute {
+		cp := *s.cachedPingPlan
+		return &cp
+	}
+	if s.opts.DisableLivePing {
+		p := execution.PlanForLatency(nil, time.Now().UTC())
+		s.cachedPingPlan = &p
+		s.cachedPingAt = time.Now()
+		return &p
+	}
+	lats := execution.ProbeEndpoints(r.Context(), execution.DefaultEndpoints, 2, 1500*time.Millisecond)
+	p := execution.PlanForLatency(lats, time.Now().UTC())
+	s.cachedPingPlan = &p
+	s.cachedPingAt = time.Now()
+	cp := p
+	return &cp
+}
+
+// handlePaperTrendBlend exposes the PREREG6/35/36 daily trend scorecard, S36_qd_carry_blend
+// composite target weights (70% Safe-QD + idle DTB3 + 30% C1 Carry), and ping execution plan.
+func (s *Server) handlePaperTrendBlend(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	tPath := filepath.Join(s.resolveTrendDir(), "trend_state.json")
+	st, err := trend.Load(tPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if st == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":    "uninitialized",
+			"path":      tPath,
+			"ping_plan": s.resolvePingPlan(r),
+		})
+		return
+	}
+
+	cState, _ := carry.Load(filepath.Join(s.resolveCarryDir(), "carry_state.json"))
+	rates, _ := trend.LoadDTB3Rates(s.resolveDTB3Path())
+	plan := s.resolvePingPlan(r)
+
+	scorecard := st.Score(time.Now().UTC())
+	blends := make([]trend.BlendSummary, 0, 2)
+	if bs, ok := trend.ComputeS36Blend(st, cState, rates, "S36_safe_qd_spot_1x", "S36_qd_carry_blend_spot", plan); ok {
+		blends = append(blends, bs)
+	}
+	if bf, ok := trend.ComputeS36Blend(st, cState, rates, "S36_safe_qd_fut_1x", "S36_qd_carry_blend_fut", plan); ok {
+		blends = append(blends, bf)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":             "ok",
+		"last_date":          st.LastDate,
+		"scorecard":          scorecard,
+		"s36_qd_carry_blend": blends,
+		"ping_plan":          plan,
 	})
 }
 

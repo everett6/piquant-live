@@ -460,6 +460,7 @@ func runDryRun(ctx context.Context, args []string) error {
 		ClusterMode: "pi5_only",
 		Manager:     mgr,
 		DryRun:      dryRunEngine,
+		TrendDir:    f.trendDir,
 	})
 	if err != nil {
 		return err

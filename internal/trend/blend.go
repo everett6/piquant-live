@@ -142,6 +142,14 @@ func ComputeS36Blend(st *State, carryState *carry.State, dtb3ByDate map[string]f
 	}
 
 	var latestRate float64
+	var latestRateDate string
+	firstDate := l.Days[0].Date
+	for d, r := range dtb3ByDate {
+		if d <= firstDate && d > latestRateDate {
+			latestRateDate = d
+			latestRate = r
+		}
+	}
 	lookupRate := func(date string) float64 {
 		if r, ok := dtb3ByDate[date]; ok {
 			latestRate = r

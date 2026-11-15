@@ -45,6 +45,7 @@ import (
 
 	"piquant-live/internal/cluster"
 	"piquant-live/internal/discovery"
+	"piquant-live/internal/execution"
 	"piquant-live/internal/experiment"
 	"piquant-live/internal/paper"
 	"piquant-live/internal/secrets"
@@ -198,6 +199,11 @@ type Options struct {
 	ClusterMode string
 	// DryRun, when set, exposes the 14-day autonomous paper money dry run engine.
 	DryRun any
+	// Optional overrides for PREREG6/35/36 daily trend ledger, C1 carry ledger, and FRED DTB3 CSV.
+	TrendDir        string
+	CarryDir        string
+	DTB3Path        string
+	DisableLivePing bool
 }
 
 // Server is the dashboard HTTP server.
@@ -224,6 +230,9 @@ type Server struct {
 	probeMu        sync.RWMutex
 	probeCache     map[string]cachedProbe
 	delegator      *cluster.TaskDelegator
+	pingMu         sync.Mutex
+	cachedPingPlan *execution.PingExecutionPlan
+	cachedPingAt   time.Time
 }
 
 type cachedProbe struct {

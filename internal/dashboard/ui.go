@@ -1142,6 +1142,37 @@ const indexHTML = `<!doctype html>
           </table>
         </div>
       </section>
+
+      <!-- PREREG36 S36_qd_carry_blend Portfolio & Ping Execution Card -->
+      <section class="card span12">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+          <div>
+            <h2 style="margin:0">PREREG36 Forward Portfolio: S36_qd_carry_blend (70% Safe-QD + DTB3 + 30% C1 Carry)</h2>
+            <div class="meta" style="margin-top:2px" id="s36PingHint">Probing venue RTT execution plan...</div>
+          </div>
+          <div class="pills">
+            <span class="pill ok" id="s36BlendSpotPill">Spot Equity: 1.0000</span>
+            <span class="pill info" id="s36Dtb3Pill">DTB3: -</span>
+            <a href="/api/paper/trend-blend" target="_blank" class="btn btn-secondary" style="font-size:11px;padding:4px 10px;text-decoration:none">Trend-Blend JSON</a>
+          </div>
+        </div>
+        <div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:12px">
+          <div class="stat"><div class="k">Target BTC (Spot)</div><div class="v" id="s36BtcPct">0.0%</div><div class="s" id="s36BtcSub">Max 35% of NAV</div></div>
+          <div class="stat"><div class="k">Target ETH (Spot)</div><div class="v" id="s36EthPct">0.0%</div><div class="s" id="s36EthSub">Max 35% of NAV</div></div>
+          <div class="stat"><div class="k">Idle Trend T-Bills</div><div class="v" id="s36CashPct">70.0%</div><div class="s">Earning DTB3 when flat</div></div>
+          <div class="stat"><div class="k">Always-On C1 Carry</div><div class="v" id="s36CarryPct">30.0%</div><div class="s" id="s36RebalDelta">Rebalance delta: 0.0%</div></div>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="table">
+            <thead>
+              <tr><th>Variant</th><th>Equity</th><th>Max DD</th><th>Sharpe</th><th>Pos</th><th>Months (Beat)</th></tr>
+            </thead>
+            <tbody id="s36ScorecardBody" class="mono">
+              <tr><td colspan="6" class="empty" style="text-align:center;padding:12px">Loading PREREG6/35/36 forward scorecard...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -2465,7 +2496,7 @@ const indexHTML = `<!doctype html>
           }).join("");
         }
 
-        // Refresh 2-Week Dry Run status bar
+        // Refresh 2-Week Dry Run status bar & PREREG36 trend blend
         fetch("/api/paper/dryrun")
           .then(function(r){ return r.json(); })
           .then(function(res){
@@ -2475,7 +2506,34 @@ const indexHTML = `<!doctype html>
             }
             refreshNewsFeed();
           }).catch(function(){});
+
+        fetch("/api/paper/trend-blend")
+          .then(function(r){ return r.json(); })
+          .then(function(tb){ updateTrendBlendUI(tb); })
+          .catch(function(){});
       }).catch(function(){});
+  }
+
+  function updateTrendBlendUI(tb) {
+    if (!tb || tb.status !== "ok") return;
+    var spot = (tb.s36_qd_carry_blend || []).find(function(b){ return b.name === "S36_qd_carry_blend_spot"; }) || (tb.s36_qd_carry_blend || [])[0];
+    if (spot) {
+      if ($("s36BlendSpotPill")) $("s36BlendSpotPill").textContent = "Spot Equity: " + num(spot.equity, 4) + " (" + (spot.days||0) + "d)";
+      if ($("s36Dtb3Pill")) $("s36Dtb3Pill").textContent = "DTB3: " + num(spot.latest_dtb3_pct, 2) + "%";
+      if ($("s36BtcPct")) $("s36BtcPct").textContent = num(spot.target_btc_port_pct, 2) + "%";
+      if ($("s36EthPct")) $("s36EthPct").textContent = num(spot.target_eth_port_pct, 2) + "%";
+      if ($("s36CashPct")) $("s36CashPct").textContent = num(spot.idle_trend_cash_pct, 2) + "%";
+      if ($("s36CarryPct")) $("s36CarryPct").textContent = num(spot.carry_sleeve_pct, 1) + "%";
+      if ($("s36RebalDelta")) $("s36RebalDelta").textContent = "Rebalance delta: " + num(spot.rebalance_delta_pct, 2) + "% (" + (spot.last_date || "-") + ")";
+      if ($("s36PingHint") && spot.execution_hint) $("s36PingHint").textContent = spot.execution_hint;
+    }
+    if (tb.scorecard && $("s36ScorecardBody")) {
+      $("s36ScorecardBody").innerHTML = tb.scorecard.map(function(s){
+        var highlight = (s.name === "S36_safe_qd_spot_1x" || s.name === "QD_btc_eth_coherence_2x") ? " style='color:var(--accent);font-weight:700'" : "";
+        return "<tr" + highlight + "><td>" + esc(s.name) + "</td><td>" + num(s.equity, 4) + "</td><td>" + num((s.max_dd||0)*100, 2) + "%</td><td>" +
+          num(s.sharpe, 2) + "</td><td>" + num(s.current_pos, 2) + "x</td><td>" + (s.beats||0) + "/" + (s.months||0) + "</td></tr>";
+      }).join("");
+    }
   }
 
   // News Intelligence Oracle UI & Ingestion Simulator
