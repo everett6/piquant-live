@@ -221,12 +221,15 @@ func printTrendWithBlend(ctx context.Context, st *trend.State, carryDir, dtb3Pat
 	if bf, ok := trend.ComputeS36Blend(st, cs, rates, "S36_safe_qd_fut_1x", "S36_qd_carry_blend_fut", planPtr); ok {
 		blends = append(blends, bf)
 	}
+	q42Blends := trend.ComputeQ42Blends(st, cs, rates, planPtr)
 	payload := struct {
 		Scorecard []trend.Summary      `json:"scorecard"`
 		S36Blend  []trend.BlendSummary `json:"s36_qd_carry_blend,omitempty"`
+		Q42Blends []trend.BlendSummary `json:"q42_expected_dd_blends,omitempty"`
 	}{
 		Scorecard: st.Score(time.Now()),
 		S36Blend:  blends,
+		Q42Blends: q42Blends,
 	}
 	b, err := json.MarshalIndent(payload, "", " ")
 	if err != nil {

@@ -41,3 +41,21 @@ A variant **PASSES** only if ALL FIVE hold under `base` (`us-futures + S19.BASE`
 - `Q42_dualspeed_60_40_carry`: blending `30% QD + 30% R3_FastExit + 40% C1` is structurally built for this exact target: expected drawdown (`mean_dd` & `ulcer_index`) should drop **`30–40%`**, max DD lands around **`−16%..−20%`**, Calmar jumps into `1.3–1.6`, and bear months stay near `−1.0%/mo` while keeping `+1.9%..+2.2%/mo` base (`~+2.2%..+2.4%/mo` Spot). Strong candidate (`~1 in 2`).
 - `Q42_balanced_50_50_carry`: lowest expected drawdown and highest Sharpe (`~1.6–1.9`), likely max DD around **`−16%..−19%`**, with geo return around **`+1.8%..+2.1%/mo`** base (`+2.0%..+2.3%/mo` Spot) — watch check 4 (`>= 1.75%`) under futures funding (`~1 in 2`).
 - One run only after synthetic unit tests pass.
+
+## Result (run once, 2026-11-15, `2020-01-01..2026-10-31`, `n_trials = 781`)
+
+| Variant | Base Geo | Max DD | Mean DD | Ulcer | DD P95 | CDaR95 | Max UW | Mean Rec | Sharpe | Calmar | DSR781 | Bear | `A` | Stress Geo | Spot Geo / DD / Sharpe | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| `S36_qd_carry_blend` (ref) | `+2.64%/mo` | `−27.8%` | `12.78%` | `14.68%` | `23.89%` | `26.21%` | `792d` | `39.6d` | `1.285` | `1.14` | `0.570` | `−2.45%` | `+1.04%` | `+0.76%` | `+2.93%` / `−27.3%` / `1.400` | ref (`PREREG36` PASS) |
+| `Q42_volcap_s36_blend` | `+1.94%/mo` | `−21.5%` | `9.51%` | `11.06%` | `19.01%` | `20.35%` | `756d` | `36.9d` | `1.359` | `1.09` | `0.645` | `−1.54%` | `+0.71%` | `+0.60%` | `+2.18%` / `−21.1%` / `1.489` | **FAIL** (Check 3: Calmar `1.09 < 1.14`) |
+| `Q42_dualspeed_60_40_carry` | `+2.12%/mo` | `−19.8%` | `8.93%` | `10.14%` | `15.77%` | `18.20%` | `831d` | `39.5d` | `1.363` | `1.29` | `0.650` | `−1.20%` | `+0.56%` | `+0.71%` | `+2.35%` / `−19.4%` / `1.483` | **PASS (5/5)** |
+| `Q42_balanced_50_50_carry` | `+2.12%/mo` | `−19.9%` | `8.73%` | `10.11%` | `16.81%` | `18.69%` | `783d` | `38.1d` | `1.396` | `1.28` | `0.680` | `−1.58%` | `+0.82%` | `+0.68%` | `+2.33%` / `−19.5%` / `1.513` | **PASS (5/5)** |
+
+### Diagnostics & Honest Reading
+- **`Q42_dualspeed_60_40_carry` and `Q42_balanced_50_50_carry` both PASS all 5 pre-registered checks**, cutting Expected Drawdown (`mean_dd_pct`) by **`30.1%–31.7%`** (`12.78% -> 8.93% / 8.73%`), Ulcer Index by **`~31%`** (`14.68% -> 10.14% / 10.11%`), CDaR95 from **`26.2%` to `18.2%–18.7%`**, and worst-case Max Drawdown below `20%` (`−19.8%` / `−19.9%` futures, `−19.4%` / `−19.5%` spot) while improving both Sharpe (`1.285 -> 1.363 / 1.396`; spot `1.400 -> 1.483 / 1.513`) and Calmar (`1.14 -> 1.29 / 1.28`; spot `1.29 -> 1.46 / 1.43`).
+- **`Q42_dualspeed_60_40_carry` vs `Q42_balanced_50_50_carry`:**
+  - `Q42_dualspeed_60_40_carry` gives stronger bear & tail-month cushioning (`worst_month −6.47%` vs `S36 −12.41%` and `balanced −8.64%`; bear mean `−1.20%/mo`, stress `+0.71%/mo`, Calmar `1.29` / spot `1.46`).
+  - `Q42_balanced_50_50_carry` gives the lowest expected drawdown (`8.73%` mean DD, `10.11%` Ulcer, `8.22%` spot mean DD), highest Sharpe (`1.396`, spot `1.513`), positive flat months (`+0.19%/mo`, spot `+0.34%`), and stronger recent `A (2025–26)` compounding (`+0.82%/mo`, spot `+1.00%/mo`).
+- **`Q42_volcap_s36_blend` fails Check 3** despite cutting max DD to `−21.5%` and Sharpe to `1.359`: capping 20d volatility at `45%/yr` clips upside breakouts enough (`+2.64% -> +1.94%/mo`) that Calmar drops slightly below `S36` (`1.09 < 1.14`).
+- **Artifacts:** `research/quant_lab/results/round42.json`.
+

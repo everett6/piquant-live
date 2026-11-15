@@ -69,6 +69,10 @@ var Variants = []Variant{
 	// Sharpe 1.224) and US futures (6+1 bps, 0.1 bp/h), and combined with 30% C1 carry + DTB3 in S36_qd_carry_blend.
 	{Name: "S36_safe_qd_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, Pair: true, Coherence: true, TaperStart: 0.10, TaperFull: 0.28, TaperFloor: 0.40},
 	{Name: "S36_safe_qd_fut_1x", Lev: 1, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true, Coherence: true, TaperStart: 0.10, TaperFull: 0.28, TaperFloor: 0.40},
+	// PREREG42 (PASS 5/5 on both Q42_dualspeed_60_40_carry & Q42_balanced_50_50_carry): earlier 6%->20% soft DD
+	// taper (0.40 floor) on spot 1x Safe-QD and Fast-Exit R3xQD legs to cut expected drawdown (mean DD & Ulcer) ~31%.
+	{Name: "Q42_safe_qd_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, Pair: true, Coherence: true, TaperStart: 0.06, TaperFull: 0.20, TaperFloor: 0.40},
+	{Name: "Q42_r3_fastexit_qd_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, ExitSMA: 20, Pair: true, Coherence: true, TaperStart: 0.06, TaperFull: 0.20, TaperFloor: 0.40},
 	{Name: "PAPER50_btc_eth_0p2x", Lev: 0.2, FeeBps: 120, SlipBps: 5, SMA: 50, Pair: true, DailyStop: 0.02, KillDD: 0.05, Capital: 50},
 }
 
@@ -295,7 +299,11 @@ func (v Variant) sleeve(pos, bar float64, hist []Day) (ret, target float64) {
 			}
 		default:
 			if f, ok2 := sma(hist, v.ExitSMA); ok2 {
-				if (pos > 0 && c >= f && c >= m) || (pos <= 0 && c > m && c >= f) {
+				if v.Coherence {
+					if c > m && c >= f {
+						target = v.Lev * r3CoherenceShare(hist, v.SMA, v.ExitSMA)
+					}
+				} else if (pos > 0 && c >= f && c >= m) || (pos <= 0 && c > m && c >= f) {
 					target = v.Lev
 				}
 			}
@@ -338,6 +346,27 @@ func coherenceShare(hist []Day, n int) float64 {
 	for k := len(hist); k >= n && age < maxAge; k-- {
 		m, ok := sma(hist[:k], n)
 		if !ok || hist[k-1].Close <= m {
+			break
+		}
+		age++
+	}
+	return 1 - math.Exp(-float64(age)/tau)
+}
+
+// r3CoherenceShare is PREREG40/42's R3 fast-exit coherence ramp: consecutive closes ending now where
+// close > SMA(smaN) and close >= SMA(exitSMA), scaled by 1 - exp(-age / 5).
+func r3CoherenceShare(hist []Day, smaN, exitSMA int) float64 {
+	const tau, maxAge = 5.0, 200
+	minLen := smaN
+	if exitSMA > minLen {
+		minLen = exitSMA
+	}
+	age := 0
+	for k := len(hist); k >= minLen && age < maxAge; k-- {
+		c := hist[k-1].Close
+		ml, ok1 := sma(hist[:k], smaN)
+		ms, ok2 := sma(hist[:k], exitSMA)
+		if !ok1 || !ok2 || c <= ml || c < ms {
 			break
 		}
 		age++

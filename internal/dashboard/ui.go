@@ -1161,6 +1161,17 @@ const indexHTML = `<!doctype html>
           <div class="stat"><div class="k">Target ETH (Spot)</div><div class="v" id="s36EthPct">0.0%</div><div class="s" id="s36EthSub">Max 35% of NAV</div></div>
           <div class="stat"><div class="k">Idle Trend T-Bills</div><div class="v" id="s36CashPct">70.0%</div><div class="s">Earning DTB3 when flat</div></div>
           <div class="stat"><div class="k">Always-On C1 Carry</div><div class="v" id="s36CarryPct">30.0%</div><div class="s" id="s36RebalDelta">Rebalance delta: 0.0%</div></div>
+          <div class="stat"><div class="k">Expected DD (E[DD] / Ulcer)</div><div class="v" id="s36ExpectedDD">0.00%</div><div class="s" id="s36TailDD">CDaR95: 0.00% &bull; Max UW: 0d</div></div>
+        </div>
+        <div style="overflow-x:auto;margin-bottom:12px">
+          <table class="table">
+            <thead>
+              <tr><th>Composite Portfolio</th><th>Equity</th><th>Max DD</th><th>Mean DD</th><th>Ulcer</th><th>CDaR95</th><th>Sharpe</th><th>BTC / ETH / Cash / Carry</th></tr>
+            </thead>
+            <tbody id="q42BlendBody" class="mono">
+              <tr><td colspan="8" class="empty" style="text-align:center;padding:10px">Loading PREREG36/42 blend portfolios...</td></tr>
+            </tbody>
+          </table>
         </div>
         <div style="overflow-x:auto">
           <table class="table">
@@ -1168,7 +1179,7 @@ const indexHTML = `<!doctype html>
               <tr><th>Variant</th><th>Equity</th><th>Max DD</th><th>Sharpe</th><th>Pos</th><th>Months (Beat)</th></tr>
             </thead>
             <tbody id="s36ScorecardBody" class="mono">
-              <tr><td colspan="6" class="empty" style="text-align:center;padding:12px">Loading PREREG6/35/36 forward scorecard...</td></tr>
+              <tr><td colspan="6" class="empty" style="text-align:center;padding:12px">Loading PREREG6/35/36/42 forward scorecard...</td></tr>
             </tbody>
           </table>
         </div>
@@ -2525,11 +2536,25 @@ const indexHTML = `<!doctype html>
       if ($("s36CashPct")) $("s36CashPct").textContent = num(spot.idle_trend_cash_pct, 2) + "%";
       if ($("s36CarryPct")) $("s36CarryPct").textContent = num(spot.carry_sleeve_pct, 1) + "%";
       if ($("s36RebalDelta")) $("s36RebalDelta").textContent = "Rebalance delta: " + num(spot.rebalance_delta_pct, 2) + "% (" + (spot.last_date || "-") + ")";
+      if ($("s36ExpectedDD")) $("s36ExpectedDD").textContent = num((spot.mean_dd||0)*100, 2) + "% / " + num((spot.ulcer_index||0)*100, 2) + "%";
+      if ($("s36TailDD")) $("s36TailDD").textContent = "CDaR95: " + num((spot.cdar_95||0)*100, 2) + "% \u2022 Max UW: " + (spot.max_underwater_days||0) + "d";
       if ($("s36PingHint") && spot.execution_hint) $("s36PingHint").textContent = spot.execution_hint;
+    }
+    var allBlends = [].concat(tb.s36_qd_carry_blend || [], tb.q42_expected_dd_blends || []);
+    if ($("q42BlendBody") && allBlends.length) {
+      $("q42BlendBody").innerHTML = allBlends.map(function(b){
+        var isQ42 = b.name && b.name.indexOf("Q42_") === 0;
+        var st = isQ42 ? " style='color:var(--accent);font-weight:700'" : "";
+        var alloc = num(b.target_btc_port_pct, 1) + "% / " + num(b.target_eth_port_pct, 1) + "% / " + num(b.idle_trend_cash_pct, 1) + "% / " + num(b.carry_sleeve_pct, 0) + "%";
+        return "<tr" + st + "><td>" + esc(b.name) + "</td><td>" + num(b.equity, 4) + "</td><td>" +
+          num((b.max_dd||0)*100, 2) + "%</td><td>" + num((b.mean_dd||0)*100, 2) + "%</td><td>" +
+          num((b.ulcer_index||0)*100, 2) + "%</td><td>" + num((b.cdar_95||0)*100, 2) + "%</td><td>" +
+          num(b.sharpe, 2) + "</td><td>" + alloc + "</td></tr>";
+      }).join("");
     }
     if (tb.scorecard && $("s36ScorecardBody")) {
       $("s36ScorecardBody").innerHTML = tb.scorecard.map(function(s){
-        var highlight = (s.name === "S36_safe_qd_spot_1x" || s.name === "QD_btc_eth_coherence_2x") ? " style='color:var(--accent);font-weight:700'" : "";
+        var highlight = (s.name === "Q42_safe_qd_spot_1x" || s.name === "Q42_r3_fastexit_qd_spot_1x" || s.name === "S36_safe_qd_spot_1x" || s.name === "QD_btc_eth_coherence_2x") ? " style='color:var(--accent);font-weight:700'" : "";
         return "<tr" + highlight + "><td>" + esc(s.name) + "</td><td>" + num(s.equity, 4) + "</td><td>" + num((s.max_dd||0)*100, 2) + "%</td><td>" +
           num(s.sharpe, 2) + "</td><td>" + num(s.current_pos, 2) + "x</td><td>" + (s.beats||0) + "/" + (s.months||0) + "</td></tr>";
       }).join("");

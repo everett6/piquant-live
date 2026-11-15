@@ -96,3 +96,49 @@ func TestComputeS36BlendWithCarryAndDTB3(t *testing.T) {
 		t.Fatalf("unexpected day-0 blend summary: ok=%v %+v", ok0, b0)
 	}
 }
+
+func TestQ42ExpectedDrawdownAndDualSpeedBlends(t *testing.T) {
+	st := pairState(t)
+	// Rising trend then a pullback that drops below SMA20 while staying above SMA50,
+	// forcing Q42_r3_fastexit_qd_spot_1x to exit earlier than Q42_safe_qd_spot_1x and generating drawdown > 0.
+	seqBTC := append(rising(35, 160, 2), 205, 198, 215, 225)
+	seqETH := append(rising(35, 80, 1), 102, 99, 108, 113)
+	st.Advance(days("2024-01-02", seqBTC...))
+	st.AdvanceETH(days("2024-01-02", seqETH...))
+
+	lQD := st.Ledgers["Q42_safe_qd_spot_1x"]
+	lR3 := st.Ledgers["Q42_r3_fastexit_qd_spot_1x"]
+	if lQD == nil || lR3 == nil {
+		t.Fatal("missing Q42 ledger variants")
+	}
+	// On pullback day 36 (198), R3 coherence exits while QD remains > 0.
+	if lR3.Days[36].PosOut != 0 {
+		t.Fatalf("expected Q42 R3 fastexit to exit below SMA20 on day 36, got pos=%v", lR3.Days[36].PosOut)
+	}
+	if lQD.Days[36].PosOut <= 0 {
+		t.Fatalf("expected Q42 Safe-QD to remain long above SMA50 on day 36, got pos=%v", lQD.Days[36].PosOut)
+	}
+
+	q42 := ComputeQ42Blends(st, nil, nil, nil)
+	if len(q42) != 2 {
+		t.Fatalf("expected 2 Q42 blends, got %d", len(q42))
+	}
+	dual, bal := q42[0], q42[1]
+	if dual.Name != "Q42_dualspeed_60_40_carry_spot" || dual.CarrySleevePct != 40.0 {
+		t.Fatalf("unexpected dual blend header: %+v", dual)
+	}
+	if bal.Name != "Q42_balanced_50_50_carry_spot" || bal.CarrySleevePct != 50.0 {
+		t.Fatalf("unexpected balanced blend header: %+v", bal)
+	}
+	for _, b := range q42 {
+		if b.MeanDD <= 0 || b.UlcerIndex < b.MeanDD || b.CDaR95 < b.MeanDD || b.MaxUnderwaterDays < 1 || b.MaxDD < b.CDaR95 {
+			t.Fatalf("invalid expected drawdown invariants for %s: %+v", b.Name, b)
+		}
+	}
+
+	// Verify computeCDaR95 matches exact P95 tail mean on a known slice.
+	cdar := computeCDaR95([]float64{0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.10})
+	if math.Abs(cdar-0.10) > 1e-12 {
+		t.Fatalf("expected CDaR95 0.10, got %v", cdar)
+	}
+}

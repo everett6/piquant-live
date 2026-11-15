@@ -100,14 +100,18 @@ func TestHandlePaperTrendBlend(t *testing.T) {
 		Status    string               `json:"status"`
 		Scorecard []trend.Summary      `json:"scorecard"`
 		Blend     []trend.BlendSummary `json:"s36_qd_carry_blend"`
+		Q42Blends []trend.BlendSummary `json:"q42_expected_dd_blends"`
 	}
 	if err := json.Unmarshal(rec1.Body.Bytes(), &res); err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != "ok" || len(res.Scorecard) < 10 || len(res.Blend) != 2 {
+	if res.Status != "ok" || len(res.Scorecard) < 12 || len(res.Blend) != 2 || len(res.Q42Blends) != 2 {
 		t.Fatalf("unexpected response: %+v", res)
 	}
 	if res.Blend[0].LatestDTB3Pct != 4.12 || res.Blend[0].CarryMatchedDays != 2 {
 		t.Fatalf("unexpected blend metrics: %+v", res.Blend[0])
+	}
+	if res.Q42Blends[0].Name != "Q42_dualspeed_60_40_carry_spot" || res.Q42Blends[1].Name != "Q42_balanced_50_50_carry_spot" {
+		t.Fatalf("unexpected Q42 blend names: %+v", res.Q42Blends)
 	}
 }

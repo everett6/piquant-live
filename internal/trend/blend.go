@@ -5,6 +5,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -17,7 +18,13 @@ const (
 	S36CarryShare = 0.30
 )
 
-// BlendSummary scores the composite PREREG36 70% Safe-QD + 30% C1 Carry + idle DTB3 portfolio.
+// BlendLeg pairs a tracked trend ledger name with its capital weight inside a composite blend.
+type BlendLeg struct {
+	Variant string
+	Weight  float64
+}
+
+// BlendSummary scores a composite Safe-QD + C1 Carry + idle DTB3 portfolio (PREREG36/PREREG42).
 type BlendSummary struct {
 	Name              string  `json:"name"`
 	TrendVariant      string  `json:"trend_variant"`
@@ -25,6 +32,10 @@ type BlendSummary struct {
 	CarryMatchedDays  int     `json:"carry_matched_days"`
 	Equity            float64 `json:"equity"`
 	MaxDD             float64 `json:"max_dd"`
+	MeanDD            float64 `json:"mean_dd"`
+	UlcerIndex        float64 `json:"ulcer_index"`
+	CDaR95            float64 `json:"cdar_95"`
+	MaxUnderwaterDays int     `json:"max_underwater_days"`
 	Sharpe            float64 `json:"sharpe"`
 	LastDate          string  `json:"last_date,omitempty"`
 	TargetBTCPortPct  float64 `json:"target_btc_port_pct"`
@@ -92,13 +103,44 @@ func LoadDTB3Rates(path string) (map[string]float64, error) {
 // (S36_safe_qd_spot_1x or S36_safe_qd_fut_1x), DTB3 risk-free interest on idle trend cash, and
 // 30% C1 carry daily returns (for any overlapping dates recorded in carryState; 0 when carry month is pending).
 func ComputeS36Blend(st *State, carryState *carry.State, dtb3ByDate map[string]float64, trendVariant, outName string, plan *execution.PingExecutionPlan) (BlendSummary, bool) {
-	if st == nil {
+	return ComputeWeightedBlend(st, carryState, dtb3ByDate, []BlendLeg{{Variant: trendVariant, Weight: S36TrendShare}}, S36CarryShare, trendVariant, outName, plan)
+}
+
+// ComputeQ42Blends returns the two PREREG42 PASS low-expected-drawdown spot portfolios:
+//   - Q42_dualspeed_60_40_carry_spot (30% Safe-QD + 30% R3_FastExit_QD + 40% C1 Carry + DTB3)
+//   - Q42_balanced_50_50_carry_spot  (50% Safe-QD + 50% C1 Carry + DTB3)
+func ComputeQ42Blends(st *State, carryState *carry.State, dtb3ByDate map[string]float64, plan *execution.PingExecutionPlan) []BlendSummary {
+	var out []BlendSummary
+	if dual, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
+		[]BlendLeg{{Variant: "Q42_safe_qd_spot_1x", Weight: 0.30}, {Variant: "Q42_r3_fastexit_qd_spot_1x", Weight: 0.30}},
+		0.40, "Q42_safe_qd_spot_1x+Q42_r3_fastexit_qd_spot_1x", "Q42_dualspeed_60_40_carry_spot", plan); ok {
+		out = append(out, dual)
+	}
+	if bal, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
+		[]BlendLeg{{Variant: "Q42_safe_qd_spot_1x", Weight: 0.50}},
+		0.50, "Q42_safe_qd_spot_1x", "Q42_balanced_50_50_carry_spot", plan); ok {
+		out = append(out, bal)
+	}
+	return out
+}
+
+// ComputeWeightedBlend builds a composite portfolio combining weighted trend legs, DTB3 interest on idle
+// trend cash, and carryShare allocated to C1 carry daily returns, reporting Expected Drawdown diagnostics.
+func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[string]float64, legs []BlendLeg, carryShare float64, trendLabel, outName string, plan *execution.PingExecutionPlan) (BlendSummary, bool) {
+	if st == nil || len(legs) == 0 {
 		return BlendSummary{}, false
 	}
-	l, ok := st.Ledgers[trendVariant]
-	if !ok || l == nil {
-		return BlendSummary{}, false
+	ledgers := make([]*Ledger, len(legs))
+	trendShare := 0.0
+	for i, leg := range legs {
+		l, ok := st.Ledgers[leg.Variant]
+		if !ok || l == nil {
+			return BlendSummary{}, false
+		}
+		ledgers[i] = l
+		trendShare += leg.Weight
 	}
+	baseDays := ledgers[0].Days
 
 	hint := "daily close decision (00:00 UTC); rebalance via 4x patient post-only slices"
 	if plan != nil {
@@ -120,18 +162,27 @@ func ComputeS36Blend(st *State, carryState *carry.State, dtb3ByDate map[string]f
 		return rate
 	}
 
-	if len(l.Days) == 0 {
+	if len(baseDays) == 0 {
 		return BlendSummary{
 			Name:             outName,
-			TrendVariant:     trendVariant,
+			TrendVariant:     trendLabel,
 			Days:             0,
 			Equity:           1,
 			LastDate:         st.LastDate,
-			IdleTrendCashPct: round2(S36TrendShare * 100),
-			CarrySleevePct:   round2(S36CarryShare * 100),
+			IdleTrendCashPct: round2(trendShare * 100),
+			CarrySleevePct:   round2(carryShare * 100),
 			LatestDTB3Pct:    round2(latestDTB3()),
 			ExecutionHint:    hint,
 		}, true
+	}
+
+	extraByDate := make([]map[string]DayRec, len(legs))
+	for li := 1; li < len(legs); li++ {
+		m := make(map[string]DayRec, len(ledgers[li].Days))
+		for _, rec := range ledgers[li].Days {
+			m[rec.Date] = rec
+		}
+		extraByDate[li] = m
 	}
 
 	carryRet := map[string]float64{}
@@ -143,7 +194,7 @@ func ComputeS36Blend(st *State, carryState *carry.State, dtb3ByDate map[string]f
 
 	var latestRate float64
 	var latestRateDate string
-	firstDate := l.Days[0].Date
+	firstDate := baseDays[0].Date
 	for d, r := range dtb3ByDate {
 		if d <= firstDate && d > latestRateDate {
 			latestRateDate = d
@@ -161,12 +212,18 @@ func ComputeS36Blend(st *State, carryState *carry.State, dtb3ByDate map[string]f
 	eq := 1.0
 	peak := 1.0
 	maxDD := 0.0
-	rets := make([]float64, 0, len(l.Days))
+	sumDD := 0.0
+	sumDD2 := 0.0
+	curUW := 0
+	maxUW := 0
+	dds := make([]float64, 0, len(baseDays))
+	rets := make([]float64, 0, len(baseDays))
 	matchedCarry := 0
-	prevPosOut := 0.0
+	prevIdleCash := 0.0
 	prevRate := 0.0
+	var lastB, lastE, prevB, prevE float64
 
-	for i, d := range l.Days {
+	for i, d := range baseDays {
 		curRate := lookupRate(d.Date)
 		cRet, hasCarry := carryRet[d.Date]
 		if hasCarry {
@@ -174,69 +231,131 @@ func ComputeS36Blend(st *State, carryState *carry.State, dtb3ByDate map[string]f
 		}
 		bills := 0.0
 		if i > 0 {
-			idlePrev := math.Max(0, S36TrendShare*(1-prevPosOut))
-			bills = idlePrev * (prevRate / 100.0 / 365.0)
+			bills = prevIdleCash * (prevRate / 100.0 / 365.0)
 		}
-		tot := S36TrendShare*d.Ret + S36CarryShare*cRet + bills
+
+		trendRet := legs[0].Weight * d.Ret
+		weightedPos := legs[0].Weight * d.PosOut
+		posB := 0.5 * legs[0].Weight * d.PosB * 100
+		posE := 0.5 * legs[0].Weight * d.PosE * 100
+		for li := 1; li < len(legs); li++ {
+			if rec, ok := extraByDate[li][d.Date]; ok {
+				trendRet += legs[li].Weight * rec.Ret
+				weightedPos += legs[li].Weight * rec.PosOut
+				posB += 0.5 * legs[li].Weight * rec.PosB * 100
+				posE += 0.5 * legs[li].Weight * rec.PosE * 100
+			}
+		}
+
+		tot := trendRet + carryShare*cRet + bills
 		rets = append(rets, tot)
 		eq *= 1 + tot
 		if eq > peak {
 			peak = eq
 		}
-		if dd := 1 - eq/peak; dd > maxDD {
+		dd := 0.0
+		if peak > 0 {
+			dd = math.Max(0, 1-eq/peak)
+		}
+		if dd > maxDD {
 			maxDD = dd
 		}
-		prevPosOut = d.PosOut
+		sumDD += dd
+		sumDD2 += dd * dd
+		dds = append(dds, dd)
+		if dd > 1e-6 {
+			curUW++
+			if curUW > maxUW {
+				maxUW = curUW
+			}
+		} else {
+			curUW = 0
+		}
+
+		prevIdleCash = math.Max(0, trendShare-weightedPos)
 		prevRate = curRate
+		if i == len(baseDays)-2 {
+			prevB, prevE = posB, posE
+		}
+		if i == len(baseDays)-1 {
+			lastB, lastE = posB, posE
+		}
 	}
 
-	last := l.Days[len(l.Days)-1]
-	prevB, prevE := 0.0, 0.0
-	if len(l.Days) >= 2 {
-		prev := l.Days[len(l.Days)-2]
-		prevB = 0.5 * S36TrendShare * prev.PosB * 100
-		prevE = 0.5 * S36TrendShare * prev.PosE * 100
-	}
-	curB := 0.5 * S36TrendShare * last.PosB * 100
-	curE := 0.5 * S36TrendShare * last.PosE * 100
-	delta := math.Abs(curB-prevB) + math.Abs(curE-prevE)
+	n := float64(len(baseDays))
+	meanDD := sumDD / n
+	ulcer := math.Sqrt(sumDD2 / n)
+	cdar95 := computeCDaR95(dds)
+	delta := math.Abs(lastB-prevB) + math.Abs(lastE-prevE)
 
 	// Annualized Sharpe across daily blend returns.
-	var mean, s2 float64
+	var sharpe float64
 	if len(rets) >= 2 {
+		var mean, s2 float64
 		for _, r := range rets {
 			mean += r
 			s2 += r * r
 		}
-		n := float64(len(rets))
-		mu := mean / n
-		v := (s2 - n*mu*mu) / (n - 1)
+		rn := float64(len(rets))
+		mu := mean / rn
+		v := (s2 - rn*mu*mu) / (rn - 1)
 		if v > 0 {
-			mean = mu / math.Sqrt(v) * math.Sqrt(365)
-		} else {
-			mean = 0
+			sharpe = mu / math.Sqrt(v) * math.Sqrt(365)
 		}
 	}
 
+	lastDate := baseDays[len(baseDays)-1].Date
 	return BlendSummary{
 		Name:              outName,
-		TrendVariant:      trendVariant,
-		Days:              len(l.Days),
+		TrendVariant:      trendLabel,
+		Days:              len(baseDays),
 		CarryMatchedDays:  matchedCarry,
 		Equity:            round4(eq),
 		MaxDD:             round4(maxDD),
-		Sharpe:            round4(mean),
-		LastDate:          last.Date,
-		TargetBTCPortPct:  round2(curB),
-		TargetETHPortPct:  round2(curE),
-		IdleTrendCashPct:  round2(math.Max(0, S36TrendShare*100-curB-curE)),
-		CarrySleevePct:    round2(S36CarryShare * 100),
+		MeanDD:            round4(meanDD),
+		UlcerIndex:        round4(ulcer),
+		CDaR95:            round4(cdar95),
+		MaxUnderwaterDays: maxUW,
+		Sharpe:            round4(sharpe),
+		LastDate:          lastDate,
+		TargetBTCPortPct:  round2(lastB),
+		TargetETHPortPct:  round2(lastE),
+		IdleTrendCashPct:  round2(math.Max(0, trendShare*100-lastB-lastE)),
+		CarrySleevePct:    round2(carryShare * 100),
 		PrevBTCPortPct:    round2(prevB),
 		PrevETHPortPct:    round2(prevE),
 		RebalanceDeltaPct: round2(delta),
 		LatestDTB3Pct:     round2(latestRate),
 		ExecutionHint:     hint,
 	}, true
+}
+
+func computeCDaR95(dds []float64) float64 {
+	if len(dds) == 0 {
+		return 0
+	}
+	sorted := append([]float64(nil), dds...)
+	sort.Float64s(sorted)
+	// Linear-interpolated 95th percentile (matches numpy.percentile(dd, 95)), then mean of tail >= p95.
+	pos := 0.95 * float64(len(sorted)-1)
+	lo := int(math.Floor(pos))
+	hi := int(math.Ceil(pos))
+	p95 := sorted[lo]
+	if hi > lo {
+		p95 += (pos - float64(lo)) * (sorted[hi] - sorted[lo])
+	}
+	var sum float64
+	var cnt int
+	for _, d := range sorted {
+		if d >= p95 {
+			sum += d
+			cnt++
+		}
+	}
+	if cnt == 0 {
+		return p95
+	}
+	return sum / float64(cnt)
 }
 
 func round2(v float64) float64 { return math.Round(v*100) / 100 }
