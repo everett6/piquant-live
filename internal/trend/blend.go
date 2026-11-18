@@ -124,6 +124,35 @@ func ComputeQ42Blends(st *State, carryState *carry.State, dtb3ByDate map[string]
 	return out
 }
 
+// SelectBlend resolves one named portfolio ("q42_dualspeed", "q42_balanced", "s36_spot", or "s36_fut")
+// into a composite BlendSummary, defaulting to Q42_dualspeed_60_40_carry_spot when available.
+func SelectBlend(st *State, carryState *carry.State, dtb3ByDate map[string]float64, selector string, plan *execution.PingExecutionPlan) (BlendSummary, bool) {
+	q42 := ComputeQ42Blends(st, carryState, dtb3ByDate, plan)
+	findQ42 := func(name string) (BlendSummary, bool) {
+		for _, b := range q42 {
+			if b.Name == name {
+				return b, true
+			}
+		}
+		return BlendSummary{}, false
+	}
+	switch strings.ToLower(strings.TrimSpace(selector)) {
+	case "", "q42", "q42_dualspeed", "q42_dualspeed_60_40_carry_spot":
+		if b, ok := findQ42("Q42_dualspeed_60_40_carry_spot"); ok {
+			return b, true
+		}
+	case "q42_balanced", "q42_balanced_50_50_carry_spot":
+		if b, ok := findQ42("Q42_balanced_50_50_carry_spot"); ok {
+			return b, true
+		}
+	case "s36", "s36_spot", "s36_qd_carry_blend_spot":
+		return ComputeS36Blend(st, carryState, dtb3ByDate, "S36_safe_qd_spot_1x", "S36_qd_carry_blend_spot", plan)
+	case "s36_fut", "s36_qd_carry_blend_fut":
+		return ComputeS36Blend(st, carryState, dtb3ByDate, "S36_safe_qd_fut_1x", "S36_qd_carry_blend_fut", plan)
+	}
+	return ComputeS36Blend(st, carryState, dtb3ByDate, "S36_safe_qd_spot_1x", "S36_qd_carry_blend_spot", plan)
+}
+
 // ComputeWeightedBlend builds a composite portfolio combining weighted trend legs, DTB3 interest on idle
 // trend cash, and carryShare allocated to C1 carry daily returns, reporting Expected Drawdown diagnostics.
 func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[string]float64, legs []BlendLeg, carryShare float64, trendLabel, outName string, plan *execution.PingExecutionPlan) (BlendSummary, bool) {

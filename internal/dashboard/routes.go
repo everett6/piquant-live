@@ -61,6 +61,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/paper/dryrun", s.handlePaperDryRun)
 	s.mux.HandleFunc("/api/paper/tearsheet", s.handlePaperTearSheet)
 	s.mux.HandleFunc("/api/paper/trend-blend", s.handlePaperTrendBlend)
+	s.mux.HandleFunc("/api/paper/schwab-plan", s.handlePaperSchwabPlan)
 	s.mux.HandleFunc("/api/paper/reports", s.handlePaperReports)
 	s.mux.HandleFunc("/api/paper/reports/latest", s.handlePaperReportsLatest)
 	s.mux.HandleFunc("/api/paper/recent-windows", s.handlePaperRecentWindows)
@@ -1935,12 +1936,57 @@ func (s *Server) handlePaperTrendBlend(w http.ResponseWriter, r *http.Request) {
 	q42Blends := trend.ComputeQ42Blends(st, cState, rates, plan)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":               "ok",
-		"last_date":            st.LastDate,
-		"scorecard":            scorecard,
-		"s36_qd_carry_blend":   blends,
+		"status":                 "ok",
+		"last_date":              st.LastDate,
+		"scorecard":              scorecard,
+		"s36_qd_carry_blend":     blends,
 		"q42_expected_dd_blends": q42Blends,
-		"ping_plan":            plan,
+		"ping_plan":              plan,
+	})
+}
+
+// handlePaperSchwabPlan returns a read-only Charles Schwab v1 ETF proxy preview (IBIT, ETHA, SGOV)
+// aligned to the chosen composite blend (default: Q42_dualspeed_60_40_carry_spot).
+func (s *Server) handlePaperSchwabPlan(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	tPath := filepath.Join(s.resolveTrendDir(), "trend_state.json")
+	st, err := trend.Load(tPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if st == nil {
+		st = trend.NewState("")
+	}
+	cState, _ := carry.Load(filepath.Join(s.resolveCarryDir(), "carry_state.json"))
+	rates, _ := trend.LoadDTB3Rates(s.resolveDTB3Path())
+
+	selector := r.URL.Query().Get("portfolio")
+	navUSD := 0.0
+	if rawNav := strings.TrimSpace(r.URL.Query().Get("nav")); rawNav != "" {
+		if parsed, perr := strconv.ParseFloat(rawNav, 64); perr == nil && parsed > 0 {
+			navUSD = parsed
+		}
+	}
+	blend, ok := trend.SelectBlend(st, cState, rates, selector, nil)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or unavailable portfolio selector"})
+		return
+	}
+	creds := execution.LoadSchwabCredentials(s.opts.SchwabEnvPath)
+	client := &http.Client{Timeout: 8 * time.Second}
+	plan := execution.BuildSchwabPlanFromTargets(
+		r.Context(), client, creds,
+		s.opts.SchwabTokenURL, s.opts.SchwabMarketDataBase, s.opts.SchwabTraderBase,
+		blend.Name, blend.TargetBTCPortPct, blend.TargetETHPortPct, blend.IdleTrendCashPct, blend.CarrySleevePct, navUSD,
+	)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"blend":  blend,
+		"schwab": plan,
 	})
 }
 

@@ -114,4 +114,31 @@ func TestHandlePaperTrendBlend(t *testing.T) {
 	if res.Q42Blends[0].Name != "Q42_dualspeed_60_40_carry_spot" || res.Q42Blends[1].Name != "Q42_balanced_50_50_carry_spot" {
 		t.Fatalf("unexpected Q42 blend names: %+v", res.Q42Blends)
 	}
+
+	// 4. Schwab plan preview endpoint (auth + offline fallback + selector switching)
+	if rec := get(t, h, http.MethodGet, "/api/paper/schwab-plan", nil, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 on schwab-plan unauth, got %d", rec.Code)
+	}
+	recSw := get(t, h, http.MethodGet, "/api/paper/schwab-plan?portfolio=q42_dualspeed&nav=2000", authHdr, nil)
+	if recSw.Code != http.StatusOK {
+		t.Fatalf("expected 200 on schwab-plan, got %d: %s", recSw.Code, recSw.Body.String())
+	}
+	var swBody struct {
+		Status string `json:"status"`
+		Schwab struct {
+			Portfolio      string `json:"portfolio"`
+			NavUSD         float64 `json:"nav_usd"`
+			CarrySleevePct float64 `json:"carry_sleeve_pct"`
+			Allocations    []struct {
+				Symbol    string  `json:"symbol"`
+				TargetUSD float64 `json:"target_usd"`
+			} `json:"allocations"`
+		} `json:"schwab"`
+	}
+	if err := json.Unmarshal(recSw.Body.Bytes(), &swBody); err != nil {
+		t.Fatal(err)
+	}
+	if swBody.Status != "ok" || swBody.Schwab.Portfolio != "Q42_dualspeed_60_40_carry_spot" || swBody.Schwab.NavUSD != 2000 || swBody.Schwab.CarrySleevePct != 40.0 || len(swBody.Schwab.Allocations) != 3 {
+		t.Fatalf("unexpected schwab-plan payload: %+v", swBody)
+	}
 }

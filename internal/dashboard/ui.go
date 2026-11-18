@@ -1173,7 +1173,7 @@ const indexHTML = `<!doctype html>
             </tbody>
           </table>
         </div>
-        <div style="overflow-x:auto">
+        <div style="overflow-x:auto;margin-bottom:14px">
           <table class="table">
             <thead>
               <tr><th>Variant</th><th>Equity</th><th>Max DD</th><th>Sharpe</th><th>Pos</th><th>Months (Beat)</th></tr>
@@ -1182,6 +1182,24 @@ const indexHTML = `<!doctype html>
               <tr><td colspan="6" class="empty" style="text-align:center;padding:12px">Loading PREREG6/35/36/42 forward scorecard...</td></tr>
             </tbody>
           </table>
+        </div>
+        <div style="border-top:1px solid var(--line);padding-top:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+            <div>
+              <strong style="font-size:13px">Charles Schwab v1 ETF Proxy Rebalance Preview (IBIT / ETHA / SGOV)</strong>
+              <span class="pill info" id="schwabStatusPill" style="margin-left:8px">Preview Ready</span>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <select id="schwabPortfolioSelect" onchange="refreshSchwabPlan()" class="btn" style="background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:4px 8px;font-size:12px">
+                <option value="q42_dualspeed">Q42 Dual-Speed 60/40 (Min Tail/Bear)</option>
+                <option value="q42_balanced">Q42 Balanced 50/50 (Min Mean DD)</option>
+                <option value="s36_spot">S36 70/30 Spot (Max CAGR)</option>
+              </select>
+              <label style="font-size:12px;color:var(--muted)">NAV $: <input id="schwabNavInput" type="number" value="1000" min="50" step="100" onchange="refreshSchwabPlan()" style="width:80px;background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:3px 6px;border-radius:4px"></label>
+              <button class="btn btn-secondary" style="font-size:11px;padding:4px 10px" onclick="refreshSchwabPlan()">Preview Rebalance</button>
+            </div>
+          </div>
+          <div id="schwabPlanSummary" class="meta">Loading Schwab ETF allocation targets...</div>
         </div>
       </section>
     </div>
@@ -2522,6 +2540,37 @@ const indexHTML = `<!doctype html>
           .then(function(r){ return r.json(); })
           .then(function(tb){ updateTrendBlendUI(tb); })
           .catch(function(){});
+
+        refreshSchwabPlan();
+      }).catch(function(){});
+  }
+
+  function refreshSchwabPlan() {
+    var sel = $("schwabPortfolioSelect") ? $("schwabPortfolioSelect").value : "q42_dualspeed";
+    var nav = $("schwabNavInput") ? $("schwabNavInput").value : "1000";
+    fetch("/api/paper/schwab-plan?portfolio=" + encodeURIComponent(sel) + "&nav=" + encodeURIComponent(nav))
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if (!res || res.status !== "ok" || !res.schwab) return;
+        var sw = res.schwab;
+        if ($("schwabStatusPill")) {
+          $("schwabStatusPill").textContent = sw.schwab_connected ? ("Connected " + (sw.account_hash||"")) : "Offline Target Mode";
+          $("schwabStatusPill").className = "pill " + (sw.schwab_connected ? "ok" : "info");
+        }
+        if ($("schwabPlanSummary")) {
+          var allocs = (sw.allocations || []).map(function(a){
+            return esc(a.symbol) + ": $" + num(a.target_usd, 2) + " (" + num(a.target_pct, 1) + "%, held " + (a.current_shares||0) + " sh)";
+          }).join(" | ");
+          var orders = (sw.orders || []).map(function(o){
+            return esc(o.side) + " " + o.quantity_shares + " " + esc(o.symbol) + " @ $" + num(o.limit_price, 2);
+          }).join(", ");
+          var msg = "<strong>" + esc(sw.portfolio) + "</strong> (NAV $" + num(sw.nav_usd, 0) + "): " + allocs +
+            " | C1 Carry: $" + num(sw.carry_sleeve_usd, 2) + " (" + num(sw.carry_sleeve_pct, 0) + "%)";
+          if (orders) msg += "<br>Preview Limit Orders: <span class='mono' style='color:var(--accent)'>" + orders + "</span>";
+          else if (!sw.schwab_connected) msg += "<br><span style='color:var(--muted)'>Set SCHWAB_APP_KEY, SCHWAB_APP_SECRET & SCHWAB_REFRESH_TOKEN (or run <code>piquant schwab --auth-url</code>) for live quotes & share counts.</span>";
+          if (sw.error) msg += "<br><span style='color:var(--warn)'>Schwab note: " + esc(sw.error) + "</span>";
+          $("schwabPlanSummary").innerHTML = msg;
+        }
       }).catch(function(){});
   }
 
