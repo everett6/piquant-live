@@ -37,3 +37,26 @@ trimmed blend A's drawdown. About 3 in 5. H2 (QQQ): PREREG48 already showed a de
 main window, so check 3 probably fails. About 1 in 4.
 
 No variants: no other ETFs, weights, or rebalance schedules will be judged under this family.
+
+## Result (run once, 2026-11-18; results/round49.json)
+
+Both fail. H1 (SPY) fails only check 2; H2 (QQQ) fails checks 2 and 3.
+
+| | Main 2020-01..2026-10: %/mo | Max DD | Sharpe | Early 2016-08..2019-12: %/mo | Max DD | Sharpe |
+|---|---|---|---|---|---|---|
+| Blend alone (A / A0) | +2.12 | −19.8% | 1.36 | +5.27 | −19.6% | 2.40 |
+| 80/20 with SPY (H1) | +1.96 | −19.4% | 1.45 | +4.56 | −15.7% | 2.50 |
+| 80/20 with QQQ (H2) | +2.03 | −22.4% | 1.47 | +4.65 | −15.0% | 2.54 |
+
+- Sharpe rose in both windows for both ETFs (check 1 passes), and stress and recent returns improved.
+- Check 2 fails: SPY cost 0.16 %/mo in the main window (limit 0.15) and 0.71 %/mo in the early window, where blend A0
+  made +5.27 %/mo and any 20% sleeve earning ~1 %/mo was bound to cost ~0.8. In hindsight the fixed 0.15 limit was
+  not achievable in the early window by any ordinary asset; it is recorded as written.
+- QQQ deepened the main-window drawdown to −22.4% (check 3), as predicted. In the early window both ETFs cut the
+  drawdown by 4–5 points.
+- Correlation with the blend: 0.14–0.15 (main), 0.01–0.02 (early). Worst month −6.5% → −5.9% (main, SPY), −11.3% →
+  −8.7% (early, SPY).
+
+Reading (not a pass): SPY is a genuine diversifier for this system (better Sharpe, smaller worst month, shallower
+drawdown in both windows), and its price is giving up some return: about 0.16 %/mo now, more when crypto is booming.
+No variants will be run.
