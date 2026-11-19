@@ -1193,7 +1193,9 @@ const indexHTML = `<!doctype html>
               <select id="schwabPortfolioSelect" onchange="refreshSchwabPlan()" class="btn" style="background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:4px 8px;font-size:12px">
                 <option value="q42_dualspeed">Q42 Dual-Speed 60/40 (Min Tail/Bear)</option>
                 <option value="q42_balanced">Q42 Balanced 50/50 (Min Mean DD)</option>
-                <option value="s36_spot">S36 70/30 Spot (Max CAGR)</option>
+                <option value="q44_bh_harvester">Q44 BH Vol-Harvester + 1x..2.5x QD (+49.4%/yr Spot)</option>
+                <option value="q44_barbell">Q44 1x BH + 2.5x Dual-Speed Barbell (+47.8%/yr Spot)</option>
+                <option value="s36_spot">S36 70/30 Spot (+41.4%/yr)</option>
               </select>
               <label style="font-size:12px;color:var(--muted)">NAV $: <input id="schwabNavInput" type="number" value="1000" min="50" step="100" onchange="refreshSchwabPlan()" style="width:80px;background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:3px 6px;border-radius:4px"></label>
               <button class="btn btn-secondary" style="font-size:11px;padding:4px 10px" onclick="refreshSchwabPlan()">Preview Rebalance</button>
@@ -2589,11 +2591,11 @@ const indexHTML = `<!doctype html>
       if ($("s36TailDD")) $("s36TailDD").textContent = "CDaR95: " + num((spot.cdar_95||0)*100, 2) + "% \u2022 Max UW: " + (spot.max_underwater_days||0) + "d";
       if ($("s36PingHint") && spot.execution_hint) $("s36PingHint").textContent = spot.execution_hint;
     }
-    var allBlends = [].concat(tb.s36_qd_carry_blend || [], tb.q42_expected_dd_blends || []);
+    var allBlends = [].concat(tb.s36_qd_carry_blend || [], tb.q42_expected_dd_blends || [], tb.q44_vol_harvester_blends || []);
     if ($("q42BlendBody") && allBlends.length) {
       $("q42BlendBody").innerHTML = allBlends.map(function(b){
-        var isQ42 = b.name && b.name.indexOf("Q42_") === 0;
-        var st = isQ42 ? " style='color:var(--accent);font-weight:700'" : "";
+        var isHi = b.name && (b.name.indexOf("Q42_") === 0 || b.name.indexOf("Q44_") === 0);
+        var st = isHi ? " style='color:var(--accent);font-weight:700'" : "";
         var alloc = num(b.target_btc_port_pct, 1) + "% / " + num(b.target_eth_port_pct, 1) + "% / " + num(b.idle_trend_cash_pct, 1) + "% / " + num(b.carry_sleeve_pct, 0) + "%";
         return "<tr" + st + "><td>" + esc(b.name) + "</td><td>" + num(b.equity, 4) + "</td><td>" +
           num((b.max_dd||0)*100, 2) + "%</td><td>" + num((b.mean_dd||0)*100, 2) + "%</td><td>" +

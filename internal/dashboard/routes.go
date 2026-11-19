@@ -1934,14 +1934,16 @@ func (s *Server) handlePaperTrendBlend(w http.ResponseWriter, r *http.Request) {
 		blends = append(blends, bf)
 	}
 	q42Blends := trend.ComputeQ42Blends(st, cState, rates, plan)
+	q44Blends := trend.ComputeQ44Blends(st, cState, rates, plan)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":                 "ok",
-		"last_date":              st.LastDate,
-		"scorecard":              scorecard,
-		"s36_qd_carry_blend":     blends,
-		"q42_expected_dd_blends": q42Blends,
-		"ping_plan":              plan,
+		"status":                   "ok",
+		"last_date":                st.LastDate,
+		"scorecard":                scorecard,
+		"s36_qd_carry_blend":       blends,
+		"q42_expected_dd_blends":   q42Blends,
+		"q44_vol_harvester_blends": q44Blends,
+		"ping_plan":                plan,
 	})
 }
 

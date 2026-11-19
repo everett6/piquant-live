@@ -30,9 +30,11 @@ type Variant struct {
 	Clocks      bool    `json:"clocks,omitempty"`     // PREREG30 E4: four daily clocks on 6-hour bars (stepped by AdvanceGrid)
 	Tunnel      bool    `json:"tunnel,omitempty"`     // PREREG34 QB: size = Lev * (1 - exp(-2 ln(close/SMA) / sigma30)) above the SMA
 	Coherence   bool    `json:"coherence,omitempty"`  // PREREG35 QD: size = Lev * (1 - exp(-age / 5)), age = closes in a row above the SMA
-	TaperStart  float64 `json:"taper_start,omitempty"` // PREREG36: drawdown where soft taper starts (e.g. 0.10)
-	TaperFull   float64 `json:"taper_full,omitempty"`  // PREREG36: drawdown where soft taper reaches TaperFloor (e.g. 0.28)
-	TaperFloor  float64 `json:"taper_floor,omitempty"` // PREREG36: minimum leverage multiplier above TaperFull (e.g. 0.40)
+	TaperStart   float64 `json:"taper_start,omitempty"`   // PREREG36: drawdown where soft taper starts (e.g. 0.10)
+	TaperFull    float64 `json:"taper_full,omitempty"`    // PREREG36: drawdown where soft taper reaches TaperFloor (e.g. 0.28)
+	TaperFloor   float64 `json:"taper_floor,omitempty"`   // PREREG36: minimum leverage multiplier above TaperFull (e.g. 0.40)
+	VolTarget    float64 `json:"vol_target,omitempty"`    // PREREG44: balance leverage in [1.0x, Lev] via clip(VolTarget/annVol20d, 1/Lev, 1)
+	VolHarvester bool    `json:"vol_harvester,omitempty"` // PREREG44: counter-volatility dip harvesting on SMA=0 Buy-and-Hold
 }
 
 // Variants are frozen by PREREG6.
@@ -73,6 +75,10 @@ var Variants = []Variant{
 	// taper (0.40 floor) on spot 1x Safe-QD and Fast-Exit R3xQD legs to cut expected drawdown (mean DD & Ulcer) ~31%.
 	{Name: "Q42_safe_qd_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, Pair: true, Coherence: true, TaperStart: 0.06, TaperFull: 0.20, TaperFloor: 0.40},
 	{Name: "Q42_r3_fastexit_qd_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, ExitSMA: 20, Pair: true, Coherence: true, TaperStart: 0.06, TaperFull: 0.20, TaperFloor: 0.40},
+	// PREREG44: 1.0x..2.5x Volatility-Balanced Safe-QD/Dual-Speed + Rebalanced Buy-and-Hold Volatility Harvester.
+	{Name: "Q44_bh_vol_harvester_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 0, Pair: true, VolHarvester: true},
+	{Name: "Q44_qd_vol_1x_2p5x_spot", Lev: 2.5, FeeBps: 2, SlipBps: 1, SMA: 50, Pair: true, Coherence: true, VolTarget: 0.80, TaperStart: 0.08, TaperFull: 0.30, TaperFloor: 0.35},
+	{Name: "Q44_dualspeed_r3_1x_2p5x_spot", Lev: 2.5, FeeBps: 2, SlipBps: 1, SMA: 50, ExitSMA: 20, Pair: true, Coherence: true, VolTarget: 0.85, TaperStart: 0.08, TaperFull: 0.28, TaperFloor: 0.35},
 	{Name: "PAPER50_btc_eth_0p2x", Lev: 0.2, FeeBps: 120, SlipBps: 5, SMA: 50, Pair: true, DailyStop: 0.02, KillDD: 0.05, Capital: 50},
 }
 
@@ -285,6 +291,14 @@ func (st *State) AdvanceETH(days []Day) int {
 func (v Variant) sleeve(pos, bar float64, hist []Day) (ret, target float64) {
 	ret = pos*bar - math.Abs(pos)*v.FundingBpsH*24*1e-4
 	c := hist[len(hist)-1].Close
+	if v.SMA == 0 {
+		target = v.Lev
+		if v.VolHarvester {
+			target = v.Lev * bhVolHarvestMult(hist)
+		}
+		ret -= math.Abs(target-pos) * (v.FeeBps + v.SlipBps) * 1e-4
+		return ret, target
+	}
 	if m, ok := sma(hist, v.SMA); ok {
 		switch {
 		case v.ExitSMA <= 0:
@@ -309,8 +323,60 @@ func (v Variant) sleeve(pos, bar float64, hist []Day) (ret, target float64) {
 			}
 		}
 	}
+	if target > 0 && v.VolTarget > 0 && v.Lev > 1.0 {
+		target *= volBalanceShare(hist, v.VolTarget, v.Lev)
+	}
 	ret -= math.Abs(target-pos) * (v.FeeBps + v.SlipBps) * 1e-4
 	return ret, target
+}
+
+func sampleStdLastN(hist []Day, n int) (float64, bool) {
+	if len(hist) <= n || n < 2 {
+		return 0, false
+	}
+	sub := hist[len(hist)-(n+1):]
+	var sum, sum2 float64
+	for i := 1; i <= n; i++ {
+		if sub[i-1].Close <= 0 {
+			return 0, false
+		}
+		r := sub[i].Close/sub[i-1].Close - 1
+		sum += r
+		sum2 += r * r
+	}
+	fn := float64(n)
+	mu := sum / fn
+	v := (sum2 - fn*mu*mu) / (fn - 1)
+	if v <= 0 {
+		return 0, false
+	}
+	return math.Sqrt(v), true
+}
+
+// volBalanceShare returns the fraction in [1.0/maxLev, 1.0] balancing effective leverage in [1.0x, maxLev]
+// inversely against trailing 20-day annualized volatility.
+func volBalanceShare(hist []Day, volTarget, maxLev float64) float64 {
+	if maxLev <= 1.0 {
+		return 1.0
+	}
+	volD, ok := sampleStdLastN(hist, 20)
+	if !ok {
+		return 1.0 / maxLev
+	}
+	annVol := volD * math.Sqrt(365.0)
+	effLev := math.Max(1.0, math.Min(maxLev, volTarget/math.Max(annVol, 1e-6)))
+	return effLev / maxLev
+}
+
+// bhVolHarvestMult modulates a 1x Buy-and-Hold sleeve in [0.65, 1.35] using counter-volatility dip harvesting.
+func bhVolHarvestMult(hist []Day) float64 {
+	volD, ok := sampleStdLastN(hist, 20)
+	if !ok || len(hist) < 6 || hist[len(hist)-6].Close <= 0 {
+		return 1.0
+	}
+	ret5 := hist[len(hist)-1].Close/hist[len(hist)-6].Close - 1
+	z := math.Max(-3.0, math.Min(3.0, -ret5/(math.Max(volD, 1e-4)*math.Sqrt(5.0))))
+	return math.Max(0.65, math.Min(1.35, 1.0+0.35*math.Tanh(z)))
 }
 
 // tunnelShare is PREREG34 QB's size as a share of full leverage: 1 - exp(-2 ln(close/sma) / sigma), with sigma the

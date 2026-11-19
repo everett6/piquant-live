@@ -124,12 +124,34 @@ func ComputeQ42Blends(st *State, carryState *carry.State, dtb3ByDate map[string]
 	return out
 }
 
-// SelectBlend resolves one named portfolio ("q42_dualspeed", "q42_balanced", "s36_spot", or "s36_fut")
+// ComputeQ44Blends returns the PREREG44 1.0x..2.5x Volatility-Balanced + Buy-and-Hold Volatility Harvester portfolios:
+//   - Q44_bh_vol_harvester_1x_2p5x_spot       (20% BH Vol-Harvester + 55% 1x..2.5x Safe-QD + 25% C1 Carry + DTB3)
+//   - Q44_barbell_1x_bh_2p5x_dualspeed_spot   (25% BH Vol-Harvester + 25% 1x..2.5x QD + 25% 1x..2.5x R3 + 25% C1 Carry + DTB3)
+func ComputeQ44Blends(st *State, carryState *carry.State, dtb3ByDate map[string]float64, plan *execution.PingExecutionPlan) []BlendSummary {
+	var out []BlendSummary
+	if harv, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
+		[]BlendLeg{{Variant: "Q44_bh_vol_harvester_spot_1x", Weight: 0.20}, {Variant: "Q44_qd_vol_1x_2p5x_spot", Weight: 0.55}},
+		0.25, "Q44_bh_vol_harvester_spot_1x+Q44_qd_vol_1x_2p5x_spot", "Q44_bh_vol_harvester_1x_2p5x_spot", plan); ok {
+		out = append(out, harv)
+	}
+	if barb, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
+		[]BlendLeg{
+			{Variant: "Q44_bh_vol_harvester_spot_1x", Weight: 0.25},
+			{Variant: "Q44_qd_vol_1x_2p5x_spot", Weight: 0.25},
+			{Variant: "Q44_dualspeed_r3_1x_2p5x_spot", Weight: 0.25},
+		},
+		0.25, "Q44_bh_vol_harvester_spot_1x+Q44_qd_vol_1x_2p5x_spot+Q44_dualspeed_r3_1x_2p5x_spot", "Q44_barbell_1x_bh_2p5x_dualspeed_spot", plan); ok {
+		out = append(out, barb)
+	}
+	return out
+}
+
+// SelectBlend resolves one named portfolio ("q42_dualspeed", "q42_balanced", "q44_bh_harvester", "q44_barbell", "s36_spot", or "s36_fut")
 // into a composite BlendSummary, defaulting to Q42_dualspeed_60_40_carry_spot when available.
 func SelectBlend(st *State, carryState *carry.State, dtb3ByDate map[string]float64, selector string, plan *execution.PingExecutionPlan) (BlendSummary, bool) {
-	q42 := ComputeQ42Blends(st, carryState, dtb3ByDate, plan)
-	findQ42 := func(name string) (BlendSummary, bool) {
-		for _, b := range q42 {
+	all := append(ComputeQ42Blends(st, carryState, dtb3ByDate, plan), ComputeQ44Blends(st, carryState, dtb3ByDate, plan)...)
+	findBlend := func(name string) (BlendSummary, bool) {
+		for _, b := range all {
 			if b.Name == name {
 				return b, true
 			}
@@ -138,11 +160,19 @@ func SelectBlend(st *State, carryState *carry.State, dtb3ByDate map[string]float
 	}
 	switch strings.ToLower(strings.TrimSpace(selector)) {
 	case "", "q42", "q42_dualspeed", "q42_dualspeed_60_40_carry_spot":
-		if b, ok := findQ42("Q42_dualspeed_60_40_carry_spot"); ok {
+		if b, ok := findBlend("Q42_dualspeed_60_40_carry_spot"); ok {
 			return b, true
 		}
 	case "q42_balanced", "q42_balanced_50_50_carry_spot":
-		if b, ok := findQ42("Q42_balanced_50_50_carry_spot"); ok {
+		if b, ok := findBlend("Q42_balanced_50_50_carry_spot"); ok {
+			return b, true
+		}
+	case "q44", "q44_bh_harvester", "q44_bh_vol_harvester_1x_2p5x_spot":
+		if b, ok := findBlend("Q44_bh_vol_harvester_1x_2p5x_spot"); ok {
+			return b, true
+		}
+	case "q44_barbell", "q44_barbell_1x_bh_2p5x_dualspeed_spot":
+		if b, ok := findBlend("Q44_barbell_1x_bh_2p5x_dualspeed_spot"); ok {
 			return b, true
 		}
 	case "s36", "s36_spot", "s36_qd_carry_blend_spot":

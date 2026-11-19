@@ -142,3 +142,33 @@ func TestQ42ExpectedDrawdownAndDualSpeedBlends(t *testing.T) {
 		t.Fatalf("expected CDaR95 0.10, got %v", cdar)
 	}
 }
+
+func TestQ44VolBalancedAndBHHarvesterBlends(t *testing.T) {
+	st := pairState(t)
+	seqBTC := append(rising(30, 160, 2), 185, 178, 195, 205)
+	seqETH := append(rising(30, 80, 1), 92, 88, 98, 104)
+	st.Advance(days("2024-01-02", seqBTC...))
+	st.AdvanceETH(days("2024-01-02", seqETH...))
+
+	lBH := st.Ledgers["Q44_bh_vol_harvester_spot_1x"]
+	lQD := st.Ledgers["Q44_qd_vol_1x_2p5x_spot"]
+	if lBH == nil || lQD == nil {
+		t.Fatal("missing Q44 ledger variants")
+	}
+	// On pullback day 31 (178), BH Harvester increases exposure > 1.0x while vol-balanced QD stays in (0, 2.5].
+	if lBH.Days[31].PosOut <= 1.0 || lBH.Days[31].PosOut > 1.35 {
+		t.Fatalf("expected BH harvester > 1.0 on dip day 31, got %v", lBH.Days[31].PosOut)
+	}
+	if lQD.Days[29].PosOut <= 1.0 || lQD.Days[29].PosOut > 2.5 {
+		t.Fatalf("expected 1x..2.5x vol-balanced QD in (1.0, 2.5] on low-vol uptrend day 29, got %v", lQD.Days[29].PosOut)
+	}
+
+	q44 := ComputeQ44Blends(st, nil, nil, nil)
+	if len(q44) != 2 {
+		t.Fatalf("expected 2 Q44 blends, got %d", len(q44))
+	}
+	bHarv, ok := SelectBlend(st, nil, nil, "q44_bh_harvester", nil)
+	if !ok || bHarv.Name != "Q44_bh_vol_harvester_1x_2p5x_spot" || bHarv.CarrySleevePct != 25.0 {
+		t.Fatalf("unexpected q44_bh_harvester blend: ok=%v %+v", ok, bHarv)
+	}
+}
