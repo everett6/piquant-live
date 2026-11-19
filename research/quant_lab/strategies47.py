@@ -40,12 +40,12 @@ def forward_up(close: pd.Series, h: int = HORIZON) -> pd.Series:
 
 
 def walk_forward_proba(X: pd.DataFrame, y: pd.Series, dates: pd.Series, start: str, refit: int = 63,
-                       embargo: int = HORIZON, train_mask: pd.Series | None = None) -> pd.Series:
+                       embargo: int = HORIZON) -> pd.Series:
     """Out-of-sample P(y=1) for rows dated >= start. Refit every `refit` unique dates on rows dated more than
     `embargo` days before the block start whose label is known; each model only predicts its own block."""
     ok = X.notna().all(axis=1)
-    trainable = ok & y.notna() & (train_mask if train_mask is not None else True)
-    t0 = pd.Timestamp(start, tz=dates.dt.tz) if dates.dt.tz is not None else pd.Timestamp(start)
+    trainable = ok & y.notna()
+    t0 = pd.Timestamp(start, tz=dates.dt.tz)
     test_dates = np.sort(dates[(dates >= t0) & ok].unique())
     out = pd.Series(np.nan, index=X.index)
     for i in range(0, len(test_dates), refit):

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 
-import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.inspection import permutation_importance
@@ -61,13 +60,13 @@ def main() -> None:
     X = tab.drop(columns=["_y1", "_y2", "_date", "_coin"])
     dates = tab["_date"]
     p1 = S47.walk_forward_proba(X, tab["_y1"], dates, W0)
-    p2 = S47.walk_forward_proba(X, tab["_y2"], dates, W0, train_mask=tab["_y2"].notna())
+    p2 = S47.walk_forward_proba(X, tab["_y2"], dates, W0)
 
     def per_coin(p, c):
         k = tab["_coin"] == c
         return pd.Series(p[k].to_numpy(), index=pd.DatetimeIndex(dates[k]))
 
-    scored = (dates >= pd.Timestamp(W0, tz="UTC")) & (dates < pd.Timestamp(W1, tz="UTC"))
+    scored = (dates >= START) & (dates < END)  # START/END equal W0/W1
     res = {"prereg": "PREREG47", "n_trials": N_TRIALS, "window": [W0, W1], "params": S47.PARAMS,
            "auc": {"X1_pooled": S47.auc(tab["_y1"][scored], p1[scored]),
                    "X2_pooled": S47.auc(tab["_y2"][scored], p2[scored])},
@@ -79,8 +78,7 @@ def main() -> None:
 
     x1pos = {c: S47.threshold_position(per_coin(p1, c)).reindex(full[c].index).fillna(0.0) for c in COINS}
     x2dual = {c: S47.meta_filter(dual[c], per_coin(p2, c)) for c in COINS}
-    win = (x1pos["BTC"].index >= pd.Timestamp(W0, tz="UTC")) & (x1pos["BTC"].index < pd.Timestamp(W1, tz="UTC"))
-    res["info"]["X1_share_long"] = {c: float(x1pos[c][win[: len(x1pos[c])]].mean()) for c in COINS}
+    res["info"]["X1_share_long"] = {c: float(x1pos[c].reindex(idx).mean()) for c in COINS}
     res["info"]["X1_turnover_per_year"] = {c: float(x1pos[c].reindex(idx).diff().abs().sum() / (len(idx) / 365))
                                            for c in COINS}
     res["info"]["X2_share_cut"] = {c: float(((x2dual[c] != dual[c]).reindex(idx)).mean()) for c in COINS}
@@ -107,10 +105,10 @@ def main() -> None:
         res["variants"].setdefault("X2_meta_filter", {})[cname] = metrics(blend(x2dual, fut, car), reg)
 
     # permutation importance: model fitted before the last 365 days, scored on them (X1 label)
-    cut_d = pd.Timestamp(W1, tz="UTC") - pd.Timedelta(days=365)
+    cut_d = END - pd.Timedelta(days=365)
     ok = X.notna().all(axis=1)
     tr = ok & tab["_y1"].notna() & (dates < cut_d - pd.Timedelta(days=S47.HORIZON))
-    te = ok & tab["_y1"].notna() & (dates >= cut_d) & (dates < pd.Timestamp(W1, tz="UTC"))
+    te = ok & tab["_y1"].notna() & (dates >= cut_d) & (dates < END)
     m = HistGradientBoostingClassifier(**S47.PARAMS).fit(X[tr].to_numpy(), tab["_y1"][tr].to_numpy())
     pi = permutation_importance(m, X[te].to_numpy(), tab["_y1"][te].to_numpy(), scoring="roc_auc", n_repeats=10,
                                 random_state=0)
