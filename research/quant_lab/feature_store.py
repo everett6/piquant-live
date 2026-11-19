@@ -1,14 +1,16 @@
 import numpy as np
 import pandas as pd
+from multimodal_features import MULTIMODAL_COLS
 
 def pick_col(df: pd.DataFrame, short: str, long: str) -> pd.Series:
     return df[short] if short in df.columns else df[long]
 
 
-def build_unified_features(btc: pd.DataFrame, eth: pd.DataFrame) -> pd.DataFrame:
+def build_unified_features(btc: pd.DataFrame, eth: pd.DataFrame, multimodal: pd.DataFrame | None = None) -> pd.DataFrame:
     """
     Computes strictly causal features using ONLY data up to close t.
     Accepts either ('o','h','l','c','v') or ('open','high','low','close','volume').
+    Optionally merges multimodal features reindexed to btc.index and filled with 0.0.
     """
     df = pd.DataFrame(index=btc.index)
     
@@ -60,6 +62,18 @@ def build_unified_features(btc: pd.DataFrame, eth: pd.DataFrame) -> pd.DataFrame
     eth_ret1 = eth_c.pct_change(1)
     df['btc_minus_eth_1d'] = df['btc_ret1'] - eth_ret1
     df['btc_minus_eth_5d'] = df['btc_ret5'] - eth_c.pct_change(5)
+
+    # Multimodal features integration
+    if multimodal is not None and not multimodal.empty:
+        mm_reindexed = multimodal.reindex(btc.index).ffill().fillna(0.0)
+        for col in MULTIMODAL_COLS:
+            if col in mm_reindexed.columns:
+                df[col] = mm_reindexed[col]
+            else:
+                df[col] = 0.0
+    else:
+        for col in MULTIMODAL_COLS:
+            df[col] = 0.0
     
     return df
 

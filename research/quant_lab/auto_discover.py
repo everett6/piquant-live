@@ -42,6 +42,8 @@ DEFAULT_LOG_PATH = os.path.join(DEFAULT_RESULTS_DIR, "auto_discover_log.jsonl")
 
 DEFAULT_LLAMA_BIN = os.path.expanduser("~/llama.cpp/build/bin/llama-cli")
 DEFAULT_LLAMA_MODEL_CANDIDATES: tuple[str, ...] = (
+    os.path.expanduser("~/models/piquant-alpha-lfm3-v2-Q4_K_M.gguf"),
+    os.path.expanduser("~/models/piquant-alpha-lfm3-v2/piquant-alpha-lfm3-v2-Q4_K_M.gguf"),
     os.path.expanduser("~/models/piquant-alpha-lfm3-v1-Q4_K_M.gguf"),
     os.path.expanduser("~/models/piquant-alpha-lfm3-v1/piquant-alpha-lfm3-v1-Q4_K_M.gguf"),
     os.path.expanduser("~/models/LFM3-1.7B-QAD-Q4_0.gguf"),
@@ -81,6 +83,18 @@ ALLOWED_FEATURES: tuple[str, ...] = (
     "pair_spread_z20",
     "btc_minus_eth_1d",
     "btc_minus_eth_5d",
+    "btc_rv_1m_ann",
+    "btc_jump_ratio",
+    "btc_vpin_1m",
+    "eth_vpin_1m",
+    "btc_vrp",
+    "dvol_z20",
+    "btc_fund_z20",
+    "fund_spread_be",
+    "stable_flow_21d",
+    "alt_breadth_20d",
+    "qqq_ret21",
+    "uup_ret21",
 )
 ALLOWED_FEATURE_SET = frozenset(ALLOWED_FEATURES)
 
@@ -336,8 +350,18 @@ def check_causality_sandbox(expr: str, role: str = "overlay", shock_bar: int = 1
     btc2.iloc[shock_bar:] = btc2.iloc[shock_bar:] * 3.5
     eth2.iloc[shock_bar:] = eth2.iloc[shock_bar:] * 0.25
 
-    f1 = FS.build_unified_features(btc1, eth1)
-    f2 = FS.build_unified_features(btc2, eth2)
+    # Generate synthetic multimodal features alongside synthetic BTC/ETH and shock t >= shock_bar
+    import multimodal_features as MF
+    mm1 = pd.DataFrame(0.0, index=btc1.index, columns=MF.MULTIMODAL_COLS)
+    # Add some random variation so multimodal features are non-constant and testable
+    rng_mm = np.random.default_rng(42)
+    for col in MF.MULTIMODAL_COLS:
+        mm1[col] = rng_mm.normal(0.0, 1.0, size=len(btc1))
+    mm2 = mm1.copy()
+    mm2.iloc[shock_bar:] = mm2.iloc[shock_bar:] * 4.0
+
+    f1 = FS.build_unified_features(btc1, eth1, multimodal=mm1)
+    f2 = FS.build_unified_features(btc2, eth2, multimodal=mm2)
     s1 = SafeAlphaEvaluator.evaluate(expr, f1, role=role)
     s2 = SafeAlphaEvaluator.evaluate(expr, f2, role=role)
 
@@ -877,9 +901,14 @@ def _load_real_market_context(daily_csv_dir: str | None = None) -> dict[str, Any
         for c in ("BTC", "ETH")
     }
 
+    # Auto-load multimodal daily CSV and pass into build_unified_features
+    import multimodal_features as MF
+    multimodal_path = os.path.join(os.path.expanduser(daily_csv_dir or '~/piquant-collect/daily_csv'), 'multimodal_1D.csv')
+    mm_df = MF.load_multimodal_csv(multimodal_path)
+
     # Build unified causal features on full history then slice to avoid edge warm-up distortion
     full_eth_aligned = full["ETH"].reindex(full["BTC"].index).ffill()
-    features_full = FS.build_unified_features(full["BTC"], full_eth_aligned)
+    features_full = FS.build_unified_features(full["BTC"], full_eth_aligned, multimodal=mm_df)
     features_sub = features_full.reindex(btc_sub.index)
 
     f = {c: load_funding(f"{c}USDT") for c in ("BTC", "ETH")}

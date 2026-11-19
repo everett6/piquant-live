@@ -193,7 +193,7 @@ def test_llamacpp_and_ollama_fallback_dry_run_synth_end_to_end(tmp_path):
 
 
 def test_resolve_default_llama_model_prefers_finetuned(tmp_path):
-    ft = tmp_path / "piquant-alpha-lfm3-v1-Q4_K_M.gguf"
+    ft = tmp_path / "piquant-alpha-lfm3-v2-Q4_K_M.gguf"
     base = tmp_path / "LFM3-1.7B-QAD-Q4_0.gguf"
     cands = (str(ft), str(base))
 

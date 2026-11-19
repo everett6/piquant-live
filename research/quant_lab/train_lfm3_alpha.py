@@ -536,10 +536,10 @@ def train_lora(
     out_dir: str = DEFAULT_OUT_DIR,
     epochs: int = 3,
     batch: int = 16,
-    micro_batch: int = 4,
+    micro_batch: int = 1,
     lr: float = 2e-4,
     rank: int = 16,
-    max_len: int = 1024,
+    max_len: int = 768,
     merge: bool = True,
 ) -> dict[str, Any]:
     """Phase 2: LoRA SFT fine-tuning of LFM3-1.7B on local GPU + optional merge."""
