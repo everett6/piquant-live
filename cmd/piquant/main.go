@@ -76,6 +76,8 @@ func main() {
 		err = runUnlock(args)
 	case "collect":
 		err = runCollect(ctx, args)
+	case "backfill-gaps":
+		err = runBackfillGaps(ctx, args)
 	case "extract":
 		err = runExtract(ctx, args)
 	case "trend":
@@ -123,6 +125,7 @@ func usage() {
   piquant carry       PREREG19 funding-carry paper ledger (monthly; --once to advance)
   piquant alert-test  send a test email using ~/.config/piquant/alert.env
   piquant collect     record live prices + news and backfill history (dev PC)
+  piquant backfill-gaps  fetch trades missing from ticks/ (id gaps) into ticks_backfill/ (--dir --from --to --dry-run)
   piquant trend       PREREG6 forward paper test of the SMA50 trend filter (--once, --report)
   piquant extract     score stored headlines with a local LLM (Ollama)
   piquant news        macro & micro news intelligence oracle with exploit defense
