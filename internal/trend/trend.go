@@ -6,30 +6,32 @@ package trend
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"sort"
 	"time"
+
+	"piquant-live/internal/durable"
 )
 
 // Variant is a frozen PREREG6 strategy definition.
 type Variant struct {
-	Name        string  `json:"name"`
-	Lev         float64 `json:"lev"`                  // position when trend holds (0 when not); BH holds Lev always
-	FeeBps      float64 `json:"fee_bps"`              // per unit of turnover
-	SlipBps     float64 `json:"slip_bps"`             // per unit of turnover
-	FundingBpsH float64 `json:"funding_bps_h"`        // per hour per unit of |position|
-	SMA         int     `json:"sma"`                  // 0 = always hold (benchmark)
-	KillDD      float64 `json:"kill_dd"`              // stop the variant at this drawdown from peak (0 = never)
-	Pair        bool    `json:"pair,omitempty"`       // PREREG11: half BTC, half ETH sleeve, each Lev when above its own SMA
-	ExitSMA     int     `json:"exit_sma,omitempty"`   // PREREG13 R3: also exit below SMA(ExitSMA); enter only at/above it
-	DailyStop   float64 `json:"daily_stop,omitempty"` // flatten at the close of a day losing this fraction (re-enter next close)
-	Capital     float64 `json:"capital,omitempty"`    // display only: starting dollars for equity_usd
-	Pullback    bool    `json:"pullback,omitempty"`   // PREREG16 D2: 15% pullback above SMA200; exit > SMA20 or day 10
-	Clocks      bool    `json:"clocks,omitempty"`     // PREREG30 E4: four daily clocks on 6-hour bars (stepped by AdvanceGrid)
-	Tunnel      bool    `json:"tunnel,omitempty"`     // PREREG34 QB: size = Lev * (1 - exp(-2 ln(close/SMA) / sigma30)) above the SMA
-	Coherence   bool    `json:"coherence,omitempty"`  // PREREG35 QD: size = Lev * (1 - exp(-age / 5)), age = closes in a row above the SMA
+	Name         string  `json:"name"`
+	Lev          float64 `json:"lev"`                     // position when trend holds (0 when not); BH holds Lev always
+	FeeBps       float64 `json:"fee_bps"`                 // per unit of turnover
+	SlipBps      float64 `json:"slip_bps"`                // per unit of turnover
+	FundingBpsH  float64 `json:"funding_bps_h"`           // per hour per unit of |position|
+	SMA          int     `json:"sma"`                     // 0 = always hold (benchmark)
+	KillDD       float64 `json:"kill_dd"`                 // stop the variant at this drawdown from peak (0 = never)
+	Pair         bool    `json:"pair,omitempty"`          // PREREG11: half BTC, half ETH sleeve, each Lev when above its own SMA
+	ExitSMA      int     `json:"exit_sma,omitempty"`      // PREREG13 R3: also exit below SMA(ExitSMA); enter only at/above it
+	DailyStop    float64 `json:"daily_stop,omitempty"`    // flatten at the close of a day losing this fraction (re-enter next close)
+	Capital      float64 `json:"capital,omitempty"`       // display only: starting dollars for equity_usd
+	Pullback     bool    `json:"pullback,omitempty"`      // PREREG16 D2: 15% pullback above SMA200; exit > SMA20 or day 10
+	Clocks       bool    `json:"clocks,omitempty"`        // PREREG30 E4: four daily clocks on 6-hour bars (stepped by AdvanceGrid)
+	Tunnel       bool    `json:"tunnel,omitempty"`        // PREREG34 QB: size = Lev * (1 - exp(-2 ln(close/SMA) / sigma30)) above the SMA
+	Coherence    bool    `json:"coherence,omitempty"`     // PREREG35 QD: size = Lev * (1 - exp(-age / 5)), age = closes in a row above the SMA
 	TaperStart   float64 `json:"taper_start,omitempty"`   // PREREG36: drawdown where soft taper starts (e.g. 0.10)
 	TaperFull    float64 `json:"taper_full,omitempty"`    // PREREG36: drawdown where soft taper reaches TaperFloor (e.g. 0.28)
 	TaperFloor   float64 `json:"taper_floor,omitempty"`   // PREREG36: minimum leverage multiplier above TaperFull (e.g. 0.40)
@@ -679,13 +681,17 @@ func (v Variant) sharpeScale() float64 {
 }
 
 // Load reads a state file; a missing file returns (nil, nil).
+// A main file that is empty or broken (for example after a power cut) falls back to the previous good copy.
 func Load(path string) (*State, error) {
-	b, err := os.ReadFile(path)
+	b, fromBackup, err := durable.ReadJSON(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if fromBackup {
+		fmt.Fprintf(os.Stderr, "[TREND] %s was empty or broken; loaded the previous copy %s\n", path, durable.BackupPath(path))
 	}
 	var st State
 	if err := json.Unmarshal(b, &st); err != nil {
@@ -695,18 +701,7 @@ func Load(path string) (*State, error) {
 	return &st, nil
 }
 
-// Save writes the state atomically.
+// Save writes the state so that a power cut cannot leave it empty, keeping the previous copy as path.bak.
 func (st *State) Save(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(st, "", " ")
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return durable.WriteJSON(path, st, " ")
 }
