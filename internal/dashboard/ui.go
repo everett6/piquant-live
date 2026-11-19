@@ -112,6 +112,35 @@ const indexHTML = `<!doctype html>
   .mode-btn:hover{background:var(--panel)}
 
   main{flex:1;padding:24px;max-width:1480px;width:100%;margin:0 auto}
+  /* Live tab: only real numbers from the engine's files */
+  .lv-banner{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;
+    padding:14px 18px;margin-bottom:18px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+  .lv-banner .t{font-size:17px;font-weight:700}
+  .lv-banner .s{font-size:12px;color:var(--muted)}
+  .lv-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+  .lv-alloc{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--panel2);
+    border:1px solid var(--line-subtle);margin:14px 0 8px}
+  .lv-alloc span{display:block;height:100%}
+  .lv-legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--muted)}
+  .lv-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+  .lv-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .lv-scroll table{min-width:520px}
+  .lv-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  #tab-live .pill{white-space:nowrap}
+  .lv-pos{color:var(--accent)} .lv-neg{color:var(--bad)} .lv-dim{color:var(--muted)}
+  .lv-note{font-size:12px;color:var(--muted);margin-top:10px;line-height:1.5}
+  .lv-demo-banner{padding:12px 16px;margin-bottom:16px;border-radius:12px;border:1px solid rgba(255,171,0,.4);
+    background:var(--warn-dim);color:var(--warn);font-size:13px;font-weight:600}
+  @media(max-width:1100px){
+    header{flex-wrap:wrap;padding:10px 16px;gap:8px 10px}
+    nav{order:3;flex-basis:100%;margin-left:0}
+    .pills{flex-wrap:wrap}
+  }
+  @media(max-width:600px){
+    main{padding:14px 12px}
+    .pills .mode-btn{display:none}
+    .card{padding:14px}
+  }
   .tab-pane{display:none}
   .tab-pane.active{display:block;animation:fadein .2s ease-out}
   @keyframes fadein{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
@@ -255,7 +284,8 @@ const indexHTML = `<!doctype html>
     <span class="tag" style="color:var(--accent);border-color:rgba(0,230,118,.3)">Research OS</span>
   </div>
   <nav id="mainNav">
-    <button class="active" data-tab="tab-overview">Overview</button>
+    <button class="active" data-tab="tab-live">Live</button>
+    <button data-tab="tab-overview">Demo (simulated)</button>
     <button data-tab="tab-dryrun">Paper Trading</button>
     <button data-tab="tab-tax">Tax &amp; 8949</button>
     <button data-tab="tab-research">Research</button>
@@ -279,8 +309,64 @@ const indexHTML = `<!doctype html>
 </header>
 
 <main>
-  <!-- TAB 1: OVERVIEW -->
-  <div id="tab-overview" class="tab-pane active">
+  <!-- TAB 0: LIVE (real data only) -->
+  <div id="tab-live" class="tab-pane active">
+    <div class="lv-banner">
+      <div>
+        <div class="t" id="lvHeadline">Loading live status&hellip;</div>
+        <div class="s" id="lvSub">Paper money only. No real orders are sent.</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="pill info">Paper only</span>
+        <span class="pill" id="lvFresh">&ndash;</span>
+        <button class="btn btn-secondary" id="lvRefresh" style="padding:6px 12px;font-size:12px">Refresh</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <section class="card span12">
+        <h2>Blend A &mdash; the strategy being paper-traded <span class="meta" id="lvBlendMeta"></span></h2>
+        <div class="lv-kpis" id="lvBlendKpis"></div>
+        <div class="lv-alloc" id="lvAlloc" aria-label="Target allocation"></div>
+        <div class="lv-legend" id="lvAllocLegend"></div>
+        <div class="lv-note">60% goes to the trend rule (in BTC and ETH only while each is trending up, otherwise
+          parked in T-bills) and 40% to the funding-carry sleeve. A drawdown taper cuts size between 6% and 20% below
+          the high. Backtest 2020&ndash;2026: about +2.1%/month with a worst drop of &minus;19.8%; past results do not
+          promise future ones.</div>
+      </section>
+
+      <section class="card span8">
+        <h2>Paper ledgers <span class="meta" id="lvLedgerMeta"></span></h2>
+        <div class="lv-scroll">
+          <table class="table">
+            <thead><tr><th>Ledger</th><th class="lv-num">Return</th><th class="lv-num">Worst drop</th>
+              <th class="lv-num">Position now</th><th>Status</th></tr></thead>
+            <tbody id="lvLedgers"><tr><td colspan="5" class="lv-dim">Loading&hellip;</td></tr></tbody>
+          </table>
+        </div>
+        <div class="lv-note">Each ledger follows one rule with paper money from the same start day. "BH" (buy and
+          hold) is the benchmark to beat.</div>
+      </section>
+
+      <section class="card span4">
+        <h2>Tick recorder <span class="meta" id="lvRecMeta"></span></h2>
+        <div id="lvVenues" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
+        <div class="lv-kpis" id="lvRecKpis"></div>
+        <div class="lv-note" id="lvRecNote"></div>
+      </section>
+
+      <section class="card span12">
+        <h2>This computer <span class="meta" id="lvHostMeta"></span></h2>
+        <div class="lv-kpis" id="lvHostKpis"></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- TAB 1: DEMO (formerly Overview; illustrative and simulated figures) -->
+  <div id="tab-overview" class="tab-pane">
+    <div class="lv-demo-banner">Demo tab: most figures here are simulated, illustrative or placeholders (for example the
+      order book, market-maker fills and multi-year projections). They are not live results. Real paper results are on
+      the Live tab.</div>
     <div class="hero-status">
       <div>
         <div style="font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600">Platform Status</div>
@@ -1810,6 +1896,158 @@ const indexHTML = `<!doctype html>
       if (btn.getAttribute("data-tab") === "tab-tax") loadTaxTab();
     });
   });
+
+
+  // ---------- Live tab: real numbers only ----------
+  function lvEsc(v){ return String(v == null ? "" : v).replace(/[&<>"']/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]; }); }
+  function lvPct(x, d){
+    if (x == null || isNaN(x)) return "&ndash;";
+    var dp = d == null ? 2 : d, v = (x*100).toFixed(dp);
+    if (Number(v) === 0) return (0).toFixed(dp) + "%";
+    return (x > 0 ? "+" : "") + v + "%";
+  }
+  // Plain-language names for the paper ledgers (prefix match; unknown names show only their code).
+  var LV_NAMES = [["BH", "Buy and hold BTC + ETH"], ["Q42_r3_fastexit", "Blend A piece: fast-exit trend"],
+    ["Q42_safe_qd", "Blend A piece: coherence trend"], ["Q44_bh_vol", "Volatility-balanced buy and hold"],
+    ["Q44_dualspeed", "Dual-speed trend, leverage 1-2.5x"], ["Q44_qd_vol", "Coherence trend, leverage 1-2.5x"],
+    ["QB_", "Quantum-inspired tunnel trend"], ["QD_", "Quantum-inspired coherence trend"],
+    ["R1_", "50-day trend, BTC + ETH, 1x"], ["R3_", "50-day trend, exits on 20-day, 2x"], ["S36_safe_qd_fut", "Coherence trend on futures"],
+    ["S36_safe_qd_spot", "Coherence trend on spot"], ["T1_", "50-day trend, BTC spot, 1x"], ["T2_", "50-day trend, BTC futures, 2x"],
+    ["P1_", "50-day trend, BTC + ETH, 2x"], ["D2_", "Buy pullbacks above the 200-day"], ["E4_", "50-day trend on 6-hour bars, 2x"], ["PAPER50", "$50 ledger at 0.2x"]];
+  function lvLabel(name){
+    for (var i = 0; i < LV_NAMES.length; i++) if (name === LV_NAMES[i][0] || name.indexOf(LV_NAMES[i][0]) === 0) return LV_NAMES[i][1];
+    return "";
+  }
+  function lvCls(x){ return x > 0 ? "lv-pos" : (x < 0 ? "lv-neg" : "lv-dim"); }
+  function lvStat(k, v, sub, cls){
+    return "<div class='stat'><div class='k'>" + lvEsc(k) + "</div><div class='v " + (cls || "") + "'>" + v +
+      "</div>" + (sub ? "<div class='s'>" + sub + "</div>" : "") + "</div>";
+  }
+  function lvAge(sec){
+    if (sec == null || isNaN(sec)) return "unknown";
+    if (sec < 90) return Math.round(sec) + " s ago";
+    if (sec < 5400) return Math.round(sec/60) + " min ago";
+    if (sec < 172800) return Math.round(sec/3600) + " h ago";
+    return Math.round(sec/86400) + " days ago";
+  }
+  function lvGet(url){
+    return fetch(url, {credentials: "same-origin"}).then(function(r){
+      if (!r.ok) throw new Error(url + " " + r.status); return r.json(); });
+  }
+  function lvRenderTrend(j){
+    if (!j || j.status !== "ok") {
+      $("lvHeadline").textContent = "No paper ledger yet";
+      $("lvSub").textContent = "The engine has not written trend_state.json yet.";
+      return;
+    }
+    var today = new Date(); var last = new Date(j.last_date + "T00:00:00Z");
+    var lagDays = Math.floor((today - last) / 86400000);
+    var fresh = $("lvFresh");
+    fresh.textContent = "Last close " + j.last_date;
+    fresh.className = "pill " + (lagDays <= 2 ? "ok" : "warn");
+
+    var blends = (j.q42_expected_dd_blends || []);
+    var a = null;
+    blends.forEach(function(b){ if (b.name === "Q42_dualspeed_60_40_carry_spot") a = b; });
+    if (!a && blends.length) a = blends[0];
+    if (a) {
+      var invested = (a.target_btc_port_pct || 0) + (a.target_eth_port_pct || 0);
+      $("lvHeadline").textContent = invested > 0 ?
+        "Trend is ON: " + invested.toFixed(0) + "% in BTC/ETH" :
+        "Trend is OFF: no BTC/ETH held, trend money in T-bills";
+      $("lvSub").textContent = "Paper money only. No real orders are sent. Updated after each daily close (UTC).";
+      $("lvBlendMeta").textContent = a.name.replace(/_/g, " ") + " \u00b7 " + a.days + " days";
+      $("lvBlendKpis").innerHTML =
+        lvStat("Return so far", lvPct(a.equity - 1), "after tax est. " + lvPct((a.after_tax_equity || a.equity) - 1), lvCls(a.equity - 1)) +
+        lvStat("Worst drop", lvPct(-(a.max_dd || 0)), "taper starts at -6%", (a.max_dd || 0) > 0.06 ? "lv-neg" : "") +
+        lvStat("BTC", (a.target_btc_port_pct || 0).toFixed(0) + "%", "of the portfolio") +
+        lvStat("ETH", (a.target_eth_port_pct || 0).toFixed(0) + "%", "of the portfolio") +
+        lvStat("T-bill rate", (a.latest_dtb3_pct != null ? a.latest_dtb3_pct.toFixed(2) + "%" : "&ndash;"), "earned on idle cash") +
+        lvStat("Next rebalance", ((a.rebalance_delta_pct || 0) === 0 ? "None" : (a.rebalance_delta_pct > 0 ? "+" : "") + a.rebalance_delta_pct.toFixed(1) + " pts"), "change vs yesterday");
+      var segs = [["BTC", a.target_btc_port_pct || 0, "var(--warn)"], ["ETH", a.target_eth_port_pct || 0, "var(--info)"],
+                  ["T-bills (idle trend cash)", a.idle_trend_cash_pct || 0, "#5b6b7f"], ["Carry sleeve", a.carry_sleeve_pct || 0, "var(--accent)"]];
+      $("lvAlloc").innerHTML = segs.map(function(sg){ return sg[1] > 0 ? "<span title='" + lvEsc(sg[0]) + " " + sg[1].toFixed(0) +
+        "%' style='width:" + sg[1] + "%;background:" + sg[2] + "'></span>" : ""; }).join("");
+      $("lvAllocLegend").innerHTML = segs.map(function(sg){ return "<span><i style='background:" + sg[2] + "'></i>" +
+        lvEsc(sg[0]) + " " + sg[1].toFixed(0) + "%</span>"; }).join("");
+    }
+
+    var rows = (j.scorecard || []).slice().sort(function(x, y){
+      if (x.name === "BH") return -1; if (y.name === "BH") return 1; return (y.equity || 0) - (x.equity || 0); });
+    $("lvLedgerMeta").textContent = rows.length + " ledgers";
+    $("lvLedgers").innerHTML = rows.map(function(r){
+      var ret = (r.equity || 1) - 1;
+      var pos = r.current_pos || 0;
+      var status = r.killed ? "<span class='pill bad'>stopped</span>" :
+        (pos !== 0 ? "<span class='pill ok'>in market</span>" : "<span class='pill'>flat</span>");
+      var label = lvLabel(r.name);
+      return "<tr" + (r.name === "BH" ? " style='background:var(--panel2)'" : "") + "><td>" +
+        (label ? "<div>" + lvEsc(label) + (r.name === "BH" ? " <span class='lv-dim'>(benchmark)</span>" : "") + "</div>" : "") +
+        "<div class='lv-dim' style='font-size:11px;font-family:ui-monospace,monospace'>" + lvEsc(r.name) + "</div></td>" +
+        "<td class='lv-num " + lvCls(ret) + "'>" + lvPct(ret) + "</td>" +
+        "<td class='lv-num'>" + lvPct(-(r.max_dd || 0)) + "</td>" +
+        "<td class='lv-num'>" + (pos === 0 ? "<span class='lv-dim'>flat</span>" : (pos > 0 ? "long " : "short ") + Math.abs(pos).toFixed(2) + "x") + "</td>" +
+        "<td>" + status + "</td></tr>";
+    }).join("") || "<tr><td colspan='5' class='lv-dim'>No ledgers yet.</td></tr>";
+  }
+  function lvRenderRecorder(j){
+    var t = j && j.ticks;
+    if (!t) {
+      $("lvRecMeta").textContent = "not on this machine";
+      $("lvVenues").innerHTML = "";
+      $("lvRecKpis").innerHTML = "";
+      $("lvRecNote").textContent = "No ticks_status.json in " + ((j && j.dir) || "the collect folder") + ".";
+      return;
+    }
+    var age = t.age_seconds;
+    $("lvRecMeta").textContent = "updated " + lvAge(age);
+    var conn = t.connected || {};
+    $("lvVenues").innerHTML = Object.keys(conn).sort().map(function(v){
+      return "<span class='pill " + (conn[v] ? "ok" : "bad") + "'>" + lvEsc(v) + (conn[v] ? " connected" : " down") + "</span>"; }).join("");
+    function sum(o){ var n = 0; Object.keys(o || {}).forEach(function(k){ n += Number(o[k]) || 0; }); return n; }
+    var gaps = sum(t.trade_id_gaps), rec = sum(t.reconnects);
+    $("lvRecKpis").innerHTML =
+      lvStat("Trades", sum(t.trades).toLocaleString(), "since the recorder started") +
+      lvStat("Book rows", sum(t.book_rows).toLocaleString(), "one per stream per second") +
+      lvStat("Missed trades", gaps.toLocaleString(), gaps > 0 ? (100*gaps/(gaps + sum(t.trades))).toFixed(1) +
+        "% of all trades (outages, reconnects)" : "none", gaps > 0 ? "lv-neg" : "lv-pos") +
+      lvStat("Reconnects", rec.toLocaleString(), "exchange dropped the link");
+    var notes = [];
+    if (age > 180) notes.push("Status is " + lvAge(age) + ": the recorder may be stopped.");
+    if (t.writing_paused) notes.push("Writing is paused (low disk space).");
+    var errs = t.last_error || {};
+    // Only venues that are down right now; old errors from links that have since reconnected are history.
+    Object.keys(errs).forEach(function(v){ if (errs[v] && !conn[v]) notes.push(v + " is down: " + errs[v]); });
+    $("lvRecNote").textContent = notes.join(" ") || "All exchange streams are connected now.";
+  }
+  function lvRenderHost(j){
+    var h = (j && j.host) || {};
+    $("lvHostMeta").textContent = (h.hostname || "") + (h.model ? " \u00b7 " + h.model : "");
+    var memUsed = h.mem_total_bytes ? 1 - (h.mem_available_bytes / h.mem_total_bytes) : null;
+    var d = (h.disks || [])[0];
+    var th = h.throttle || {};
+    var thTxt = !th.available ? "n/a" : (th.active_throttled || th.active_freq_capped || th.active_under_voltage ? "now" :
+      (th.historical_throttled || th.historical_under_voltage ? "earlier" : "none"));
+    $("lvHostKpis").innerHTML =
+      lvStat("CPU busy", h.cpu_busy != null ? (h.cpu_busy*100).toFixed(1) + "%" : "&ndash;", "load " + (h.load1 != null ? h.load1.toFixed(2) : "&ndash;")) +
+      lvStat("Temperature", h.temp_c != null ? h.temp_c.toFixed(1) + " &deg;C" : "&ndash;", "slows itself at 80 &deg;C", h.temp_c > 75 ? "lv-neg" : "") +
+      lvStat("Throttling", thTxt, "power or heat limits", thTxt === "now" ? "lv-neg" : "") +
+      lvStat("Memory used", memUsed != null ? (memUsed*100).toFixed(0) + "%" : "&ndash;", h.mem_total_bytes ? (h.mem_total_bytes/1073741824).toFixed(1) + " GB total" : "") +
+      lvStat("Disk used", d ? d.used_percent.toFixed(0) + "%" : "&ndash;", d ? (d.free_bytes/1073741824).toFixed(0) + " GB free" : "") +
+      lvStat("Up for", h.uptime_seconds != null ? lvAge(h.uptime_seconds).replace(" ago", "") : "&ndash;", "since last boot");
+  }
+  function lvLoad(){
+    lvGet("/api/paper/trend-blend").then(lvRenderTrend).catch(function(e){
+      $("lvHeadline").textContent = "Could not load the paper ledger"; $("lvSub").textContent = e.message; });
+    lvGet("/api/recorder").then(lvRenderRecorder).catch(function(){ lvRenderRecorder(null); });
+    lvGet("/api/status").then(lvRenderHost).catch(function(){});
+  }
+  if ($("tab-live")) {
+    $("lvRefresh").addEventListener("click", lvLoad);
+    lvLoad();
+    setInterval(function(){ if ($("tab-live").classList.contains("active") && !document.hidden) lvLoad(); }, 30000);
+  }
 
   if ($("btnSwitchPaperTab")) {
     $("btnSwitchPaperTab").addEventListener("click", function(){

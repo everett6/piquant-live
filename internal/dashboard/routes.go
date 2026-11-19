@@ -62,6 +62,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/paper/dryrun", s.handlePaperDryRun)
 	s.mux.HandleFunc("/api/paper/tearsheet", s.handlePaperTearSheet)
 	s.mux.HandleFunc("/api/paper/trend-blend", s.handlePaperTrendBlend)
+	s.mux.HandleFunc("/api/recorder", s.handleRecorder)
 	s.mux.HandleFunc("/api/paper/alpha-decay", s.handlePaperAlphaDecay)
 	s.mux.HandleFunc("/api/paper/schwab-plan", s.handlePaperSchwabPlan)
 	s.mux.HandleFunc("/api/paper/reports", s.handlePaperReports)
@@ -1861,6 +1862,35 @@ func (s *Server) resolveCarryDir() string {
 		return filepath.Join(home, "piquant-collect", "carry")
 	}
 	return "data/carry"
+}
+
+// handleRecorder returns the tick recorder's own status files (ticks_status.json and status.json in the
+// collect directory, the parent of the carry directory) with their age in seconds. Missing files are null.
+func (s *Server) handleRecorder(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	dir := filepath.Dir(s.resolveCarryDir())
+	out := map[string]any{"dir": dir}
+	for key, name := range map[string]string{"ticks": "ticks_status.json", "collector": "status.json"} {
+		path := filepath.Join(dir, name)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			out[key] = nil
+			continue
+		}
+		var v map[string]any
+		if json.Unmarshal(b, &v) != nil {
+			out[key] = nil
+			continue
+		}
+		if fi, err := os.Stat(path); err == nil {
+			v["age_seconds"] = time.Since(fi.ModTime()).Seconds()
+		}
+		out[key] = v
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) resolveDTB3Path() string {
