@@ -1166,7 +1166,7 @@ const indexHTML = `<!doctype html>
         <div style="overflow-x:auto;margin-bottom:12px">
           <table class="table">
             <thead>
-              <tr><th>Composite Portfolio</th><th>Equity</th><th>Max DD</th><th>Mean DD</th><th>Ulcer</th><th>CDaR95</th><th>Sharpe</th><th>BTC / ETH / Cash / Carry</th></tr>
+              <tr><th>Composite Portfolio</th><th>Equity (After-Tax)</th><th>Max DD</th><th>Mean DD</th><th>Ulcer</th><th>CDaR95</th><th>Sharpe</th><th>BTC / ETH / Cash / Carry</th></tr>
             </thead>
             <tbody id="q42BlendBody" class="mono">
               <tr><td colspan="8" class="empty" style="text-align:center;padding:10px">Loading PREREG36/42 blend portfolios...</td></tr>
@@ -2597,7 +2597,7 @@ const indexHTML = `<!doctype html>
         var isHi = b.name && (b.name.indexOf("Q42_") === 0 || b.name.indexOf("Q44_") === 0);
         var st = isHi ? " style='color:var(--accent);font-weight:700'" : "";
         var alloc = num(b.target_btc_port_pct, 1) + "% / " + num(b.target_eth_port_pct, 1) + "% / " + num(b.idle_trend_cash_pct, 1) + "% / " + num(b.carry_sleeve_pct, 0) + "%";
-        return "<tr" + st + "><td>" + esc(b.name) + "</td><td>" + num(b.equity, 4) + "</td><td>" +
+        return "<tr" + st + "><td>" + esc(b.name) + "</td><td>" + num(b.equity, 4) + " <span style='color:var(--muted);font-size:11px'>(" + num(b.after_tax_equity||b.equity, 4) + ")</span></td><td>" +
           num((b.max_dd||0)*100, 2) + "%</td><td>" + num((b.mean_dd||0)*100, 2) + "%</td><td>" +
           num((b.ulcer_index||0)*100, 2) + "%</td><td>" + num((b.cdar_95||0)*100, 2) + "%</td><td>" +
           num(b.sharpe, 2) + "</td><td>" + alloc + "</td></tr>";

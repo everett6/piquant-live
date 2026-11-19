@@ -31,6 +31,8 @@ type BlendSummary struct {
 	Days              int     `json:"days"`
 	CarryMatchedDays  int     `json:"carry_matched_days"`
 	Equity            float64 `json:"equity"`
+	AfterTaxEquity    float64 `json:"after_tax_equity"`
+	EstTaxRatePct     float64 `json:"est_tax_rate_pct"`
 	MaxDD             float64 `json:"max_dd"`
 	MeanDD            float64 `json:"mean_dd"`
 	UlcerIndex        float64 `json:"ulcer_index"`
@@ -227,6 +229,8 @@ func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[str
 			TrendVariant:     trendLabel,
 			Days:             0,
 			Equity:           1,
+			AfterTaxEquity:   1,
+			EstTaxRatePct:    33.3,
 			LastDate:         st.LastDate,
 			IdleTrendCashPct: round2(trendShare * 100),
 			CarrySleevePct:   round2(carryShare * 100),
@@ -364,12 +368,19 @@ func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[str
 	}
 
 	lastDate := baseDays[len(baseDays)-1].Date
+	const defaultTaxRatePct = 33.3 // US Fed 24% + CA FTB 9.3% short-term reserve (internal/tax)
+	afterTaxEq := eq
+	if eq > 1.0 {
+		afterTaxEq = 1.0 + (eq-1.0)*(1.0-defaultTaxRatePct/100.0)
+	}
 	return BlendSummary{
 		Name:              outName,
 		TrendVariant:      trendLabel,
 		Days:              len(baseDays),
 		CarryMatchedDays:  matchedCarry,
 		Equity:            round4(eq),
+		AfterTaxEquity:    round4(afterTaxEq),
+		EstTaxRatePct:     defaultTaxRatePct,
 		MaxDD:             round4(maxDD),
 		MeanDD:            round4(meanDD),
 		UlcerIndex:        round4(ulcer),

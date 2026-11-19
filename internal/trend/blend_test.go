@@ -88,6 +88,9 @@ func TestComputeS36BlendWithCarryAndDTB3(t *testing.T) {
 	if b.CarrySleevePct != 30.0 || b.TargetBTCPortPct <= 0 || b.TargetETHPortPct <= 0 {
 		t.Fatalf("unexpected weights: %+v", b)
 	}
+	if b.EstTaxRatePct != 33.3 || (b.Equity > 1.0 && b.AfterTaxEquity >= b.Equity) {
+		t.Fatalf("unexpected after-tax equity: %+v", b)
+	}
 
 	// Day-0 initialized state before any forward closes still returns valid baseline targets.
 	stEmpty := pairState(t)
