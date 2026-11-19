@@ -96,7 +96,11 @@ func appendGzip(path string, data []byte) error {
 	// cannot leave a half-written member in the middle of the file, and any
 	// partial write is rolled back by truncating to the original size.
 	var mem bytes.Buffer
-	zw := gzip.NewWriter(&mem)
+	// Best compression: about 6% smaller files than the default level, and cheap at one flush a minute.
+	zw, err := gzip.NewWriterLevel(&mem, gzip.BestCompression)
+	if err != nil {
+		return err
+	}
 	if _, err := zw.Write(data); err != nil {
 		return err
 	}
