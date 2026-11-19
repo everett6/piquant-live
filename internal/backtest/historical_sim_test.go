@@ -8,7 +8,7 @@ import (
 
 func TestHistoricalSimulatorAllModes(t *testing.T) {
 	dataDir := filepath.Join("..", "..", "data", "historical")
-	reportsDir := filepath.Join("..", "..", "data", "reports")
+	reportsDir := t.TempDir()
 
 	btcPath := filepath.Join(dataDir, "btc_daily_full.csv")
 	ethPath := filepath.Join(dataDir, "eth_daily_full.csv")

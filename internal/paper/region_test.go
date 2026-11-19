@@ -50,6 +50,35 @@ func TestApplyRegionProfileGlobalAndUnknown(t *testing.T) {
 	if err := ApplyRegionProfile(&cfg, "mars"); err == nil {
 		t.Error("expected error for unknown region")
 	}
+
+	// Verify multi-exchange 1x and 1x..2.5x balanced leverage profiles (Coinbase, Kraken, Bybit, Deribit)
+	for _, tc := range []struct {
+		venue    string
+		spotOnly bool
+		maxLev   float64
+		endpoint string
+	}{
+		{RegionCoinbaseSpot, true, 1.0, "https://api.coinbase.com"},
+		{RegionCoinbaseFutures, false, 2.5, "https://api.coinbase.com"},
+		{RegionKrakenSpot, true, 1.0, "https://api.kraken.com"},
+		{RegionKrakenFutures, false, 2.5, "https://futures.kraken.com"},
+		{RegionBybit, false, 2.5, "https://api.bybit.com"},
+		{RegionDeribit, false, 2.5, "https://www.deribit.com"},
+	} {
+		c := DefaultDryRunConfig(t.TempDir())
+		if err := ApplyRegionProfile(&c, tc.venue); err != nil {
+			t.Fatalf("ApplyRegionProfile(%q) failed: %v", tc.venue, err)
+		}
+		if c.SpotOnly != tc.spotOnly || c.MaxLeverage != tc.maxLev {
+			t.Fatalf("%s: got spot=%v maxLev=%v, want spot=%v maxLev=%v", tc.venue, c.SpotOnly, c.MaxLeverage, tc.spotOnly, tc.maxLev)
+		}
+		if got := OrderEntryEndpoint(tc.venue); got != tc.endpoint {
+			t.Fatalf("%s: OrderEntryEndpoint=%q, want %q", tc.venue, got, tc.endpoint)
+		}
+	}
+	if len(SupportedVenueProfiles()) < 6 {
+		t.Fatalf("expected >= 6 supported venue profiles, got %d", len(SupportedVenueProfiles()))
+	}
 }
 
 func TestBuildBinanceUSStreamURL(t *testing.T) {

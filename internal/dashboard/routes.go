@@ -1943,6 +1943,7 @@ func (s *Server) handlePaperTrendBlend(w http.ResponseWriter, r *http.Request) {
 		"s36_qd_carry_blend":       blends,
 		"q42_expected_dd_blends":   q42Blends,
 		"q44_vol_harvester_blends": q44Blends,
+		"venue_leverage_profiles":  paper.SupportedVenueProfiles(),
 		"ping_plan":                plan,
 	})
 }

@@ -199,9 +199,17 @@ func (st *State) Advance(days []Day) int {
 			continue // seed only
 		}
 		bar := d.Close/prev - 1
-		for _, name := range sortedKeys(st.Ledgers) {
-			if l := st.Ledgers[name]; !l.Variant.Pair {
-				l.step(d.Date, bar, st.History)
+		if len(st.Ledgers) == len(Variants) {
+			for i := range Variants {
+				if l := st.Ledgers[Variants[i].Name]; l != nil && !l.Variant.Pair {
+					l.step(d.Date, bar, st.History)
+				}
+			}
+		} else {
+			for _, name := range sortedKeys(st.Ledgers) {
+				if l := st.Ledgers[name]; !l.Variant.Pair {
+					l.step(d.Date, bar, st.History)
+				}
 			}
 		}
 		n++
@@ -279,9 +287,17 @@ func (st *State) AdvanceETH(days []Day) int {
 		btcHist := st.History[:bi+1]
 		barB := btcHist[bi].Close/btcHist[bi-1].Close - 1
 		barE := d.Close/prevE - 1
-		for _, name := range sortedKeys(st.Ledgers) {
-			if l := st.Ledgers[name]; l.Variant.Pair && !l.Variant.Clocks {
-				l.stepPair(d.Date, barB, barE, btcHist, st.ETHHistory)
+		if len(st.Ledgers) == len(Variants) {
+			for i := range Variants {
+				if l := st.Ledgers[Variants[i].Name]; l != nil && l.Variant.Pair && !l.Variant.Clocks {
+					l.stepPair(d.Date, barB, barE, btcHist, st.ETHHistory)
+				}
+			}
+		} else {
+			for _, name := range sortedKeys(st.Ledgers) {
+				if l := st.Ledgers[name]; l.Variant.Pair && !l.Variant.Clocks {
+					l.stepPair(d.Date, barB, barE, btcHist, st.ETHHistory)
+				}
 			}
 		}
 		n++
@@ -384,60 +400,75 @@ func bhVolHarvestMult(hist []Day) float64 {
 // tunnelShare is PREREG34 QB's size as a share of full leverage: 1 - exp(-2 ln(close/sma) / sigma), with sigma the
 // sample standard deviation of the last 30 daily returns (strategies34.tunnel_positions). 0 without 31 closes.
 func tunnelShare(hist []Day, c, m float64) float64 {
-	const n = 30
-	if len(hist) < n+1 || c <= m || m <= 0 {
+	if c <= m || m <= 0 {
 		return 0
 	}
-	h := hist[len(hist)-n-1:]
-	var s, s2 float64
-	for i := 1; i < len(h); i++ {
-		if h[i-1].Close <= 0 {
-			return 0
-		}
-		r := h[i].Close/h[i-1].Close - 1
-		s += r
-		s2 += r * r
-	}
-	v := (s2 - s*s/n) / (n - 1)
-	if v <= 0 {
+	sigma, ok := sampleStdLastN(hist, 30)
+	if !ok {
 		return 0
 	}
-	return 1 - math.Exp(-2*math.Log(c/m)/math.Sqrt(v))
+	return 1 - math.Exp(-2*math.Log(c/m)/sigma)
 }
 
 // coherenceShare is PREREG35 QD's size as a share of full leverage: 1 - exp(-age / 5), with age the number of
-// consecutive closes above their own SMA(n), the latest included (strategies35.coherence_positions). The count stops
-// at 200 closes, where the share is 1 to 17 decimal places, so the stored history is always long enough.
+// consecutive closes above their own SMA(n), the latest included (strategies35.coherence_positions).
+// Computed in O(maxAge + n) via a sliding window sum instead of O(maxAge * n).
 func coherenceShare(hist []Day, n int) float64 {
 	const tau, maxAge = 5.0, 200
+	if n <= 0 || len(hist) < n {
+		return 0
+	}
+	var sum float64
+	for i := len(hist) - n; i < len(hist); i++ {
+		sum += hist[i].Close
+	}
+	fn := float64(n)
 	age := 0
 	for k := len(hist); k >= n && age < maxAge; k-- {
-		m, ok := sma(hist[:k], n)
-		if !ok || hist[k-1].Close <= m {
+		if hist[k-1].Close <= sum/fn {
 			break
 		}
 		age++
+		if k > n {
+			sum += hist[k-1-n].Close - hist[k-1].Close
+		}
 	}
 	return 1 - math.Exp(-float64(age)/tau)
 }
 
 // r3CoherenceShare is PREREG40/42's R3 fast-exit coherence ramp: consecutive closes ending now where
-// close > SMA(smaN) and close >= SMA(exitSMA), scaled by 1 - exp(-age / 5).
+// close > SMA(smaN) and close >= SMA(exitSMA), scaled by 1 - exp(-age / 5) in O(maxAge + max(smaN, exitSMA)).
 func r3CoherenceShare(hist []Day, smaN, exitSMA int) float64 {
 	const tau, maxAge = 5.0, 200
+	if smaN <= 0 || exitSMA <= 0 {
+		return 0
+	}
 	minLen := smaN
 	if exitSMA > minLen {
 		minLen = exitSMA
 	}
+	if len(hist) < minLen {
+		return 0
+	}
+	var sumL, sumS float64
+	for i := len(hist) - smaN; i < len(hist); i++ {
+		sumL += hist[i].Close
+	}
+	for i := len(hist) - exitSMA; i < len(hist); i++ {
+		sumS += hist[i].Close
+	}
+	fnL, fnS := float64(smaN), float64(exitSMA)
 	age := 0
 	for k := len(hist); k >= minLen && age < maxAge; k-- {
 		c := hist[k-1].Close
-		ml, ok1 := sma(hist[:k], smaN)
-		ms, ok2 := sma(hist[:k], exitSMA)
-		if !ok1 || !ok2 || c <= ml || c < ms {
+		if c <= sumL/fnL || c < sumS/fnS {
 			break
 		}
 		age++
+		if k > minLen {
+			sumL += hist[k-1-smaN].Close - c
+			sumS += hist[k-1-exitSMA].Close - c
+		}
 	}
 	return 1 - math.Exp(-float64(age)/tau)
 }

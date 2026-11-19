@@ -172,3 +172,16 @@ func TestQ44VolBalancedAndBHHarvesterBlends(t *testing.T) {
 		t.Fatalf("unexpected q44_bh_harvester blend: ok=%v %+v", ok, bHarv)
 	}
 }
+
+func BenchmarkTrendAdvance500Days(b *testing.B) {
+	btcSeq := rising(500, 100, 1.5)
+	ethSeq := rising(500, 50, 0.75)
+	btcDays := days("2022-01-01", btcSeq...)
+	ethDays := days("2022-01-01", ethSeq...)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		st := NewState("2022-01-01")
+		st.Advance(btcDays)
+		st.AdvanceETH(ethDays)
+	}
+}
