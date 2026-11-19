@@ -1,6 +1,9 @@
 package collect
 
 import (
+	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -71,12 +74,13 @@ type GapFillConfig struct {
 
 // GapFillStream summarises one stream of a run.
 type GapFillStream struct {
-	Gaps      int    `json:"gaps"`
-	Missing   int64  `json:"missing"`
-	Filled    int64  `json:"filled"`
-	Skipped   int64  `json:"skipped_too_large"`
-	Remaining int64  `json:"remaining"` // missing - filled: ids the venue did not return (or skipped/failed)
-	Error     string `json:"error,omitempty"`
+	Gaps      int      `json:"gaps"`
+	Missing   int64    `json:"missing"`
+	Filled    int64    `json:"filled"`
+	Skipped   int64    `json:"skipped_too_large"`
+	Remaining int64    `json:"remaining"` // missing - filled: ids the venue did not return (or skipped/failed)
+	Error     string   `json:"error,omitempty"`
+	Warnings  []string `json:"warnings,omitempty"`
 }
 
 // GapFillReport is written to <OutDir>/backfill_report.json after a (non-dry) run.
@@ -91,14 +95,61 @@ type GapFillReport struct {
 
 type idT struct{ id, t int64 }
 
-// readDayIDs returns the (id, t) of every trade in the given files, sorted by id, duplicates removed.
-func readDayIDs(paths ...string) ([]idT, error) {
+// readRowsTolerant is ReadRows for possibly damaged files: a bad member (zero padding after a hard reset, a
+// corrupt header or checksum) is skipped by resuming at the next gzip header, and counted. It never writes.
+func readRowsTolerant(path string, fn func(line []byte)) (damaged int, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	br := bytes.NewReader(data) // an io.ByteReader, so gzip stops exactly at each member's end
+	var zr *gzip.Reader
+	for {
+		start := br.Size() - int64(br.Len())
+		if zr == nil {
+			zr, err = gzip.NewReader(br)
+		} else {
+			err = zr.Reset(br)
+		}
+		if err == io.EOF {
+			return damaged, nil
+		}
+		if err == nil {
+			zr.Multistream(false)
+			sc := bufio.NewScanner(zr)
+			sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+			for sc.Scan() {
+				fn(sc.Bytes())
+			}
+			if err = sc.Err(); err == nil {
+				continue
+			}
+			if err == io.ErrUnexpectedEOF && br.Len() == 0 {
+				return damaged, nil // truncated final member (crash mid-write)
+			}
+		}
+		damaged++
+		next := bytes.Index(data[start+1:], []byte{0x1f, 0x8b, 0x08})
+		if next < 0 {
+			return damaged, nil
+		}
+		if _, err := br.Seek(start+1+int64(next), io.SeekStart); err != nil {
+			return damaged, err
+		}
+		zr = nil
+	}
+}
+
+// readDayIDs returns the (id, t) of every trade in the given files, sorted by id, duplicates removed, and the
+// number of damaged gzip members skipped.
+func readDayIDs(paths ...string) ([]idT, int, error) {
 	var out []idT
+	damaged := 0
 	for _, p := range paths {
 		if _, err := os.Stat(p); err != nil {
 			continue
 		}
-		err := ReadRows(p, func(line []byte) error {
+		n, err := readRowsTolerant(p, func(line []byte) {
 			var r struct {
 				T  int64 `json:"t"`
 				ID int64 `json:"id"`
@@ -106,11 +157,11 @@ func readDayIDs(paths ...string) ([]idT, error) {
 			if json.Unmarshal(line, &r) == nil && r.ID > 0 {
 				out = append(out, idT{r.ID, r.T})
 			}
-			return nil
 		})
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+		damaged += n
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].id < out[j].id })
 	uniq := out[:0]
@@ -119,16 +170,15 @@ func readDayIDs(paths ...string) ([]idT, error) {
 			uniq = append(uniq, x)
 		}
 	}
-	return uniq, nil
+	return uniq, damaged, nil
 }
 
 // FindTradeGaps lists the id gaps of one stream over the day files in [from, to] (inclusive, empty = open).
 // Trades already in the backfill tree count as present, so a rerun only finds what is still missing. A gap across
-// midnight is found when both calendar-consecutive day files exist.
-func FindTradeGaps(ticksDir, backfillDir, stream, from, to string) ([]TradeGap, error) {
+// midnight is found when both calendar-consecutive day files exist. warnings name files with damaged members.
+func FindTradeGaps(ticksDir, backfillDir, stream, from, to string) (gaps []TradeGap, warnings []string, err error) {
 	files, _ := filepath.Glob(filepath.Join(ticksDir, stream, "*.jsonl.gz"))
 	sort.Strings(files)
-	var gaps []TradeGap
 	var prev *idT
 	var prevDay time.Time
 	for _, f := range files {
@@ -137,9 +187,12 @@ func FindTradeGaps(ticksDir, backfillDir, stream, from, to string) ([]TradeGap, 
 		if err != nil || (from != "" && day < from) || (to != "" && day > to) {
 			continue
 		}
-		ids, err := readDayIDs(f, filepath.Join(backfillDir, stream, day+".jsonl.gz"))
+		ids, damaged, err := readDayIDs(f, filepath.Join(backfillDir, stream, day+".jsonl.gz"))
 		if err != nil {
-			return nil, err
+			return nil, warnings, err
+		}
+		if damaged > 0 {
+			warnings = append(warnings, fmt.Sprintf("%s/%s: %d damaged gzip member(s) skipped", stream, day, damaged))
 		}
 		if len(ids) == 0 {
 			continue
@@ -155,7 +208,7 @@ func FindTradeGaps(ticksDir, backfillDir, stream, from, to string) ([]TradeGap, 
 		last := ids[len(ids)-1]
 		prev, prevDay = &last, d
 	}
-	return gaps, nil
+	return gaps, warnings, nil
 }
 
 // venueOf maps a stream dir name to its venue and REST symbol.
@@ -456,7 +509,11 @@ func BackfillTradeGaps(ctx context.Context, cfg GapFillConfig) (*GapFillReport, 
 	for _, stream := range streams {
 		st := &GapFillStream{}
 		rep.Streams[stream] = st
-		gaps, err := FindTradeGaps(ticksDir, out, stream, cfg.From, cfg.To)
+		gaps, warn, err := FindTradeGaps(ticksDir, out, stream, cfg.From, cfg.To)
+		st.Warnings = warn
+		for _, w := range warn {
+			progress("warning: " + w)
+		}
 		if err != nil {
 			st.Error = err.Error()
 			continue

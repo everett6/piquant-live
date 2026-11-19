@@ -173,7 +173,7 @@ func TestFindTradeGapsWithinAndAcrossDays(t *testing.T) {
 	end1 := int64(1000 + 86399)
 	writeLive(t, dir, "BTC-USD", idRange(1000, end1-5, [2]int64{1010, 1019}))
 	writeLive(t, dir, "BTC-USD", idRange(end1+6, end1+50))
-	gaps, err := FindTradeGaps(filepath.Join(dir, "ticks"), filepath.Join(dir, "ticks_backfill"), "BTC-USD", "", "")
+	gaps, _, err := FindTradeGaps(filepath.Join(dir, "ticks"), filepath.Join(dir, "ticks_backfill"), "BTC-USD", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestFindTradeGapsWithinAndAcrossDays(t *testing.T) {
 		t.Errorf("midnight gap = %+v", gaps[1])
 	}
 	// the day range filter drops day 2 and with it the midnight gap
-	gaps, _ = FindTradeGaps(filepath.Join(dir, "ticks"), filepath.Join(dir, "ticks_backfill"), "BTC-USD", "", "2026-11-19")
+	gaps, _, _ = FindTradeGaps(filepath.Join(dir, "ticks"), filepath.Join(dir, "ticks_backfill"), "BTC-USD", "", "2026-11-19")
 	if len(gaps) != 1 {
 		t.Errorf("to-filtered gaps = %+v, want 1", gaps)
 	}
@@ -313,5 +313,33 @@ func TestVenueOf(t *testing.T) {
 		if v, s := venueOf(in); v != want[0] || s != want[1] {
 			t.Errorf("venueOf(%s) = %s %s", in, v, s)
 		}
+	}
+}
+
+func TestFindTradeGapsSurvivesDamagedMembers(t *testing.T) {
+	dir := t.TempDir()
+	writeLive(t, dir, "BTC-USD", idRange(1000, 1099))
+	path := filepath.Join(dir, "ticks", "BTC-USD", "2026-11-19.jsonl.gz")
+	// a corrupt member in the middle (bad header bytes), then a good member, then zero padding (hard reset)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.Write([]byte{0x1f, 0x8b, 0x08, 0, 0xde, 0xad, 0xbe, 0xef, 1, 2, 3})
+	_ = f.Close()
+	writeLive(t, dir, "BTC-USD", idRange(1100, 1199, [2]int64{1150, 1159}))
+	f, _ = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	_, _ = f.Write(make([]byte, 1983))
+	_ = f.Close()
+
+	gaps, warn, err := FindTradeGaps(filepath.Join(dir, "ticks"), filepath.Join(dir, "ticks_backfill"), "BTC-USD", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gaps) != 1 || gaps[0].After != 1149 || gaps[0].Before != 1160 {
+		t.Errorf("gaps = %+v, want only 1149..1160 (no false gap from the damaged member)", gaps)
+	}
+	if len(warn) != 1 {
+		t.Errorf("warnings = %v, want one", warn)
 	}
 }
