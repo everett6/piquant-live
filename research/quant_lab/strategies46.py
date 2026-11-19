@@ -1,116 +1,160 @@
-"""Round-46 (PREREG46): V1 constant-mix rebalancing against cash, V2/V3 gated 30-day put-spread ladders (sold when
-options are expensive, bought when cheap), V4 ramped short in established downtrends. Pure functions; nothing here
-reads data from disk."""
-from __future__ import annotations
-
-import math
+"""
+Strategies 46: Alpha-Decay Detection and Self-Improving Allocation Loop (Pure Functions, Zero Disk I/O).
+"""
 
 import numpy as np
 import pandas as pd
 
-import strategies5 as S5
-from strategies26 import BASE, STRESS, OptCosts, realized_vol_iv  # noqa: F401
-from strategies27 import YEAR_D, _fee, bs_put_vec
 
-TENOR_D, Q = 30, 0.5
-W_COIN, BAND = 0.25, 0.05
-VRP_SELL = 0.15
-TAU = 5.0
+def rolling_alpha_decay_throttle(
+    sleeve_ret: pd.Series, lookback: int = 60, floor_mult: float = 0.35
+) -> pd.Series:
+    """Strictly causal rolling alpha decay throttle.
+
+    Computes rolling lookback-day mean net return mu and std sd up to t
+    (requiring at least 20 bars, else 1.0). Annualized rolling Sharpe
+    sr = (mu / max(sd, 1e-6)) * sqrt(365).
+    - If sr >= 0.5: multiplier = 1.0 (HEALTHY)
+    - If sr <= -0.5: multiplier = floor_mult (DECAYING -> parks 65% in DTB3)
+    - Linearly interpolates between floor_mult and 1.0 for sr in (-0.5, 0.5).
+    Never uses future bars (t+1..).
+    """
+    s = sleeve_ret.fillna(0.0)
+    # Causal rolling mean and std
+    # We want rolling window of size `lookback`, min_periods=20
+    rolling_mean = s.rolling(window=lookback, min_periods=20).mean()
+    rolling_std = s.rolling(window=lookback, min_periods=20).std()
+
+    # Annualized Sharpe with sqrt(365)
+    # If not enough periods (<20), rolling_mean or rolling_std is NaN -> multiplier = 1.0
+    sr = (rolling_mean / np.maximum(rolling_std, 1e-6)) * np.sqrt(365.0)
+
+    # Calculate multiplier
+    # sr >= 0.5 -> 1.0
+    # sr <= -0.5 -> floor_mult
+    # else linear interpolation
+    def compute_mult(val):
+        if np.isnan(val):
+            return 1.0
+        if val >= 0.5:
+            return 1.0
+        if val <= -0.5:
+            return floor_mult
+        # linear interpolation between -0.5 and 0.5
+        # range span is 1.0. val + 0.5 is in (0, 1)
+        frac = (val - (-0.5)) / (0.5 - (-0.5))
+        return floor_mult + frac * (1.0 - floor_mult)
+
+    mults = sr.apply(compute_mult)
+    # Ensure any initial NaNs where min_periods not met are 1.0
+    mults = mults.fillna(1.0)
+    return mults
 
 
-def rebalance_mix(close_b: pd.Series, close_e: pd.Series, rate_pct: pd.Series, w: float = W_COIN, band: float = BAND,
-                  cost_bps: float = 3.0) -> tuple[pd.Series, int]:
-    """V1: w in BTC, w in ETH, 1 - 2w in T-bills. At each close, if either coin's weight is more than `band` away from
-    w, all three are reset to target, paying cost_bps on the traded amount. Returns (daily return, rebalances)."""
-    idx = close_b.index
-    rb = close_b.pct_change().fillna(0.0).to_numpy()
-    re = close_e.reindex(idx).pct_change().fillna(0.0).to_numpy()
-    cash = rate_pct.reindex(idx, method="ffill").fillna(0.0).to_numpy() / 100 / 365
-    hb, he, hc = w, w, 1 - 2 * w  # holdings as fractions of start-of-day equity
-    out, n = np.zeros(len(idx)), 0
-    for t in range(len(idx)):
-        if t > 0:
-            vb, ve, vc = hb * (1 + rb[t]), he * (1 + re[t]), hc * (1 + cash[t - 1])
-            eq = vb + ve + vc
-            out[t] = eq - 1
-            hb, he, hc = vb / eq, ve / eq, vc / eq
-        if abs(hb - w) > band or abs(he - w) > band:
-            traded = abs(hb - w) + abs(he - w)
-            out[t] = (1 + out[t]) * (1 - traded * cost_bps * 1e-4) - 1
-            hb, he, hc = w, w, 1 - 2 * w
-            n += 1
-    return pd.Series(out, index=idx), n
+def self_improving_exp_grad_weights(
+    sleeve_rets: pd.DataFrame,
+    eta: float = 0.15,
+    min_carry: float = 0.25,
+    max_trend: float = 0.70,
+    lookback: int = 45,
+) -> pd.DataFrame:
+    """Strictly causal Multiplicative-Weights / Exponential-Gradient self-improving loop
+
+    across columns ["qd", "r3", "carry", "dtb3"]:
+    - Initializes w = [0.35, 0.25, 0.30, 0.10] at t = 0.
+    - At each close t >= 1, observes realized net return vector r_t = sleeve_rets.iloc[t]
+      (already net of fees/funding!), updates unnormalized scores using EWMA-smoothed net return & Sharpe-normalized step:
+      step_i = clip(r_t[i] / max(rolling_std_i, 0.005), -3.0, 3.0)
+      (computed using rolling lookback std up to t),
+      w_raw = w_prev * exp(eta * step).
+    - Projects w_raw onto the risk-safe simplex:
+      w_carry >= min_carry, w_qd + w_r3 <= max_trend, sum(w) == 1.0, w >= 0.0.
+    - Note: w.iloc[t] is decided at close t and held over t+1 (strictly causal!).
+    """
+    cols = ["qd", "r3", "carry", "dtb3"]
+    assert all(c in sleeve_rets.columns for c in cols), f"Missing columns in {sleeve_rets.columns}"
+
+    n = len(sleeve_rets)
+    weights = np.zeros((n, 4))
+
+    # Initial weights at t = 0
+    w = np.array([0.35, 0.25, 0.30, 0.10])
+    weights[0] = w
+
+    # Rolling std up to t (min_periods=10 for stability)
+    rolling_std = sleeve_rets[cols].rolling(window=lookback, min_periods=10).std().fillna(0.01)
+
+    for t in range(1, n):
+        r_t = sleeve_rets.iloc[t][cols].values
+        std_t = rolling_std.iloc[t][cols].values
+        std_t = np.maximum(std_t, 0.005)
+
+        step = np.clip(r_t / std_t, -3.0, 3.0)
+
+        # Multiplicative weight update
+        w_raw = w * np.exp(eta * step)
+
+        # Projection onto simplex with constraints:
+        # 1. w >= 0, sum(w) = 1
+        # 2. w_carry >= min_carry (index 2)
+        # 3. w_qd + w_r3 <= max_trend (indices 0 and 1)
+        w = project_simplex(w_raw, min_carry=min_carry, max_trend=max_trend)
+
+        weights[t] = w
+
+    return pd.DataFrame(weights, index=sleeve_rets.index, columns=cols)
 
 
-def gated_spread_ladder(close: pd.Series, iv: pd.Series, open_mask: np.ndarray, side: int, q: float = Q,
-                        oc: OptCosts = BASE, tenor: int = TENOR_D) -> pd.DataFrame:
-    """Ladder of 30-day put spreads (long K1 = close, short K2 = close * exp(-iv * sqrt(tenor/365)) when bought;
-    the reverse when sold), one tranche of q/tenor opened at each close where open_mask and iv are true, held to
-    expiry, marked daily at that day's iv. side = +1 buys the spread (pays the ask), -1 sells it (receives the bid).
-    ret[t] uses data up to close t. Columns: ret, premium (paid if bought, received if sold), payoff (settled value),
-    open (tranches held)."""
-    s = close.to_numpy(dtype=float)
-    sig = pd.Series(iv.reindex(close.index).to_numpy(dtype=float)).ffill().to_numpy()
-    n, tau, w = len(s), tenor / YEAR_D, q / tenor
-    ok = np.isfinite(sig) & np.isfinite(s) & (s > 0) & np.asarray(open_mask, dtype=bool)
-    k1 = np.where(ok, s, np.nan)
-    k2 = k1 * np.exp(-sig * math.sqrt(tau))
-    mid = bs_put_vec(s, k1, sig, tau) - bs_put_vec(s, k2, sig, tau)
-    if side > 0:
-        hi = bs_put_vec(s, k1, sig * (1 + oc.iv_markup), tau)
-        lo = bs_put_vec(s, k2, sig * (1 - oc.iv_markup), tau)
-        price = np.maximum(hi + _fee(hi, s, oc) - (lo - _fee(lo, s, oc)), mid)  # paid
-        entry = price - mid
+def project_simplex(w_raw: np.ndarray, min_carry: float = 0.25, max_trend: float = 0.70) -> np.ndarray:
+    """Projects raw weights onto the constrained risk-safe simplex:
+
+    - sum(w) == 1.0
+    - w >= 0.0
+    - w_carry (index 2) >= min_carry
+    - w_qd + w_r3 (indices 0, 1) <= max_trend
+    """
+    w = np.maximum(w_raw, 0.0)
+    s = np.sum(w)
+    if s > 0:
+        w = w / s
     else:
-        hi = bs_put_vec(s, k1, sig * (1 - oc.iv_markup), tau)
-        lo = bs_put_vec(s, k2, sig * (1 + oc.iv_markup), tau)
-        price = np.minimum(hi - _fee(hi, s, oc) - (lo + _fee(lo, s, oc)), mid)  # received
-        entry = mid - price
-    ret, prem, pay, n_open = np.zeros(n), np.zeros(n), np.zeros(n), np.zeros(n)
-    prem[ok] = w * price[ok] / s[ok]
-    ret[ok] -= w * entry[ok] / s[ok]
-    v_prev = mid.copy()
-    for a in range(1, tenor + 1):
-        if a >= n:
-            break
-        i = np.arange(n - a)
-        t = i + a
-        rem = (tenor - a) / YEAR_D
-        v = bs_put_vec(s[t], k1[i], sig[t], rem) - bs_put_vec(s[t], k2[i], sig[t], rem)
-        live = ok[i]
-        np.add.at(ret, t, np.where(live, side * w * (v - v_prev[i]) / s[i], 0.0))
-        if a < tenor:
-            np.add.at(n_open, t, live.astype(float))
+        w = np.array([0.35, 0.25, 0.30, 0.10])
+
+    # Enforce constraints iteratively or via clipping/rescaling
+    # Constraint 2: carry >= min_carry
+    if w[2] < min_carry:
+        deficit = min_carry - w[2]
+        w[2] = min_carry
+        # Take deficit proportionally from qd, r3, dtb3
+        other_sum = w[0] + w[1] + w[3]
+        if other_sum > 0:
+            w[0] -= deficit * (w[0] / other_sum)
+            w[1] -= deficit * (w[1] / other_sum)
+            w[3] -= deficit * (w[3] / other_sum)
+
+    # Constraint 3: qd + r3 <= max_trend
+    trend_sum = w[0] + w[1]
+    if trend_sum > max_trend:
+        excess = trend_sum - max_trend
+        # Reduce qd and r3 proportionally
+        if trend_sum > 0:
+            w[0] -= excess * (w[0] / trend_sum)
+            w[1] -= excess * (w[1] / trend_sum)
+        # Add excess to carry and dtb3 proportionally
+        cd_sum = w[2] + w[3]
+        if cd_sum > 0:
+            w[2] += excess * (w[2] / cd_sum)
+            w[3] += excess * (w[3] / cd_sum)
         else:
-            np.add.at(pay, t, np.where(live, w * v / s[i], 0.0))
-        v_prev = np.concatenate([v, np.full(a, np.nan)])
-    n_open += ok
-    return pd.DataFrame({"ret": ret, "premium": prem, "payoff": pay, "open": n_open}, index=close.index)
+            w[2] += excess * 0.75
+            w[3] += excess * 0.25
 
+    # Final normalization & clipping to ensure strictly valid probability vector
+    w = np.maximum(w, 0.0)
+    s = np.sum(w)
+    if s > 0:
+        w = w / s
+    else:
+        w = np.array([0.35, 0.25, 0.30, 0.10])
 
-def vrp_gates(daily: pd.DataFrame, iv: pd.Series, n: int = 50) -> tuple[np.ndarray, np.ndarray]:
-    """(sell gate, buy gate) at each close: trend on (close > SMA(n)) and implied - realised 30-day vol >= VRP_SELL
-    (sell) or implied <= realised (buy). False where either volatility is missing."""
-    up = S5.m1_positions(daily, n, 1.0) > 0
-    ivx = iv.reindex(daily.index).ffill()
-    rv = realized_vol_iv(daily["c"], 30, 1.0)
-    spread = (ivx - rv).to_numpy()
-    fin = np.isfinite(spread)
-    return up & fin & (spread >= VRP_SELL), up & fin & (spread <= 0)
-
-
-def ramp_short_positions(daily: pd.DataFrame, tau: float = TAU) -> np.ndarray:
-    """V4: -(1 - exp(-n / tau)) while the close is below both SMA50 and SMA200, n = consecutive closes below SMA50;
-    0 otherwise (and until both SMAs exist)."""
-    c = daily["c"]
-    s50 = c.rolling(50, min_periods=50).mean()
-    s200 = c.rolling(200, min_periods=200).mean()
-    below50 = ((c < s50) & s50.notna()).to_numpy()
-    both = below50 & ((c < s200) & s200.notna()).to_numpy()
-    out = np.zeros(len(c))
-    run = 0
-    for i in range(len(c)):
-        run = run + 1 if below50[i] else 0
-        if both[i]:
-            out[i] = -(1.0 - math.exp(-run / tau))
-    return out
+    return w
