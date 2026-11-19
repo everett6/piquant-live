@@ -1,0 +1,1003 @@
+"""Autonomous Causal Alpha-Discovery & Quarantined Shadow-Queue Daemon.
+
+Supports local LLM hypothesis generation via Ollama (e.g. Liquid AI `lfm2.5`,
+`qwen2.5-coder`, etc.) with automatic fallback to a deterministic symbolic
+expression generator when Ollama is unavailable.
+
+Every candidate expression passes 5 strict gates before entering the paper-only
+shadow queue (`results/shadow_candidates.json`):
+  1. AST safety & complexity gate (zero arbitrary code/IO/imports/attributes).
+  2. Synthetic future-shock causality gate (zero lookahead leakage).
+  3. Purged & Embargoed 5-fold CV gate (Marcos Lopez de Prado).
+  4. Full net-of-fees + stress + spot backtest & Deflated Sharpe Ratio (DSR)
+     gate with persistent multiple-testing trial counter (`n_trials`).
+  5. Quarantined shadow-only output (`SHADOW_PAPER_ONLY`; never live execution).
+"""
+from __future__ import annotations
+
+import argparse
+import ast
+import datetime as dt
+import json
+import os
+import re
+import urllib.error
+import urllib.request
+from dataclasses import asdict, dataclass
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+import feature_store as FS
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_RESULTS_DIR = os.path.join(HERE, "results")
+DEFAULT_STATE_PATH = os.path.join(DEFAULT_RESULTS_DIR, "auto_discover_state.json")
+DEFAULT_SHADOW_PATH = os.path.join(DEFAULT_RESULTS_DIR, "shadow_candidates.json")
+DEFAULT_LOG_PATH = os.path.join(DEFAULT_RESULTS_DIR, "auto_discover_log.jsonl")
+
+INITIAL_TRIALS = 810
+MAX_EXPR_LEN = 300
+MAX_AST_NODES = 80
+
+ALLOWED_FEATURES: tuple[str, ...] = (
+    "btc_ret1",
+    "btc_ret5",
+    "btc_ret21",
+    "eth_ret5",
+    "eth_ret21",
+    "btc_sma50_dist",
+    "eth_sma50_dist",
+    "btc_vol20_ann",
+    "eth_vol20_ann",
+    "vol_ratio_5_20",
+    "btc_vol_z20",
+    "btc_signed_flow5",
+    "pair_spread_z20",
+    "btc_minus_eth_1d",
+    "btc_minus_eth_5d",
+)
+ALLOWED_FEATURE_SET = frozenset(ALLOWED_FEATURES)
+
+# Pure causal elementwise / rolling helpers (name -> expected arg count)
+FUNC_ARITY: dict[str, int] = {
+    "abs": 1,
+    "tanh": 1,
+    "sign": 1,
+    "sigmoid": 1,
+    "clip": 3,
+    "where": 3,
+    "min": 2,
+    "max": 2,
+    "ema": 2,
+    "roll_mean": 2,
+}
+ALLOWED_FUNC_SET = frozenset(FUNC_ARITY.keys())
+
+# Benchmark hurdles: must beat Q42_dualspeed_60_40_carry without inflating DD
+BENCHMARK_GEO_MO_PCT = 2.15
+BENCHMARK_SHARPE = 1.363
+BENCHMARK_CALMAR = 1.286
+BENCHMARK_MAX_DD_PCT = -23.0
+BENCHMARK_MEAN_DD_PCT = 10.0
+BENCHMARK_DSR = 0.80
+
+
+class UnsafeExpressionError(ValueError):
+    """Raised when a candidate expression violates the AST safety allowlist."""
+
+
+def _sigmoid(x: np.ndarray) -> np.ndarray:
+    arr = np.asarray(x, dtype=float)
+    return 1.0 / (1.0 + np.exp(-np.clip(arr, -30.0, 30.0)))
+
+
+def _causal_ema(x: np.ndarray, span: Any) -> np.ndarray:
+    s = int(np.clip(round(float(np.asarray(span).ravel()[0])), 2, 120))
+    return pd.Series(np.asarray(x, dtype=float)).ewm(span=s, adjust=False).mean().to_numpy(dtype=float)
+
+
+def _causal_roll_mean(x: np.ndarray, win: Any) -> np.ndarray:
+    w = int(np.clip(round(float(np.asarray(win).ravel()[0])), 2, 120))
+    return pd.Series(np.asarray(x, dtype=float)).rolling(w, min_periods=1).mean().to_numpy(dtype=float)
+
+
+class SafeAlphaEvaluator:
+    """Strict AST-validated evaluator for causal alpha expressions."""
+
+    ALLOWED_NODES = (
+        ast.Expression,
+        ast.BinOp,
+        ast.UnaryOp,
+        ast.Compare,
+        ast.Call,
+        ast.Name,
+        ast.Constant,
+        ast.Load,
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.BitAnd,
+        ast.BitOr,
+        ast.UAdd,
+        ast.USub,
+        ast.Invert,
+        ast.Lt,
+        ast.LtE,
+        ast.Gt,
+        ast.GtE,
+    )
+
+    @classmethod
+    def validate(cls, expr: str) -> ast.Expression:
+        if not isinstance(expr, str):
+            raise UnsafeExpressionError("expression must be a string")
+        cleaned = expr.strip()
+        if not cleaned:
+            raise UnsafeExpressionError("expression is empty")
+        if len(cleaned) > MAX_EXPR_LEN:
+            raise UnsafeExpressionError(f"expression exceeds {MAX_EXPR_LEN} chars")
+
+        try:
+            tree = ast.parse(cleaned, mode="eval")
+        except SyntaxError as exc:
+            raise UnsafeExpressionError(f"syntax error: {exc.msg}") from exc
+
+        nodes = list(ast.walk(tree))
+        if len(nodes) > MAX_AST_NODES:
+            raise UnsafeExpressionError(f"expression exceeds {MAX_AST_NODES} AST nodes")
+
+        used_features = 0
+        for node in nodes:
+            if not isinstance(node, cls.ALLOWED_NODES):
+                raise UnsafeExpressionError(f"disallowed AST node: {type(node).__name__}")
+            if isinstance(node, ast.Constant):
+                if not isinstance(node.value, (int, float)) or isinstance(node.value, bool):
+                    raise UnsafeExpressionError("only numeric constants are allowed")
+                if not np.isfinite(float(node.value)):
+                    raise UnsafeExpressionError("non-finite constant")
+            elif isinstance(node, ast.Name):
+                if node.id in ALLOWED_FEATURE_SET:
+                    used_features += 1
+                elif node.id not in ALLOWED_FUNC_SET:
+                    raise UnsafeExpressionError(f"unknown identifier: {node.id}")
+            elif isinstance(node, ast.Call):
+                if not isinstance(node.func, ast.Name) or node.func.id not in ALLOWED_FUNC_SET:
+                    raise UnsafeExpressionError("only allowlisted function calls are permitted")
+                if node.keywords:
+                    raise UnsafeExpressionError("keyword arguments are not allowed")
+                expected = FUNC_ARITY[node.func.id]
+                if len(node.args) != expected:
+                    raise UnsafeExpressionError(
+                        f"function {node.func.id} expects {expected} args, got {len(node.args)}"
+                    )
+                if node.func.id in ("ema", "roll_mean"):
+                    win_arg = node.args[1]
+                    if not isinstance(win_arg, ast.Constant) or not isinstance(win_arg.value, (int, float)):
+                        raise UnsafeExpressionError(f"{node.func.id} window must be a numeric constant")
+            elif isinstance(node, ast.Compare):
+                if len(node.ops) != 1 or len(node.comparators) != 1:
+                    raise UnsafeExpressionError("chained comparisons are not allowed")
+
+        if used_features == 0:
+            raise UnsafeExpressionError("expression must reference at least one allowed feature")
+        return tree
+
+    @classmethod
+    def _eval_node(cls, node: ast.AST, env: dict[str, np.ndarray], n: int) -> np.ndarray:
+        if isinstance(node, ast.Expression):
+            return cls._eval_node(node.body, env, n)
+        if isinstance(node, ast.Constant):
+            return np.full(n, float(node.value), dtype=float)
+        if isinstance(node, ast.Name):
+            return env[node.id]
+        if isinstance(node, ast.UnaryOp):
+            val = cls._eval_node(node.operand, env, n)
+            if isinstance(node.op, ast.UAdd):
+                return +val
+            if isinstance(node.op, ast.USub):
+                return -val
+            if isinstance(node.op, ast.Invert):
+                return (~(val > 0.5)).astype(float)
+            raise UnsafeExpressionError(f"unsupported unary op: {type(node.op).__name__}")
+        if isinstance(node, ast.BinOp):
+            left = cls._eval_node(node.left, env, n)
+            right = cls._eval_node(node.right, env, n)
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Div):
+                return np.where(np.abs(right) > 1e-12, left / np.where(np.abs(right) > 1e-12, right, 1.0), 0.0)
+            if isinstance(node.op, ast.BitAnd):
+                return ((left > 0.5) & (right > 0.5)).astype(float)
+            if isinstance(node.op, ast.BitOr):
+                return ((left > 0.5) | (right > 0.5)).astype(float)
+            raise UnsafeExpressionError(f"unsupported binary op: {type(node.op).__name__}")
+        if isinstance(node, ast.Compare):
+            left = cls._eval_node(node.left, env, n)
+            right = cls._eval_node(node.comparators[0], env, n)
+            op = node.ops[0]
+            if isinstance(op, ast.Lt):
+                return (left < right).astype(float)
+            if isinstance(op, ast.LtE):
+                return (left <= right).astype(float)
+            if isinstance(op, ast.Gt):
+                return (left > right).astype(float)
+            if isinstance(op, ast.GtE):
+                return (left >= right).astype(float)
+            raise UnsafeExpressionError(f"unsupported compare op: {type(op).__name__}")
+        if isinstance(node, ast.Call):
+            fname = node.func.id  # type: ignore[union-attr]
+            if fname == "ema":
+                x = cls._eval_node(node.args[0], env, n)
+                span = float(node.args[1].value)  # type: ignore[union-attr]
+                return _causal_ema(x, span)
+            if fname == "roll_mean":
+                x = cls._eval_node(node.args[0], env, n)
+                win = float(node.args[1].value)  # type: ignore[union-attr]
+                return _causal_roll_mean(x, win)
+            args = [cls._eval_node(a, env, n) for a in node.args]
+            if fname == "abs":
+                return np.abs(args[0])
+            if fname == "tanh":
+                return np.tanh(np.clip(args[0], -30.0, 30.0))
+            if fname == "sign":
+                return np.sign(args[0])
+            if fname == "sigmoid":
+                return _sigmoid(args[0])
+            if fname == "clip":
+                return np.clip(args[0], args[1], args[2])
+            if fname == "where":
+                return np.where(args[0] > 0.5, args[1], args[2])
+            if fname == "min":
+                return np.minimum(args[0], args[1])
+            if fname == "max":
+                return np.maximum(args[0], args[1])
+            raise UnsafeExpressionError(f"unsupported function: {fname}")
+        raise UnsafeExpressionError(f"unsupported node: {type(node).__name__}")
+
+    @classmethod
+    def evaluate(cls, expr: str, features: pd.DataFrame, role: str = "overlay") -> pd.Series:
+        tree = cls.validate(expr)
+        n = len(features)
+        env: dict[str, np.ndarray] = {}
+        for col in ALLOWED_FEATURES:
+            if col in features.columns:
+                arr = features[col].to_numpy(dtype=float)
+                env[col] = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+            else:
+                env[col] = np.zeros(n, dtype=float)
+
+        raw = cls._eval_node(tree, env, n)
+        raw = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
+
+        if role == "overlay":
+            # Smooth bounded multiplier in [0.40, 1.25] applied to base trend sleeve
+            out = 0.40 + 0.85 * _sigmoid(raw)
+        elif role == "standalone":
+            # Long-only target exposure in [0.0, 1.0]
+            out = np.clip(_sigmoid(raw), 0.0, 1.0)
+        else:
+            raise ValueError(f"unknown role: {role}")
+
+        return pd.Series(out, index=features.index, dtype=float)
+
+
+def _make_synthetic_ohlcv(n: int = 320, seed: int = 12345) -> tuple[pd.DataFrame, pd.DataFrame]:
+    rng = np.random.default_rng(seed)
+    idx = pd.date_range("2022-01-01", periods=n, freq="1D", tz="UTC")
+
+    def _gen(start_price: float, drift: float, vol: float) -> pd.DataFrame:
+        rets = rng.normal(drift, vol, size=n)
+        close = start_price * np.exp(np.cumsum(rets))
+        open_ = close * np.exp(rng.normal(0.0, vol * 0.3, size=n))
+        high = np.maximum(open_, close) * (1.0 + np.abs(rng.normal(0.0, vol * 0.5, size=n)))
+        low = np.minimum(open_, close) * (1.0 - np.abs(rng.normal(0.0, vol * 0.5, size=n)))
+        vol_col = rng.lognormal(mean=10.0, sigma=0.4, size=n)
+        return pd.DataFrame({"o": open_, "h": high, "l": low, "c": close, "v": vol_col}, index=idx)
+
+    return _gen(30000.0, 0.0007, 0.025), _gen(2000.0, 0.0005, 0.032)
+
+
+def check_causality_sandbox(expr: str, role: str = "overlay", shock_bar: int = 160) -> tuple[bool, str]:
+    """Gate 2: Future-shock test on synthetic candles. Perturbing t >= shock_bar
+    must produce zero change in signal values for t < shock_bar."""
+    btc1, eth1 = _make_synthetic_ohlcv(n=320, seed=12345)
+    btc2, eth2 = btc1.copy(), eth1.copy()
+    btc2.iloc[shock_bar:] = btc2.iloc[shock_bar:] * 3.5
+    eth2.iloc[shock_bar:] = eth2.iloc[shock_bar:] * 0.25
+
+    f1 = FS.build_unified_features(btc1, eth1)
+    f2 = FS.build_unified_features(btc2, eth2)
+    s1 = SafeAlphaEvaluator.evaluate(expr, f1, role=role)
+    s2 = SafeAlphaEvaluator.evaluate(expr, f2, role=role)
+
+    if not np.all(np.isfinite(s1.to_numpy())):
+        return False, "non-finite signal values on synthetic candles"
+    if not np.allclose(s1.iloc[:shock_bar].to_numpy(), s2.iloc[:shock_bar].to_numpy(), atol=1e-12, rtol=1e-12):
+        return False, "LOOKAHEAD DETECTED: future shock changed historical signal"
+    if float(s1.iloc[60:].std()) < 1e-5:
+        return False, "degenerate constant signal (std < 1e-5)"
+    return True, "ok"
+
+
+def evaluate_purged_cv(
+    btc: pd.DataFrame,
+    eth: pd.DataFrame,
+    signal: pd.Series,
+    base_pos_b: pd.Series | None,
+    base_pos_e: pd.Series | None,
+    role: str = "overlay",
+    taker_bps: float = 5.0,
+    slip_bps: float = 10.0,
+    funding_bps_h: float = 0.0,
+    n_splits: int = 5,
+    purge_bars: int = 5,
+    embargo_bars: int = 2,
+) -> dict[str, Any]:
+    """Gate 3: Out-of-sample Purged & Embargoed K-Fold CV net of fees/slippage."""
+    idx = btc.index
+    rb = btc["c"].pct_change().fillna(0.0).to_numpy(dtype=float)
+    re = eth["c"].reindex(idx).ffill().pct_change().fillna(0.0).to_numpy(dtype=float)
+    sig = signal.reindex(idx).fillna(1.0 if role == "overlay" else 0.0).to_numpy(dtype=float)
+
+    if role == "overlay" and base_pos_b is not None and base_pos_e is not None:
+        wb = 0.5 * base_pos_b.reindex(idx).fillna(0.0).to_numpy(dtype=float) * sig
+        we = 0.5 * base_pos_e.reindex(idx).fillna(0.0).to_numpy(dtype=float) * sig
+    else:
+        wb = 0.5 * sig
+        we = 0.5 * sig
+
+    # Strict 1-bar execution lag: weight decided at close t earns return at t+1
+    held_wb = np.roll(wb, 1)
+    held_we = np.roll(we, 1)
+    held_wb[0] = 0.0
+    held_we[0] = 0.0
+
+    prev_wb = np.roll(held_wb, 1)
+    prev_we = np.roll(held_we, 1)
+    prev_wb[0] = 0.0
+    prev_we[0] = 0.0
+
+    cost_rate = (taker_bps + slip_bps) * 1e-4
+    fund_rate = funding_bps_h * 24.0 * 1e-4
+    turn = np.abs(held_wb - prev_wb) + np.abs(held_we - prev_we)
+    gross = np.abs(held_wb) + np.abs(held_we)
+    net_ret = held_wb * rb + held_we * re - turn * cost_rate - gross * fund_rate
+
+    fold_sharpes: list[float] = []
+    for _train_idx, test_idx in FS.purged_embargoed_splits(
+        len(idx), n_splits=n_splits, purge_bars=purge_bars, embargo_bars=embargo_bars
+    ):
+        r = net_ret[test_idx]
+        std = float(np.std(r, ddof=1)) if len(r) > 1 else 0.0
+        sh = float((np.mean(r) / std) * np.sqrt(365.0)) if std > 1e-12 else 0.0
+        fold_sharpes.append(round(sh, 4))
+
+    median_sh = float(np.median(fold_sharpes)) if fold_sharpes else 0.0
+    pos_folds = int(sum(1 for s in fold_sharpes if s > 0.0))
+    passed = (median_sh >= 0.50) and (pos_folds >= 3)
+    return {
+        "fold_sharpes": fold_sharpes,
+        "median_fold_sharpe": round(median_sh, 4),
+        "positive_folds": pos_folds,
+        "passed": passed,
+    }
+
+
+def parse_llm_expressions(text: str) -> list[str]:
+    """Extract candidate expression strings from Ollama JSON or line-based output."""
+    if not text:
+        return []
+    candidates: list[str] = []
+    # Try JSON array or object first
+    cleaned = text.strip()
+    m = re.search(r"\[[\s\S]*\]", cleaned)
+    if m:
+        try:
+            parsed = json.loads(m.group(0))
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, str) and item.strip():
+                        candidates.append(item.strip())
+                    elif isinstance(item, dict) and isinstance(item.get("expr"), str):
+                        candidates.append(item["expr"].strip())
+        except json.JSONDecodeError:
+            pass
+
+    if not candidates:
+        for line in cleaned.splitlines():
+            s = line.strip()
+            if not s or s.startswith("#") or s.startswith("```"):
+                continue
+            s = re.sub(r"^[\-\*\d\.\)\s]+", "", s).strip()
+            s = s.strip("`\"'")
+            if s:
+                candidates.append(s)
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for expr in candidates:
+        if expr not in seen:
+            seen.add(expr)
+            out.append(expr)
+    return out
+
+
+def generate_ollama_candidates(
+    n_candidates: int,
+    ollama_url: str = "http://127.0.0.1:11434",
+    model: str = "lfm2.5",
+    recent_feedback: list[str] | None = None,
+    timeout_s: float = 25.0,
+) -> tuple[list[str], str | None]:
+    """Query local Ollama `/api/generate` for novel causal alpha expressions."""
+    fb_block = ""
+    if recent_feedback:
+        fb_block = "\nRecent rejected attempts (avoid repeating these failure modes):\n- " + "\n- ".join(
+            recent_feedback[-5:]
+        )
+
+    prompt = (
+        f"Generate exactly {n_candidates} distinct quantitative crypto daily alpha overlay expressions "
+        f"as a JSON array of strings.\n"
+        f"Allowed feature names ONLY: {', '.join(ALLOWED_FEATURES)}.\n"
+        f"Allowed functions ONLY: abs(x), tanh(x), sign(x), sigmoid(x), clip(x,lo,hi), "
+        f"where(cond,a,b), min(a,b), max(a,b), ema(x,span), roll_mean(x,win).\n"
+        f"Allowed operators: + - * / < <= > >= & | ~.\n"
+        f"Goal: low-turnover, fee-efficient daily signal that scales risk up in calm uptrends and down "
+        f"in vol spikes or choppy regimes. Keep expressions concise (<160 chars).{fb_block}\n"
+        f"Return ONLY a JSON array of expression strings, nothing else."
+    )
+
+    payload = json.dumps({
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0.4},
+    }).encode("utf-8")
+
+    url = ollama_url.rstrip("/") + "/api/generate"
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        raw_text = body.get("response", "")
+        exprs = parse_llm_expressions(raw_text)
+        return exprs[:n_candidates], None
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+        return [], f"ollama unavailable ({exc})"
+
+
+def generate_symbolic_candidates(n_candidates: int, seed: int = 42) -> list[str]:
+    """Deterministic symbolic alpha generator over ALLOWED_FEATURES & ALLOWED_FUNCS."""
+    rng = np.random.default_rng(seed)
+
+    curated_templates = [
+        "ema(btc_sma50_dist, 10) * 3.0 - max(vol_ratio_5_20 - 1.2, 0.0) * 1.5",
+        "tanh(ema(btc_ret21, 5) * 4.0) - clip(btc_vol20_ann - 0.75, 0.0, 1.0) * 2.0",
+        "where(vol_ratio_5_20 < 1.35, ema(btc_sma50_dist + eth_sma50_dist, 7) * 2.5, -1.0)",
+        "ema(btc_signed_flow5, 10) * 2.0 + tanh(btc_sma50_dist * 4.0) - 0.8 * max(eth_vol20_ann - 0.85, 0.0)",
+        "clip(ema(btc_ret21 + eth_ret21, 10) * 2.5, -2.0, 2.0) - 0.6 * abs(pair_spread_z20)",
+        "roll_mean(btc_sma50_dist, 14) * 3.5 - 1.2 * max(vol_ratio_5_20 - 1.15, 0.0)",
+        "tanh((btc_sma50_dist + 0.5 * eth_sma50_dist) * 3.0) + 0.4 * ema(btc_vol_z20, 10)",
+        "where(btc_vol20_ann < 0.80, 0.8 + tanh(btc_ret21 * 3.0), -0.6 * vol_ratio_5_20)",
+        "ema(btc_ret5, 10) * 4.0 + ema(btc_sma50_dist, 20) * 2.0 - max(btc_vol20_ann - 0.70, 0.0) * 1.5",
+        "tanh(ema(btc_minus_eth_5d, 10) * 3.0) + 1.5 * tanh(btc_sma50_dist * 3.0)",
+        "clip(roll_mean(btc_signed_flow5, 15) * 3.0 + ema(btc_ret21, 12) * 3.0, -2.0, 2.0)",
+        "where(btc_sma50_dist > 0.0, 1.0 - max(vol_ratio_5_20 - 1.25, 0.0), -0.5 - abs(btc_ret5) * 3.0)",
+    ]
+
+    out: list[str] = []
+    seen: set[str] = set()
+    perm = rng.permutation(len(curated_templates))
+    for i in perm:
+        expr = curated_templates[int(i)]
+        if expr not in seen:
+            seen.add(expr)
+            out.append(expr)
+        if len(out) >= n_candidates:
+            return out
+
+    # Synthesize additional random low-turnover combinations if n_candidates > len(curated_templates)
+    trend_feats = ("btc_sma50_dist", "eth_sma50_dist", "btc_ret21", "eth_ret21", "btc_signed_flow5")
+    risk_feats = ("vol_ratio_5_20", "btc_vol20_ann", "eth_vol20_ann", "pair_spread_z20")
+    attempts = 0
+    while len(out) < n_candidates and attempts < n_candidates * 10:
+        attempts += 1
+        tf = str(rng.choice(trend_feats))
+        rf = str(rng.choice(risk_feats))
+        span = int(rng.choice([5, 10, 15, 21, 30]))
+        w1 = round(float(rng.uniform(1.0, 4.0)), 2)
+        w2 = round(float(rng.uniform(0.5, 2.0)), 2)
+        thr = round(float(rng.uniform(0.6, 1.4)), 2)
+        expr = f"tanh(ema({tf}, {span}) * {w1}) - {w2} * max(abs({rf}) - {thr}, 0.0)"
+        if expr not in seen:
+            seen.add(expr)
+            out.append(expr)
+    return out
+
+
+def _load_state(state_path: str) -> dict[str, Any]:
+    if os.path.exists(state_path):
+        with open(state_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and isinstance(data.get("n_trials"), int):
+            return data
+    return {"n_trials": INITIAL_TRIALS, "runs": 0, "accepted": 0, "rejected": 0}
+
+
+def _save_json(path: str, payload: Any) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+    os.replace(tmp, path)
+
+
+def _append_jsonl(path: str, record: dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
+
+
+def _load_recent_feedback(log_path: str, limit: int = 5) -> list[str]:
+    if not os.path.exists(log_path):
+        return []
+    lines: list[str] = []
+    with open(log_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                if not rec.get("accepted"):
+                    lines.append(f"{rec.get('expr', '')} -> {rec.get('reject_reason', 'failed')}")
+            except json.JSONDecodeError:
+                continue
+    return lines[-limit:]
+
+
+@dataclass
+class CandidateResult:
+    expr: str
+    source: str
+    role: str
+    n_trials_at_eval: int
+    accepted: bool
+    reject_reason: str
+    cv_summary: dict[str, Any] | None = None
+    base_metrics: dict[str, Any] | None = None
+    stress_metrics: dict[str, Any] | None = None
+    spot_metrics: dict[str, Any] | None = None
+    timestamp_utc: str = ""
+
+
+def _evaluate_synthetic_full(
+    btc: pd.DataFrame,
+    eth: pd.DataFrame,
+    signal: pd.Series,
+    role: str,
+    n_trials: int,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Lightweight synthetic full-gate evaluator for `--dry-run-synth` and unit tests."""
+    import lab
+
+    idx = btc.index
+    rb = btc["c"].pct_change().fillna(0.0).to_numpy(dtype=float)
+    re = eth["c"].reindex(idx).ffill().pct_change().fillna(0.0).to_numpy(dtype=float)
+    sig = signal.reindex(idx).fillna(0.0).to_numpy(dtype=float)
+    w = np.clip(0.5 * sig, 0.0, 1.0)
+    held = np.roll(w, 1)
+    held[0] = 0.0
+    prev = np.roll(held, 1)
+    prev[0] = 0.0
+    turn = 2.0 * np.abs(held - prev)
+
+    def _sim(taker_bps: float, slip_bps: float) -> dict[str, Any]:
+        cost = (taker_bps + slip_bps) * 1e-4
+        r = pd.Series(held * (rb + re) - turn * cost, index=idx)
+        eq = (1.0 + r).cumprod()
+        dd = eq / eq.cummax() - 1.0
+        n_mo = max(1.0, len(r) / 30.4375)
+        geo_mo = float(((eq.iloc[-1] ** (1.0 / n_mo)) - 1.0) * 100.0)
+        std = float(r.std(ddof=1))
+        sharpe = float((r.mean() / std) * np.sqrt(365.0)) if std > 1e-12 else 0.0
+        max_dd = float(dd.min() * 100.0)
+        mean_dd = float((-dd).mean() * 100.0)
+        ann = ((1.0 + geo_mo / 100.0) ** 12 - 1.0) * 100.0
+        calmar = float(ann / abs(max_dd)) if abs(max_dd) > 1e-9 else 0.0
+        dsr = float(lab.deflated_sharpe(r, n_trials))
+        return {
+            "geo_monthly_pct": round(geo_mo, 4),
+            "annualized_pct": round(ann, 2),
+            "sharpe": round(sharpe, 4),
+            "calmar": round(calmar, 4),
+            "max_dd_pct": round(max_dd, 4),
+            "mean_dd_pct": round(mean_dd, 4),
+            "A_geo_monthly_pct": round(geo_mo, 4),
+            "deflated_sharpe": round(dsr, 4),
+        }
+
+    return _sim(5.0, 10.0), _sim(10.0, 20.0), _sim(2.0, 5.0)
+
+
+def _check_full_gates(base: dict[str, Any], stress: dict[str, Any]) -> tuple[bool, str]:
+    reasons: list[str] = []
+    if float(base.get("deflated_sharpe", 0.0)) < BENCHMARK_DSR:
+        reasons.append(f"DSR {base.get('deflated_sharpe')} < {BENCHMARK_DSR}")
+    if float(base.get("max_dd_pct", -100.0)) < BENCHMARK_MAX_DD_PCT:
+        reasons.append(f"MaxDD {base.get('max_dd_pct')}% < {BENCHMARK_MAX_DD_PCT}%")
+    if float(base.get("mean_dd_pct", 100.0)) > BENCHMARK_MEAN_DD_PCT:
+        reasons.append(f"MeanDD {base.get('mean_dd_pct')}% > {BENCHMARK_MEAN_DD_PCT}%")
+    if float(base.get("geo_monthly_pct", -100.0)) < BENCHMARK_GEO_MO_PCT:
+        reasons.append(f"Geo/mo {base.get('geo_monthly_pct')}% < {BENCHMARK_GEO_MO_PCT}%")
+    if float(base.get("sharpe", 0.0)) <= BENCHMARK_SHARPE:
+        reasons.append(f"Sharpe {base.get('sharpe')} <= {BENCHMARK_SHARPE}")
+    if float(base.get("calmar", 0.0)) <= BENCHMARK_CALMAR:
+        reasons.append(f"Calmar {base.get('calmar')} <= {BENCHMARK_CALMAR}")
+    a_rec = base.get("A_geo_monthly_pct", base.get("A_2025_26"))
+    if a_rec is None or float(a_rec) <= 0.0:
+        reasons.append(f"A_geo_monthly_pct {a_rec} <= 0")
+    if float(stress.get("geo_monthly_pct", -100.0)) <= 0.0:
+        reasons.append(f"stress geo/mo {stress.get('geo_monthly_pct')} <= 0")
+    if reasons:
+        return False, "; ".join(reasons)
+    return True, "PASS"
+
+
+def _load_daily_candles(product: str, lab_mod: Any, daily_csv_dir: str | None = None) -> pd.DataFrame:
+    """Load 1D OHLCV candles from a lightweight daily CSV cache (Pi 5 friendly,
+    no pyarrow required) if available, otherwise fall back to `lab.load_candles`."""
+    candidates: list[str] = []
+    if daily_csv_dir:
+        candidates.append(os.path.join(os.path.expanduser(daily_csv_dir), f"{product}_1D.csv"))
+    candidates.append(os.path.expanduser(f"~/piquant-collect/daily_csv/{product}_1D.csv"))
+    for path in candidates:
+        if os.path.exists(path):
+            df = pd.read_csv(path, index_col=0, parse_dates=True)
+            if df.index.tz is None:
+                df.index = df.index.tz_localize("UTC")
+            else:
+                df.index = df.index.tz_convert("UTC")
+            return df[["o", "h", "l", "c", "v"]].astype("float64").dropna()
+    return lab_mod.resample(lab_mod.load_candles(product=product, since=None), "1D")
+
+
+def _load_real_market_context(daily_csv_dir: str | None = None) -> dict[str, Any]:
+    """Load real 2020-2026 BTC/ETH candles, funding, DTB3, and Q42 base sleeves."""
+    import lab
+    import strategies5 as S5
+    import strategies19 as S19
+    import strategies35 as S35
+    import strategies36 as S36
+    import strategies40 as S40
+    import strategies42 as S42
+    from run_round7 import cut
+    from run_round19 import END, START, load_funding
+    from run_round33 import DTB3, W0, W1
+    from run_round36 import extended_metrics
+
+    full = {c: _load_daily_candles(f"{c}-USD", lab, daily_csv_dir=daily_csv_dir) for c in ("BTC", "ETH")}
+    d = {c: full[c][(full[c].index >= START) & (full[c].index < END)] for c in ("BTC", "ETH")}
+    btc_sub, eth_sub = d["BTC"], d["ETH"]
+    eth_aligned = eth_sub.reindex(btc_sub.index).ffill()
+
+    # Compute base Q42 dual-speed (50% QD + 50% R3) on full history before slicing
+    qd_full = {c: pd.Series(S35.coherence_positions(full[c], lev=1.0), index=full[c].index) for c in ("BTC", "ETH")}
+    r3_full = {c: pd.Series(S40.r3_fastexit_qd_positions(full[c], lev=1.0), index=full[c].index) for c in ("BTC", "ETH")}
+    dual_1x = {
+        c: (0.5 * (qd_full[c] + r3_full[c])).reindex(btc_sub.index).fillna(0.0)
+        for c in ("BTC", "ETH")
+    }
+
+    # Build unified causal features on full history then slice to avoid edge warm-up distortion
+    full_eth_aligned = full["ETH"].reindex(full["BTC"].index).ffill()
+    features_full = FS.build_unified_features(full["BTC"], full_eth_aligned)
+    features_sub = features_full.reindex(btc_sub.index)
+
+    f = {c: load_funding(f"{c}USDT") for c in ("BTC", "ETH")}
+    raw = pd.read_csv(DTB3, parse_dates=["date"])
+    rate = pd.Series(raw["rate"].to_numpy(dtype=float), index=raw["date"].dt.tz_localize("UTC")).dropna()
+    reg = S5.regime_months(S5.complete_months(cut(btc_sub["c"].pct_change().fillna(0), W0, W1)))
+
+    c1_base = S19.portfolio([S19.coin_returns(d[c], f[c], "C1", S19.BASE) for c in ("BTC", "ETH")]).reindex(
+        btc_sub.index
+    ).fillna(0.0)
+    c1_stress = S19.portfolio([S19.coin_returns(d[c], f[c], "C1", S19.STRESS) for c in ("BTC", "ETH")]).reindex(
+        btc_sub.index
+    ).fillna(0.0)
+
+    return {
+        "btc": btc_sub,
+        "eth": eth_aligned,
+        "features": features_sub,
+        "dual_1x": dual_1x,
+        "c1_base": c1_base,
+        "c1_stress": c1_stress,
+        "rate": rate,
+        "reg": reg,
+        "lab": lab,
+        "S36": S36,
+        "S42": S42,
+        "extended_metrics": extended_metrics,
+    }
+
+
+def _evaluate_real_full(
+    ctx: dict[str, Any],
+    signal: pd.Series,
+    role: str,
+    n_trials: int,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    lab = ctx["lab"]
+    S36 = ctx["S36"]
+    S42 = ctx["S42"]
+    extended_metrics = ctx["extended_metrics"]
+    btc_sub = ctx["btc"]
+    eth_sub = ctx["eth"]
+    reg = ctx["reg"]
+    rate = ctx["rate"]
+
+    if role == "overlay":
+        pos_b = ctx["dual_1x"]["BTC"] * signal.reindex(btc_sub.index).fillna(1.0)
+        pos_e = ctx["dual_1x"]["ETH"] * signal.reindex(btc_sub.index).fillna(1.0)
+        trend_share, carry_share = 0.60, 0.40
+    else:
+        pos_b = signal.reindex(btc_sub.index).fillna(0.0)
+        pos_e = signal.reindex(btc_sub.index).fillna(0.0)
+        trend_share, carry_share = 0.60, 0.40
+
+    def _run(c1_ret: pd.Series, cost_cfg: Any) -> dict[str, Any]:
+        rv, mv, _ = S36.simulate_qd_carry_portfolio(
+            btc_sub, eth_sub, pos_b, pos_e, c1_ret, rate,
+            trend_share=trend_share, carry_share=carry_share,
+            taker_bps=cost_cfg.taker_bps, slip_bps=cost_cfg.slip_bps,
+            funding_bps_h=cost_cfg.funding_bps_h,
+            use_taper=True, dd_start=0.06, dd_full=0.20, dd_floor=0.40,
+        )
+        m = extended_metrics(rv, reg)
+        m["annualized_pct"] = round(((1.0 + m["geo_monthly_pct"] / 100.0) ** 12 - 1.0) * 100.0, 2)
+        m["deflated_sharpe"] = round(float(lab.deflated_sharpe(rv, n_trials)), 4)
+        m["mean_taper_mult"] = round(float(mv.mean()), 4)
+        m.update(S42.drawdown_diagnostics(rv))
+        return m
+
+    base_m = _run(ctx["c1_base"], lab.US_FUTURES)
+    stress_m = _run(ctx["c1_stress"], lab.US_FUTURES_STRESS)
+    spot_m = _run(ctx["c1_base"], lab.US_SPOT)
+    return base_m, stress_m, spot_m
+
+
+def run_discovery(
+    n_candidates: int = 8,
+    mode: str = "auto",
+    ollama_url: str = "http://127.0.0.1:11434",
+    model: str = "lfm2.5",
+    role: str = "overlay",
+    seed: int = 42,
+    dry_run_synth: bool = False,
+    daily_csv_dir: str | None = None,
+    state_path: str = DEFAULT_STATE_PATH,
+    shadow_path: str = DEFAULT_SHADOW_PATH,
+    log_path: str = DEFAULT_LOG_PATH,
+) -> dict[str, Any]:
+    """Execute one bounded autonomous alpha-discovery round."""
+    state = _load_state(state_path)
+    recent_fb = _load_recent_feedback(log_path, limit=5)
+
+    # 1. Generate candidate expressions
+    expr_pairs: list[tuple[str, str]] = []
+    ollama_note: str | None = None
+    if mode in ("auto", "ollama"):
+        ollama_exprs, ollama_note = generate_ollama_candidates(
+            n_candidates=n_candidates,
+            ollama_url=ollama_url,
+            model=model,
+            recent_feedback=recent_fb,
+        )
+        for e in ollama_exprs:
+            expr_pairs.append((e, f"ollama:{model}"))
+
+    if mode == "symbolic" or (mode == "auto" and len(expr_pairs) < n_candidates):
+        needed = n_candidates - len(expr_pairs)
+        seen = {e for e, _ in expr_pairs}
+        for e in generate_symbolic_candidates(n_candidates=needed + len(seen), seed=seed):
+            if e not in seen:
+                expr_pairs.append((e, "symbolic"))
+                seen.add(e)
+            if len(expr_pairs) >= n_candidates:
+                break
+
+    # 2. Load market context (synthetic or real 2020-2026 candles)
+    if dry_run_synth:
+        btc_syn, eth_syn = _make_synthetic_ohlcv(n=400, seed=seed + 99)
+        features_syn = FS.build_unified_features(btc_syn, eth_syn)
+        ctx = None
+    else:
+        ctx = _load_real_market_context(daily_csv_dir=daily_csv_dir)
+        btc_syn = eth_syn = features_syn = None
+
+    # Load existing shadow queue
+    shadow_queue: list[dict[str, Any]] = []
+    if os.path.exists(shadow_path):
+        try:
+            with open(shadow_path, "r", encoding="utf-8") as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, list):
+                shadow_queue = loaded
+        except json.JSONDecodeError:
+            shadow_queue = []
+
+    results: list[CandidateResult] = []
+    now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
+
+    for expr, src in expr_pairs:
+        # Gate 1: AST safety
+        try:
+            SafeAlphaEvaluator.validate(expr)
+        except UnsafeExpressionError as exc:
+            res = CandidateResult(
+                expr=expr, source=src, role=role, n_trials_at_eval=state["n_trials"],
+                accepted=False, reject_reason=f"AST_GATE: {exc}", timestamp_utc=now_iso,
+            )
+            results.append(res)
+            _append_jsonl(log_path, asdict(res))
+            state["rejected"] += 1
+            continue
+
+        # Gate 2: Synthetic causality future-shock test
+        ok_causal, causal_msg = check_causality_sandbox(expr, role=role)
+        if not ok_causal:
+            res = CandidateResult(
+                expr=expr, source=src, role=role, n_trials_at_eval=state["n_trials"],
+                accepted=False, reject_reason=f"CAUSALITY_GATE: {causal_msg}", timestamp_utc=now_iso,
+            )
+            results.append(res)
+            _append_jsonl(log_path, asdict(res))
+            state["rejected"] += 1
+            continue
+
+        # Gate 3: Purged & Embargoed CV
+        if dry_run_synth:
+            assert btc_syn is not None and eth_syn is not None and features_syn is not None
+            sig = SafeAlphaEvaluator.evaluate(expr, features_syn, role=role)
+            cv_res = evaluate_purged_cv(btc_syn, eth_syn, sig, None, None, role=role)
+        else:
+            assert ctx is not None
+            sig = SafeAlphaEvaluator.evaluate(expr, ctx["features"], role=role)
+            cv_res = evaluate_purged_cv(
+                ctx["btc"], ctx["eth"], sig,
+                ctx["dual_1x"]["BTC"], ctx["dual_1x"]["ETH"],
+                role=role,
+                taker_bps=ctx["lab"].US_FUTURES.taker_bps,
+                slip_bps=ctx["lab"].US_FUTURES.slip_bps,
+                funding_bps_h=ctx["lab"].US_FUTURES.funding_bps_h,
+            )
+
+        # Charge multiple-testing trial counter for every real/CV evaluation
+        state["n_trials"] += 1
+        cur_trials = state["n_trials"]
+
+        if not cv_res["passed"]:
+            res = CandidateResult(
+                expr=expr, source=src, role=role, n_trials_at_eval=cur_trials,
+                accepted=False,
+                reject_reason=(
+                    f"PURGED_CV_GATE: median_sharpe={cv_res['median_fold_sharpe']}, "
+                    f"pos_folds={cv_res['positive_folds']}/5"
+                ),
+                cv_summary=cv_res,
+                timestamp_utc=now_iso,
+            )
+            results.append(res)
+            _append_jsonl(log_path, asdict(res))
+            state["rejected"] += 1
+            continue
+
+        # Gate 4: Full net-of-fees + stress + spot + DSR gate
+        if dry_run_synth:
+            assert btc_syn is not None and eth_syn is not None
+            base_m, stress_m, spot_m = _evaluate_synthetic_full(btc_syn, eth_syn, sig, role, cur_trials)
+        else:
+            assert ctx is not None
+            base_m, stress_m, spot_m = _evaluate_real_full(ctx, sig, role, cur_trials)
+
+        ok_full, full_reason = _check_full_gates(base_m, stress_m)
+        res = CandidateResult(
+            expr=expr, source=src, role=role, n_trials_at_eval=cur_trials,
+            accepted=ok_full,
+            reject_reason="" if ok_full else f"FULL_GATE: {full_reason}",
+            cv_summary=cv_res,
+            base_metrics=base_m,
+            stress_metrics=stress_m,
+            spot_metrics=spot_m,
+            timestamp_utc=now_iso,
+        )
+        results.append(res)
+        _append_jsonl(log_path, asdict(res))
+
+        if ok_full:
+            state["accepted"] += 1
+            entry = asdict(res)
+            entry["status"] = "SHADOW_PAPER_ONLY"
+            shadow_queue.append(entry)
+        else:
+            state["rejected"] += 1
+
+    state["runs"] += 1
+    state["last_run_utc"] = now_iso
+    _save_json(state_path, state)
+    _save_json(shadow_path, shadow_queue)
+
+    return {
+        "mode": mode,
+        "ollama_note": ollama_note,
+        "dry_run_synth": dry_run_synth,
+        "evaluated": len(results),
+        "accepted": sum(1 for r in results if r.accepted),
+        "rejected": sum(1 for r in results if not r.accepted),
+        "n_trials_total": state["n_trials"],
+        "shadow_queue_len": len(shadow_queue),
+        "results": [asdict(r) for r in results],
+    }
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description="Autonomous causal alpha-discovery daemon (shadow-paper only).")
+    p.add_argument("--n-candidates", type=int, default=8)
+    p.add_argument("--mode", choices=("auto", "ollama", "symbolic"), default="auto")
+    p.add_argument("--ollama-url", default="http://127.0.0.1:11434")
+    p.add_argument("--model", default="lfm2.5")
+    p.add_argument("--role", choices=("overlay", "standalone"), default="overlay")
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--dry-run-synth", action="store_true")
+    p.add_argument("--daily-csv-dir", default=None)
+    p.add_argument("--state-path", default=DEFAULT_STATE_PATH)
+    p.add_argument("--shadow-path", default=DEFAULT_SHADOW_PATH)
+    p.add_argument("--log-path", default=DEFAULT_LOG_PATH)
+    args = p.parse_args()
+
+    summary = run_discovery(
+        n_candidates=args.n_candidates,
+        mode=args.mode,
+        ollama_url=args.ollama_url,
+        model=args.model,
+        role=args.role,
+        seed=args.seed,
+        dry_run_synth=args.dry_run_synth,
+        daily_csv_dir=args.daily_csv_dir,
+        state_path=args.state_path,
+        shadow_path=args.shadow_path,
+        log_path=args.log_path,
+    )
+    print(
+        f"auto_discover done | mode={summary['mode']} synth={summary['dry_run_synth']} "
+        f"evaluated={summary['evaluated']} accepted={summary['accepted']} rejected={summary['rejected']} "
+        f"n_trials={summary['n_trials_total']} shadow_queue={summary['shadow_queue_len']}"
+    )
+    if summary["ollama_note"]:
+        print(f"  ollama note: {summary['ollama_note']} (fell back to symbolic generator)")
+    for r in summary["results"]:
+        status = "SHADOW_PASS" if r["accepted"] else f"REJECT ({r['reject_reason']})"
+        base = r.get("base_metrics") or {}
+        extra = ""
+        if base:
+            extra = (
+                f" | geo={float(base.get('geo_monthly_pct', 0.0)):.3f}%/mo "
+                f"sharpe={float(base.get('sharpe', 0.0)):.3f} "
+                f"maxDD={float(base.get('max_dd_pct', 0.0)):.2f}% "
+                f"A25_26={float(base.get('A_geo_monthly_pct', 0.0)):+.2f}% "
+                f"DSR={float(base.get('deflated_sharpe', 0.0)):.4f}"
+            )
+        print(f"  [{r['source']}] {status}{extra}\n    expr: {r['expr']}")
+
+
+if __name__ == "__main__":
+    main()
