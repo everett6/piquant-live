@@ -45,3 +45,30 @@ drawdown (check 6 likely passes) but give up return against 40%+ crypto bull mon
 fails. E1 about 1 in 4, E2 about 1 in 4.
 
 No variants: if both fail, no other ETFs, windows, weights or rule settings will be tried under this family.
+
+## Result (run once, 2026-11-18; results/round48.json)
+
+Both fail on check 2 only (return gave up more than 0.10 %/mo); checks 1, 3, 4, 5 and 6 pass.
+
+| | %/mo | Max DD | Sharpe | Recent | Stress |
+|---|---|---|---|---|---|
+| Blend A | +2.12 | −19.8% | 1.36 | +0.56 | +0.71 |
+| 80% A + 20% SPY trend (E1) | +1.83 | −17.7% | 1.41 | +0.48 | +0.69 |
+| 80% A + 20% QQQ trend (E2) | +1.89 | −17.6% | 1.44 | +0.54 | +0.74 |
+| 80% A + 20% SPY buy-and-hold (not judged) | +1.98 | −19.2% | 1.47 | +0.73 | — |
+| 80% A + 20% QQQ buy-and-hold (not judged) | +2.06 | −22.1% | 1.49 | +0.76 | — |
+
+- The trend rule does its job on stocks as a drawdown cutter: SPY −33.7% → −11.7%, QQQ −35.1% → −15.3% (2020-01 on);
+  long history SPY −55% → −33% (from 1993), QQQ −83% → −34% (from 1999). It costs half the return: SPY +15%/yr →
+  +7%/yr here and +10.8% → +3.3%/yr since 1993; QQQ +19% → +10% here and +10.6% → +5.6% since 1999. Long about 55% of
+  days, about 13 trades a year.
+- As a sleeve it trims blend A's worst drawdown by about 2 points and lifts Sharpe slightly, but costs 0.23–0.29 %/mo.
+- Plain buy-and-hold stocks as a 20% sleeve gave a higher Sharpe (1.47–1.49) than either trend sleeve, at most of
+  blend A's return; QQQ deepened the drawdown, SPY trimmed it slightly. The correlation with blend A was low
+  (0.18–0.20), so most of the gain comes from owning something different, not from the trend rule.
+
+No variants of the trend-on-stocks family will be run.
+
+Trial count note: another session charged 3 trials (its PREREG45 ML test, 802 → 805) between this pre-registration and
+its run, so this test's 2 trials take the counter 805 → 807 (the runner's `N_TRIALS = 804` is only a label here; no
+check depends on it).
