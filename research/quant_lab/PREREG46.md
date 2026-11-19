@@ -95,3 +95,29 @@ Once, after this file is pushed and the synthetic tests pass.
   point. Fail. 1 in 8.
 - V4: the best chance. Short in 2022 and parts of 2025–26 should lift bear months; the ramp and SMA200 filter limit
   the whipsaw. Risk: bear-market rallies and the 2026 chop. About 1 in 3.
+
+## Result (run once, 2026-11-18; results/round46.json)
+
+All four fail. Blend A alone: +2.12%/mo, max DD −19.8%, bear months −1.2 (2020-01 on); +0.95%/mo, −19.8%, bear −1.4
+(2021-04 on, the option window).
+
+| Variant (80% A + 20% sleeve) | %/mo | Max DD | Bear months | Stress | Failed checks |
+|---|---|---|---|---|---|
+| V1 rebalance vs cash | +2.22 | −25.7% | −2.3 | +1.09 | 1 (bear), 2 (DD) |
+| V4 ramped downtrend short | +1.64 | **−15.3%** | **+0.1** | +0.12 | 3 (return −0.48), 5 (stress) |
+| V2 sell put spreads when IV ≫ RV | +0.77 | −17.3% | −1.2 | −0.11 | 1 (bear), 3 (return) |
+| V3 buy put spreads when IV ≤ RV | +0.74 | −16.2% | −1.1 | −0.13 | 1 (bear), 3 (return) |
+
+What the run says about the earlier failures:
+- **Cost of insurance (V3).** Even bought only when options were cheaper than recent moves (gate open 10–15% of
+  days), the put spreads paid back 41% (BTC) and 64% (ETH) of the premium. Cheap options were cheap for a reason:
+  quiet markets stayed quiet. The drag cost 0.21%/mo for no bear-month gain.
+- **Selling the variance premium (V2).** With a 15-point IV over RV gap, settlements were 98% (BTC) and 107% (ETH)
+  of premium received: the premium was real but the bid side spread and fees took almost all of it. Sleeve alone
+  −0.01%/mo; it adds bull-month risk (correlation with A +0.43) and no protection.
+- **Shorting (V4).** The only one that hedges: bear months −1.2 → +0.1, max DD −19.8% → −15.3%, sleeve correlation
+  with A −0.01. But alone it lost 0.78%/mo (−64% max DD): bear-market rallies and the 2023–24 bull, while it was
+  short 733 days, cost more than 2022 earned. Its price is about 0.5%/mo of the blend's return.
+- **Rebalancing (V1).** Adds return (+33%/yr alone) but it is long crypto, so it deepens drawdowns. Not a hedge.
+
+No variants of these will be run. V4's trade (−0.48%/mo for −4.5 points of max DD) is recorded for the owner.
