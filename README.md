@@ -326,6 +326,12 @@ hung tasks, out of memory), the previous boot's last log lines, services and res
 the recorder's freshness and whether the ledger state files are intact. Ledger state is written crash-safe and keeps
 the previous copy as `.bak` (`internal/durable`), so a reset cannot wipe the paper record.
 
+**Risk guards in the engine** (`internal/trend/guard.go`). No sleeve holds more than 2.0x, the most that survives
+ETH's worst day on record (−44.6%) with a 5-point buffer; only the PREREG44 1x–2.5x ledgers are affected. Every minute
+the engine marks each paper ledger to Coinbase's live price; at a 30% drawdown from its peak the ledger is flattened at
+that price, an alert is sent, and the normal rule decides again at the next close. After a stop it fires again only
+on a further 10-point loss. The target return is never an input to position size.
+
 `scripts/pi_harden.sh` makes the Pi recover by itself: persistent journal, a 15-second hardware watchdog that reboots a
 frozen Pi, services that never stop restarting, and the engine at normal priority. It only prints its plan unless run
 with `--apply`, and every change is a drop-in file listed with its undo command.

@@ -20,6 +20,7 @@ import (
 	"piquant-live/internal/experiment"
 	"piquant-live/internal/paper"
 	"piquant-live/internal/secrets"
+	"piquant-live/internal/trend"
 )
 
 type dryRunFlags struct {
@@ -393,7 +394,9 @@ func runDryRun(ctx context.Context, args []string) error {
 		gate := paper.NewTrendGate(48 * time.Hour)
 		dryRunEngine.SetTrendGate(gate)
 		go runTrendCore(ctx, tdir, gate)
-		fmt.Printf("[TREND] daily SMA50 gate on; 2x/1x trend core ledger in %s\n", tdir)
+		go runEmergencyWatch(ctx, tdir, al)
+		fmt.Printf("[TREND] daily SMA50 gate on; 2x/1x trend core ledger in %s; intraday %.0f%% emergency check every minute, sleeves capped at %.1fx\n",
+			tdir, trend.EmergencyDD*100, trend.MaxSafeLev)
 	}
 
 	alertTrendDir := ""

@@ -176,10 +176,12 @@ func runTrendCore(ctx context.Context, dir string, gate *paper.TrendGate) {
 		fmt.Fprintln(os.Stderr, "[TREND] load:", err)
 	}
 	for {
+		trendMu.Lock() // the emergency watch writes the same file
 		if fresh, lerr := trend.Load(path); lerr == nil && fresh != nil {
 			st = fresh // pick up manual edits such as `piquant trend --reset`
 		}
 		st, err = advanceTrend(ctx, client, st, path)
+		trendMu.Unlock()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "[TREND]", err)
 		} else if up, c, m, ok := st.Regime(50); ok && gate != nil {

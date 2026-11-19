@@ -105,17 +105,21 @@ type DayRec struct {
 
 // Ledger tracks one variant.
 type Ledger struct {
-	Variant Variant  `json:"variant"`
-	Equity  float64  `json:"equity"`
-	Peak    float64  `json:"peak"`
-	MaxDD   float64  `json:"max_dd"`
-	Pos     float64  `json:"pos"`
-	PosAlt  float64  `json:"pos_alt,omitempty"`     // ETH sleeve position (pair variants)
-	Stops   int      `json:"daily_stops,omitempty"` // days the daily loss stop flattened the book
-	HoldB   int      `json:"hold_b,omitempty"`      // pullback variants: closes held so far (BTC, ETH sleeves)
-	HoldE   int      `json:"hold_e,omitempty"`
-	Killed  bool     `json:"killed"`
-	Days    []DayRec `json:"days"`
+	Variant Variant `json:"variant"`
+	Equity  float64 `json:"equity"`
+	Peak    float64 `json:"peak"`
+	MaxDD   float64 `json:"max_dd"`
+	Pos     float64 `json:"pos"`
+	PosAlt  float64 `json:"pos_alt,omitempty"`     // ETH sleeve position (pair variants)
+	Stops   int     `json:"daily_stops,omitempty"` // days the daily loss stop flattened the book
+	HoldB   int     `json:"hold_b,omitempty"`      // pullback variants: closes held so far (BTC, ETH sleeves)
+	HoldE   int     `json:"hold_e,omitempty"`
+	Killed  bool    `json:"killed"`
+	// Risk guards (guard.go): sleeves capped at MaxSafeLev, intraday emergency stops and the level that re-arms them.
+	MarginCaps     int      `json:"margin_caps,omitempty"`
+	EmergencyStops int      `json:"emergency_stops,omitempty"`
+	EmergencyArm   float64  `json:"emergency_arm,omitempty"`
+	Days           []DayRec `json:"days"`
 }
 
 // State is the persisted forward test.
@@ -530,6 +534,7 @@ func (l *Ledger) stepPair(date string, barB, barE float64, histB, histE []Day) {
 		tb *= m
 		te *= m
 	}
+	tb, te = l.capMargin(tb), l.capMargin(te)
 	ret := held - 0.5*math.Abs(tb-l.Pos)*c - 0.5*math.Abs(te-l.PosAlt)*c
 	l.Equity *= 1 + ret
 	if l.Equity > l.Peak {
