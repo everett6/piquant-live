@@ -11,7 +11,7 @@ PiQuant is a personal crypto trading system with two parts:
 > backtests, and they come with large drawdowns.
 
 **Goal and where it stands (2026-11-13):** the owner's target is 7% a month, with drawdowns under 25%.
-- 47 pre-registrations and **802 charged trials** have found one strategy that reaches 7% a month in backtests:
+- 48 pre-registrations and **805 charged trials** have found one strategy that reaches 7% a month in backtests:
   P1, the BTC+ETH trend core at 2x. Its maximum drawdown is −84%.
 - One market-neutral strategy passed: C1, funding carry, at about +5–8% a year with a −1% drawdown.
 - Every attempt to cut P1's bear-market losses without cutting more profit has failed.
@@ -138,7 +138,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 2. **Run once.** The real run happens a single time, after synthetic tests pass. Failures are recorded with their
    numbers.
 3. **No variants of a failed test.** A failed idea is closed. Re-running it with different parameters is not allowed.
-4. **Count every trial.** A running trial counter (now **802**) is used for multiple-testing corrections.
+4. **Count every trial.** A running trial counter (now **805**) is used for multiple-testing corrections.
 5. **Never hand-edit results.** `results/roundNN.json` files are written only by the run scripts.
 
 **Standard daily-strategy setup** (PREREG7/11–16/23–25):
@@ -224,6 +224,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 | 45 | A 21% drawdown shutoff (hard stop, stop + 30-day restart, 30% emergency stop) on the PREREG42/44 blends, against the owner's 60%/yr with ≤ 20% drawdown target | **FAIL** the target (all 9); stop adds value only on blend B | Best +40%/yr. A hard 21% stop left blend C in cash from 2020-03-12 (+4%/yr instead of +41%). Restarting does not cap the drawdown (B −29.2%). Dual-speed blend A never hit 21% (+29%/yr, −19.8%; bootstrap: mean yearly drawdown 12.7%, 21% reached in 5% of years). |
 | 46 | Puts, shorts and hedges again after a failure analysis: rebalancing vs cash, put spreads sold when IV ≫ RV, put spreads bought when IV ≤ RV, ramped short in downtrends; each a 20% sleeve beside the dual-speed blend | **FAIL** (all 4) | Cheap puts paid back 41–64% of premium; selling rich puts broke even after spread; rebalancing deepened DD (−25.7%). The ramped short is the only real hedge (max DD −19.8% → −15.3%, bear months −1.2 → +0.1) but costs 0.48%/mo. |
 | 47 | Gradient-boosted trees (XGBoost-style, fixed settings, quarterly walk-forward refits) on daily BTC/ETH price and volume: X1 long/flat 5-day direction forecaster; X2 meta-label filter halving blend A's trend when it predicts a losing week | **FAIL** (both) | X1 AUC 0.523 (BTC 0.509), +3.30%/mo vs QD's +3.50, DD −51.0%, recent −0.25. X2 Sharpe 1.36 → 1.43 but max DD −20.1% (needed ≤ −17.8%), BTC AUC 0.489. The trees relearned trend, worse than the hand rule. |
+| 48 | MFT Infrastructure & Fee-Gated ML (`PREREG45.md`, `feature_store.py`, `purged_embargoed_splits`): `Q45_gbdt_fee_gated` (`>20 bps` hurdle), `Q45_hmm_regime_qd_carry` (3-state GMM + fee-gated pairs), `Q45_ml_metalabel_qd_carry`, 2020-01 on | **FAIL** (all 3) | Fee-gated GBDT `+2.00%/mo` (Spot `+2.41%`), DD `−34.4%`, Sharpe `1.085`, `A −0.56%`; GMM Regime `+1.11%/mo`, DD `−18.6%`, Sharpe `0.944` (`1,576` `MEAN_REVERT` days clipped bull trend); ML Meta-Label `+1.87%/mo` (Spot `+2.14%`), DD `−19.8%`, `A +1.11%` (Spot `+1.32%`), Sharpe `1.251` — all trail `S36` / `Q42`; `feature_store.py` + Go `CheckFeeHurdle` kept as pre-trade guardrails. |
 
 Full rules, numbers and readings are in `research/quant_lab/PREREGnn.md`; machine output is in
 `research/quant_lab/results/`.
