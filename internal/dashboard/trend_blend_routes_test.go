@@ -141,4 +141,23 @@ func TestHandlePaperTrendBlend(t *testing.T) {
 	if swBody.Status != "ok" || swBody.Schwab.Portfolio != "Q42_dualspeed_60_40_carry_spot" || swBody.Schwab.NavUSD != 2000 || swBody.Schwab.CarrySleevePct != 40.0 || len(swBody.Schwab.Allocations) != 3 {
 		t.Fatalf("unexpected schwab-plan payload: %+v", swBody)
 	}
+
+	// 5. Alpha-decay self-improving loop endpoint
+	recAD := get(t, h, http.MethodGet, "/api/paper/alpha-decay", authHdr, nil)
+	if recAD.Code != http.StatusOK {
+		t.Fatalf("expected 200 on alpha-decay, got %d: %s", recAD.Code, recAD.Body.String())
+	}
+	var adBody struct {
+		Status string `json:"status"`
+		Loop   struct {
+			DaysProcessed int                `json:"days_processed"`
+			Weights       map[string]float64 `json:"weights"`
+		} `json:"self_improving_loop"`
+	}
+	if err := json.Unmarshal(recAD.Body.Bytes(), &adBody); err != nil {
+		t.Fatal(err)
+	}
+	if adBody.Status != "ok" || adBody.Loop.DaysProcessed != 5 || len(adBody.Loop.Weights) != 4 {
+		t.Fatalf("unexpected alpha-decay response: %+v", adBody)
+	}
 }

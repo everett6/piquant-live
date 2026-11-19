@@ -25,6 +25,7 @@ import (
 	"piquant-live/internal/models"
 	"piquant-live/internal/models/common"
 	"piquant-live/internal/paper"
+	"piquant-live/internal/quant/alpha"
 	"piquant-live/internal/quant/orchestrator"
 	"piquant-live/internal/secrets"
 	"piquant-live/internal/tax"
@@ -61,6 +62,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/paper/dryrun", s.handlePaperDryRun)
 	s.mux.HandleFunc("/api/paper/tearsheet", s.handlePaperTearSheet)
 	s.mux.HandleFunc("/api/paper/trend-blend", s.handlePaperTrendBlend)
+	s.mux.HandleFunc("/api/paper/alpha-decay", s.handlePaperAlphaDecay)
 	s.mux.HandleFunc("/api/paper/schwab-plan", s.handlePaperSchwabPlan)
 	s.mux.HandleFunc("/api/paper/reports", s.handlePaperReports)
 	s.mux.HandleFunc("/api/paper/reports/latest", s.handlePaperReportsLatest)
@@ -1990,6 +1992,86 @@ func (s *Server) handlePaperSchwabPlan(w http.ResponseWriter, r *http.Request) {
 		"status": "ok",
 		"blend":  blend,
 		"schwab": plan,
+	})
+}
+
+// handlePaperAlphaDecay runs the causal MFT alpha-decay detector & Multiplicative-Weights
+// self-improving sleeve allocator across live tracked ledgers (Safe-QD, R3 Fast-Exit, C1 Carry, DTB3).
+func (s *Server) handlePaperAlphaDecay(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	st, err := trend.Load(filepath.Join(s.resolveTrendDir(), "trend_state.json"))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if st == nil {
+		st = trend.NewState("")
+	}
+	cState, _ := carry.Load(filepath.Join(s.resolveCarryDir(), "carry_state.json"))
+	rates, _ := trend.LoadDTB3Rates(s.resolveDTB3Path())
+
+	extractRets := func(name string) []float64 {
+		l := st.Ledgers[name]
+		if l == nil {
+			return nil
+		}
+		out := make([]float64, len(l.Days))
+		for i, d := range l.Days {
+			out[i] = d.Ret
+		}
+		return out
+	}
+	qdRets := extractRets("Q42_safe_qd_spot_1x")
+	r3Rets := extractRets("Q42_r3_fastexit_qd_spot_1x")
+	n := len(qdRets)
+	if len(r3Rets) < n {
+		n = len(r3Rets)
+	}
+
+	carryMap := map[string]float64{}
+	if cState != nil {
+		for _, d := range cState.Days {
+			carryMap[d.Date] = d.Ret
+		}
+	}
+	latestRate := 0.0
+	if l := st.Ledgers["Q42_safe_qd_spot_1x"]; l != nil && n > 0 {
+		firstDate := l.Days[0].Date
+		var latestRateDate string
+		for d, rVal := range rates {
+			if d <= firstDate && d > latestRateDate {
+				latestRateDate = d
+				latestRate = rVal
+			}
+		}
+	}
+	carryRets := make([]float64, n)
+	dtb3Rets := make([]float64, n)
+	if l := st.Ledgers["Q42_safe_qd_spot_1x"]; l != nil && n > 0 {
+		for i := 0; i < n; i++ {
+			date := l.Days[i].Date
+			carryRets[i] = carryMap[date]
+			if rv, ok := rates[date]; ok {
+				latestRate = rv
+			}
+			dtb3Rets[i] = latestRate / 100.0 / 365.0
+		}
+	}
+
+	alloc := alpha.RunSelfImprovingLoop(map[string][]float64{
+		"qd":    qdRets[:n],
+		"r3":    r3Rets[:n],
+		"carry": carryRets,
+		"dtb3":  dtb3Rets,
+	}, 0.15, 0.25, 0.70)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":              "ok",
+		"last_date":           st.LastDate,
+		"self_improving_loop": alloc,
 	})
 }
 
