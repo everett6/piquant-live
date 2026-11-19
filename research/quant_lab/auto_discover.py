@@ -41,7 +41,23 @@ DEFAULT_SHADOW_PATH = os.path.join(DEFAULT_RESULTS_DIR, "shadow_candidates.json"
 DEFAULT_LOG_PATH = os.path.join(DEFAULT_RESULTS_DIR, "auto_discover_log.jsonl")
 
 DEFAULT_LLAMA_BIN = os.path.expanduser("~/llama.cpp/build/bin/llama-cli")
-DEFAULT_LLAMA_MODEL = os.path.expanduser("~/models/LFM3-1.7B-QAD-Q4_0.gguf")
+DEFAULT_LLAMA_MODEL_CANDIDATES: tuple[str, ...] = (
+    os.path.expanduser("~/models/piquant-alpha-lfm3-v1-Q4_K_M.gguf"),
+    os.path.expanduser("~/models/piquant-alpha-lfm3-v1/piquant-alpha-lfm3-v1-Q4_K_M.gguf"),
+    os.path.expanduser("~/models/LFM3-1.7B-QAD-Q4_0.gguf"),
+)
+
+
+def _resolve_default_llama_model(candidates: tuple[str, ...] = DEFAULT_LLAMA_MODEL_CANDIDATES) -> str:
+    """Prefer fine-tuned piquant-alpha-lfm3-v1-Q4_K_M.gguf if present, else fall back to base LFM3."""
+    for path in candidates:
+        expanded = os.path.expanduser(path)
+        if os.path.isfile(expanded):
+            return expanded
+    return os.path.expanduser(candidates[-1])
+
+
+DEFAULT_LLAMA_MODEL = _resolve_default_llama_model()
 DEFAULT_LLAMA_THREADS = 3
 DEFAULT_LLAMA_URL = ""
 
@@ -430,6 +446,12 @@ def parse_llm_expressions(text: str) -> list[str]:
                     break
             pos = max(idx + 1, end)
         except json.JSONDecodeError:
+            # Recover complete quoted elements if a JSON array was truncated at max_tokens
+            if cleaned[idx : idx + 2] in ('["', '[\n', '[ '):
+                recovered = [m.strip() for m in re.findall(r'"([^"\\]{6,280})"', cleaned[idx:]) if m.strip()]
+                if recovered:
+                    candidates.extend(recovered)
+                    break
             pos = idx + 1
 
     if not candidates:
@@ -505,7 +527,7 @@ def generate_llamacpp_candidates(
     llama_url: str = DEFAULT_LLAMA_URL,
     recent_feedback: list[str] | None = None,
     timeout_s: float = 180.0,
-    max_tokens: int = 256,
+    max_tokens: int = 512,
     temperature: float = 0.2,
 ) -> tuple[list[str], str | None, str]:
     """Generate causal alpha expressions via native C++ `llama.cpp`.
@@ -568,12 +590,13 @@ def generate_llamacpp_candidates(
         return [], note, "llamacpp"
 
     threads = max(1, int(llama_threads))
+    n_predict = max(64, int(max_tokens), int(n_candidates) * 72)
     cmd = [
         bin_path,
         "-m", model_path,
         "-t", str(threads),
-        "-c", "1024",
-        "-n", str(max(64, int(max_tokens))),
+        "-c", "1536",
+        "-n", str(n_predict),
         "--temp", str(temperature),
         "--top-k", "50",
         "--repeat-penalty", "1.1",

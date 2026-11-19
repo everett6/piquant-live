@@ -190,3 +190,20 @@ def test_llamacpp_and_ollama_fallback_dry_run_synth_end_to_end(tmp_path):
     with open(log_p, "r", encoding="utf-8") as fh:
         log_lines = [json.loads(line) for line in fh if line.strip()]
     assert len(log_lines) == 4
+
+
+def test_resolve_default_llama_model_prefers_finetuned(tmp_path):
+    ft = tmp_path / "piquant-alpha-lfm3-v1-Q4_K_M.gguf"
+    base = tmp_path / "LFM3-1.7B-QAD-Q4_0.gguf"
+    cands = (str(ft), str(base))
+
+    # Neither exists -> falls back to last candidate (base)
+    assert AD._resolve_default_llama_model(cands) == str(base)
+
+    # Only base exists -> selects base
+    base.write_bytes(b"GGUF")
+    assert AD._resolve_default_llama_model(cands) == str(base)
+
+    # Fine-tuned exists -> prefers fine-tuned over base
+    ft.write_bytes(b"GGUF")
+    assert AD._resolve_default_llama_model(cands) == str(ft)
