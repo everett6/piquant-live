@@ -5,12 +5,11 @@
 #   scripts/deploy_pi.sh             # install, restart the paper engine only (the recorder keeps its old process)
 #   scripts/deploy_pi.sh --collect   # also restart the tick recorder (a gap of a few seconds in the recording)
 #   scripts/deploy_pi.sh --dry-run   # build, copy and checksum only; nothing is installed or restarted
-#   PI=everett@192.168.0.109 scripts/deploy_pi.sh
-# Steps: refuse uncommitted Go code -> build -> copy -> sync -> sha256 on the Pi's disk -> keep the old binary ->
+#   PI=everett@192.168.0.109 scripts/deploy_pi.sh   # otherwise scripts/pi_host.sh finds it
+# Steps: build a clean export of the pushed HEAD -> copy -> sync -> sha256 on the Pi's disk -> keep the old binary ->
 # install by atomic rename -> sync -> sha256 again -> restart -> check both services and the recorder for 90 s ->
 # roll back to the old binary if any check fails.
 set -euo pipefail
-PI=${PI:-everett@raspberrypi.local}
 COLLECT=0; DRY=0
 for a in "$@"; do
   case "$a" in
@@ -20,13 +19,23 @@ for a in "$@"; do
   esac
 done
 cd "$(git rev-parse --show-toplevel)"
+. scripts/pi_host.sh
+PI=$(pi_host) || { echo "Pi not reachable (tried \$PI, raspberrypi.local, the cached and the old address); power-cycle it first" >&2; exit 1; }
 export PATH="$HOME/.local/go/bin:$PATH"
+# Build from a clean export of HEAD, so the binary is exactly a pushed commit: uncommitted work (another session's
+# included) neither blocks the deploy nor slips into it.
 if ! git diff --quiet HEAD -- cmd internal go.mod go.sum; then
-  echo "refusing: uncommitted changes under cmd/ internal/ or go.mod (commit first)" >&2; exit 1
+  echo "note: uncommitted changes under cmd/ internal/ or go.mod are NOT included; building HEAD"
+fi
+if [ -n "$(git log --oneline @{u}..HEAD 2>/dev/null)" ]; then
+  echo "refusing: HEAD has commits that are not pushed (push first, so the Pi runs a commit the repo has)" >&2; exit 1
 fi
 V=$(git rev-parse --short HEAD)
-OUT=$(mktemp -d)/piquant-arm64
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$V" -o "$OUT" ./cmd/piquant
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+git archive HEAD | tar -x -C "$WORK/"
+OUT=$WORK/piquant-arm64
+( cd "$WORK" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$V" -o "$OUT" ./cmd/piquant )
 H=$(sha256sum "$OUT" | cut -d' ' -f1)
 SIZE=$(stat -c %s "$OUT")
 [ "$SIZE" -gt 1000000 ] || { echo "refusing: built binary is only $SIZE bytes" >&2; exit 1; }

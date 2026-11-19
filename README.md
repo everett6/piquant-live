@@ -303,15 +303,31 @@ uncommitted changes:
 scripts/sync_pi.sh
 ```
 
-**Install a new binary on the Pi.** It checks the copy on the Pi's disk, keeps the old binary, restarts the paper
-engine, watches both services for 90 seconds and rolls back if either is unhealthy. `--collect` also restarts the
-recorder; `--dry-run` installs nothing:
+**Install a new binary on the Pi.** It builds a clean copy of the pushed HEAD (uncommitted work is never shipped),
+checks the copy on the Pi's disk, keeps the old binary, restarts the paper engine, watches both services for 90
+seconds and rolls back if either is unhealthy. `--collect` also restarts the recorder; `--dry-run` installs nothing:
 
 ```bash
 scripts/deploy_pi.sh
 ```
 
-All three scripts take `PI=everett@<ip>` if `raspberrypi.local` doesn't resolve.
+The Pi scripts find the Pi themselves (`scripts/pi_host.sh`: `$PI`, then `raspberrypi.local`, then the last address
+that worked). `PI=everett@<ip>` still overrides.
+
+**When the Pi is down.** If it does not answer at all, it needs a hands-on power cycle (unplug for 10 s). Then:
+
+```bash
+scripts/pi_doctor.sh
+```
+
+`pi_doctor.sh` changes nothing. It reports power and throttling flags, temperature, kernel errors (SD/NVMe, RCU stalls,
+hung tasks, out of memory), the previous boot's last log lines, services and restart counts, real-time scheduling,
+the recorder's freshness and whether the ledger state files are intact. Ledger state is written crash-safe and keeps
+the previous copy as `.bak` (`internal/durable`), so a reset cannot wipe the paper record.
+
+`scripts/pi_harden.sh` makes the Pi recover by itself: persistent journal, a 15-second hardware watchdog that reboots a
+frozen Pi, services that never stop restarting, and the engine at normal priority. It only prints its plan unless run
+with `--apply`, and every change is a drop-in file listed with its undo command.
 
 **Trend paper ledger & PREREG36 blend + ping report:**
 
