@@ -1,0 +1,203 @@
+{
+ "prereg": "PREREG47",
+ "n_trials": 802,
+ "window": [
+  "2020-01-01",
+  "2026-11-01"
+ ],
+ "params": {
+  "max_depth": 3,
+  "learning_rate": 0.05,
+  "max_iter": 200,
+  "min_samples_leaf": 50,
+  "l2_regularization": 1.0,
+  "random_state": 0,
+  "early_stopping": false
+ },
+ "auc": {
+  "X1_pooled": 0.522985611806398,
+  "X2_pooled": 0.5091883037261317,
+  "X1_BTC": 0.5094097932745758,
+  "X2_BTC": 0.4885802181411392,
+  "X1_ETH": 0.5382504415309844,
+  "X2_ETH": 0.5336799851681304
+ },
+ "variants": {
+  "X1_forecaster": {
+   "base": {
+    "geo_monthly_pct": 3.296341318253627,
+    "max_dd_pct": -51.01322760988298,
+    "sharpe": 1.0844481042375829,
+    "calmar": 0.7754086081661724,
+    "A_geo_monthly_pct": -0.2540118490020808,
+    "by_regime": {
+     "bear": -4.00846576814553,
+     "flat": -0.3492769720643221,
+     "bull": 11.623269655899046
+    },
+    "deflated_sharpe_802": 0.35982451504874535,
+    "annual_pct": 47.57720223565363
+   },
+   "stress": {
+    "geo_monthly_pct": 0.15629507718234442,
+    "max_dd_pct": -74.04869322224144,
+    "sharpe": 0.2665504365481136,
+    "calmar": 0.025328481092287407,
+    "A_geo_monthly_pct": -2.986796823797151,
+    "by_regime": {
+     "bear": -6.8162613203333695,
+     "flat": -3.045675581984973,
+     "bull": 7.839421839631582
+    },
+    "deflated_sharpe_802": 0.006189369232957487,
+    "annual_pct": 1.891747798066512
+   }
+  },
+  "X2_meta_filter": {
+   "base": {
+    "geo_monthly_pct": 2.0987091123852433,
+    "max_dd_pct": -20.14777681629504,
+    "sharpe": 1.43080725991042,
+    "calmar": 1.249989494039575,
+    "A_geo_monthly_pct": 0.7405182849659936,
+    "by_regime": {
+     "bear": -0.8929389382606411,
+     "flat": -0.47096600686573276,
+     "bull": 5.716138730565879
+    },
+    "deflated_sharpe_802": 0.7108018056958338,
+    "annual_pct": 28.304832281102943
+   },
+   "stress": {
+    "geo_monthly_pct": 0.7606849262243641,
+    "max_dd_pct": -22.50677142290688,
+    "sharpe": 0.6538555164504161,
+    "calmar": 0.4055765681879132,
+    "A_geo_monthly_pct": -0.1499762811841341,
+    "by_regime": {
+     "bear": -1.2161957321912342,
+     "flat": -0.80695021554858,
+     "bull": 3.0420061807894943
+    },
+    "deflated_sharpe_802": 0.06925828572484549,
+    "annual_pct": 9.519973922440329
+   }
+  }
+ },
+ "reference": {
+  "QD_1x_sleeve": {
+   "base": {
+    "geo_monthly_pct": 3.496402615573599,
+    "max_dd_pct": -45.70925232641293,
+    "sharpe": 1.2076408691593872,
+    "calmar": 0.9179067530413002,
+    "A_geo_monthly_pct": 1.3234131762669328,
+    "by_regime": {
+     "bear": -4.452197772304348,
+     "flat": -0.5984555660771607,
+     "bull": 12.35060293032534
+    },
+    "deflated_sharpe_802": 0.4867905890351443,
+    "annual_pct": 51.043852913525825
+   },
+   "stress": {
+    "geo_monthly_pct": 0.31178770430496205,
+    "max_dd_pct": -72.48912032317641,
+    "sharpe": 0.29676649801436805,
+    "calmar": 0.0516139861399769,
+    "A_geo_monthly_pct": -1.533628857974937,
+    "by_regime": {
+     "bear": -6.1155825241337265,
+     "flat": -3.7155715053029565,
+     "bull": 7.789083805522065
+    },
+    "deflated_sharpe_802": 0.007893475750385348,
+    "annual_pct": 3.806283596968374
+   }
+  },
+  "blend_A": {
+   "base": {
+    "geo_monthly_pct": 2.1228291129634282,
+    "max_dd_pct": -19.798187323876515,
+    "sharpe": 1.3631434253782897,
+    "calmar": 1.2866808934997642,
+    "A_geo_monthly_pct": 0.5599374898352706,
+    "by_regime": {
+     "bear": -1.1951044847077799,
+     "flat": -0.3850756120900812,
+     "bull": 5.952611339720963
+    },
+    "deflated_sharpe_802": 0.6469417351940466,
+    "annual_pct": 28.66903710361395
+   },
+   "stress": {
+    "geo_monthly_pct": 0.7062427418690537,
+    "max_dd_pct": -23.096866080982046,
+    "sharpe": 0.5808680744857732,
+    "calmar": 0.3669291267791038,
+    "A_geo_monthly_pct": -0.23810064984961574,
+    "by_regime": {
+     "bear": -1.4667815568018998,
+     "flat": -0.8143423442826592,
+     "bull": 3.1073635119519283
+    },
+    "deflated_sharpe_802": 0.04698551481155072,
+    "annual_pct": 8.811981162766669
+   }
+  }
+ },
+ "info": {
+  "X1_share_long": {
+   "BTC": 0.5004006410256411,
+   "ETH": 0.42959527824620575
+  },
+  "X1_turnover_per_year": {
+   "BTC": 76.91907051282051,
+   "ETH": 80.13621794871794
+  },
+  "X2_share_cut": {
+   "BTC": 0.0765224358974359,
+   "ETH": 0.09375
+  },
+  "X1_perm_importance_last_year": {
+   "vol_7": 0.022,
+   "ret_60": 0.02,
+   "other_ret_30": 0.0139,
+   "ret_14": 0.0117,
+   "ret_120": 0.0075,
+   "ret_30": 0.0074,
+   "ret_7": 0.0056,
+   "ret_1": 0.0055,
+   "ret_3": 0.0041,
+   "dd_90": 0.0003,
+   "coin": 0.0003,
+   "dow": 0.0,
+   "other_ret_7": -0.0017,
+   "vol_ratio": -0.0029,
+   "sma200": -0.0032,
+   "volume_ratio": -0.0056,
+   "vol_30": -0.0058,
+   "sma50": -0.0093
+  }
+ },
+ "checks": {
+  "X1_forecaster": {
+   "1_auc_ge_0p53": false,
+   "2_sharpe_gt_qd": false,
+   "3_recent_positive": false,
+   "4_stress_positive": true,
+   "5_dsr_ge_0p50": false
+  },
+  "X2_meta_filter": {
+   "1_dd_2pt_better": false,
+   "2_return_within_0p10": true,
+   "3_sharpe_gt_A": true,
+   "4_stress_within_0p10": true,
+   "5_recent_positive": true
+  }
+ },
+ "pass": {
+  "X1_forecaster": false,
+  "X2_meta_filter": false
+ }
+}

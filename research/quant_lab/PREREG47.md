@@ -67,3 +67,24 @@ on the last fitted model, and turnover.
   trend's losing days are whipsaws that look like winning days when they start. About 1 in 5.
 
 No variants: if either fails, no other settings, thresholds, horizons or features will be tried under this family.
+
+## Result (run once, 2026-11-18; results/round47.json)
+
+Both fail.
+
+| | %/mo | Max DD | Sharpe | Deflated Sharpe | Recent | Stress | AUC |
+|---|---|---|---|---|---|---|---|
+| QD 1x sleeve (reference) | +3.50 | −45.7% | 1.21 | 0.49 | +1.32 | +0.31 | — |
+| X1 boosted forecaster | +3.30 | −51.0% | 1.08 | 0.36 | −0.25 | +0.16 | 0.523 (BTC 0.509, ETH 0.538) |
+| Blend A (reference) | +2.12 | −19.8% | 1.36 | 0.65 | +0.56 | +0.71 | — |
+| X2 meta-label filter on A | +2.10 | −20.1% | 1.43 | 0.71 | +0.74 | +0.76 | 0.509 (BTC 0.489, ETH 0.534) |
+
+- **X1 fails 4 of 5** (AUC, Sharpe vs QD, recent, deflated Sharpe). The model was long about half the time and traded
+  ~78 times a year per coin. It mostly relearned trend (most useful features: 7-day volatility, 60-day and 14-day
+  returns, ETH's/BTC's 30-day return) and did it worse than the hand-built QD rule. On BTC it was close to a coin flip.
+- **X2 fails check 1 only.** Halving the trend on the 8–9% of days the model flagged lifted Sharpe (1.36 → 1.43) and
+  recent and stress returns slightly, but the worst drawdown did not shrink (−19.8% → −20.1%; 2 points better was
+  required). Its AUC on BTC was below 0.5, so the small gain is not a reliable signal.
+
+As predicted, daily BTC/ETH direction is close to unpredictable from price and volume alone, and boosted trees find
+nothing the trend rule does not already use. No variants will be run.
