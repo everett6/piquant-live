@@ -11,7 +11,7 @@ PiQuant is a personal crypto trading system with two parts:
 > backtests, and they come with large drawdowns.
 
 **Goal and where it stands (2026-11-13):** the owner's target is 7% a month, with drawdowns under 25%.
-- 44 pre-registrations and **787 charged trials** have found one strategy that reaches 7% a month in backtests:
+- 45 pre-registrations and **796 charged trials** have found one strategy that reaches 7% a month in backtests:
   P1, the BTC+ETH trend core at 2x. Its maximum drawdown is −84%.
 - One market-neutral strategy passed: C1, funding carry, at about +5–8% a year with a −1% drawdown.
 - Every attempt to cut P1's bear-market losses without cutting more profit has failed.
@@ -138,7 +138,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 2. **Run once.** The real run happens a single time, after synthetic tests pass. Failures are recorded with their
    numbers.
 3. **No variants of a failed test.** A failed idea is closed. Re-running it with different parameters is not allowed.
-4. **Count every trial.** A running trial counter (now **787**) is used for multiple-testing corrections.
+4. **Count every trial.** A running trial counter (now **796**) is used for multiple-testing corrections.
 5. **Never hand-edit results.** `results/roundNN.json` files are written only by the run scripts.
 
 **Standard daily-strategy setup** (PREREG7/11–16/23–25):
@@ -221,6 +221,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 | 42 | Expected-Drawdown variants of `S36_qd_carry_blend` (`dd_start=0.06→0.20`, `floor=0.40`): `Q42_volcap_s36_blend` (`45%` 20d vol cap), `Q42_dualspeed_60_40_carry` (`30% QD + 30% R3_FastExit + 40% C1`), `Q42_balanced_50_50_carry` (`50% Safe-QD + 50% C1`), 2020-01 on | **`Q42_dualspeed_60_40_carry` PASS (5/5); `Q42_balanced_50_50_carry` PASS (5/5)**; `volcap` fail (Calmar) | vs `S36` (`+2.64%/mo`, DD `−27.8%`, mean DD `12.78%`, Ulcer `14.68%`, CDaR95 `26.2%`, Sharpe `1.285`, Calmar `1.14`): **`dualspeed_60_40`** `+2.12%/mo` (Spot **`+2.35%`**), DD **`−19.8%`** (Spot `−19.4%`), mean DD **`8.93%` (`−30%`)**, Ulcer **`10.14%`**, CDaR95 **`18.2%`**, Sharpe **`1.363`** (Spot `1.483`), Calmar **`1.29`** (Spot `1.46`), bear `−1.20%`, worst mo `−6.47%`; **`balanced_50_50`** `+2.12%/mo` (Spot **`+2.33%`**), DD **`−19.9%`**, mean DD **`8.73%` (`−32%`)**, Ulcer **`10.11%`**, CDaR95 **`18.7%`**, Sharpe **`1.396`** (Spot **`1.513`**), Calmar **`1.28`**, `A +0.82%` (Spot `+1.00%`). |
 | 43 | Merging `Q42` (`6%→20%` taper, `R3`, carry) + `Q38` `BTC`-gated Top-4 Leaders: `Q43_dualspeed_70_30_carry` (`35% QD + 35% R3 + 30% C1`), `Q43_dualspeed_leader_65_35` (`25% QD + 20% R3 + 20% Leaders + 35% C1`), `Q43_macro_bull_leader_barbell` (`30% QD + 30% Leaders + 40% C1`), 2020-01 on | **FAIL** (all 3) | `70_30` `+2.24%/mo` (Spot `+2.51%`), DD `−21.6%`, mean DD `10.47%`, Sharpe `1.290` (missed return & `Q42` Sharpe/Calmar). `leader_65_35` `+2.43%/mo` (Spot **`+2.68%`**), DD `−22.9%`, Sharpe **`1.413`** (Spot `1.532`), stress `+0.92%`, `A +0.19%`, missed mean DD `11.41% > 10.5%` & Calmar `1.27 < 1.29`. `macro_bull_barbell` `+2.53%/mo` (Spot **`+2.78%`**), DD `−24.2%`, Sharpe **`1.438`** (Spot **`1.552`**, DSR `0.808`), stress **`+1.00%`**, `A +0.07%`, missed mean DD `12.22%` & Calmar `1.26`. |
 | 44 | Balancing `1.0x..2.5x` inv-vol leverage + Buy-and-Hold Volatility Harvester (`0.65..1.35x` counter-vol dip buyer): `Q44_vol_balanced_1x_2p5x_blend` (`70% 1x..2.5x QD + 30% C1`), `Q44_bh_vol_harvester_1x_2p5x` (`20% BH Harvester + 55% 1x..2.5x QD + 25% C1`), `Q44_barbell_1x_bh_2p5x_dualspeed` (`25% BH Harvester + 50% 1x..2.5x Dual-Speed + 25% C1`), 2020-01 on | **FAIL** (all 3 on `>=3.40%/mo` futures bar) | `vol_balanced` `+2.76%/mo` (`+38.7%/yr`), DD `−32.2%`, Sharpe `1.197`, stress `+0.69%` (Spot+Margin **`+3.13%/mo` (`+44.7%/yr`)**, DD `−31.8%`, Sharpe **`1.306`**, `A +0.69%`). `bh_vol_harvester` **`+2.89%/mo` (`+40.8%/yr`)**, DD `−43.6%`, Sharpe `1.147` (Spot+Margin **`+3.40%/mo` (`+49.4%/yr`)**, DD `−42.1%`, Sharpe `1.293`, `A +0.33%`). `barbell_dualspeed` `+2.84%/mo` (`+40.0%/yr`), DD `−43.5%` (Spot+Margin **`+3.31%/mo` (`+47.8%/yr`)**, DD `−41.8%`, Sharpe **`1.300`**). |
+| 45 | A 21% drawdown shutoff (hard stop, stop + 30-day restart, 30% emergency stop) on the PREREG42/44 blends, against the owner's 60%/yr with ≤ 20% drawdown target | **FAIL** the target (all 9); stop adds value only on blend B | Best +40%/yr. A hard 21% stop left blend C in cash from 2020-03-12 (+4%/yr instead of +41%). Restarting does not cap the drawdown (B −29.2%). Dual-speed blend A never hit 21% (+29%/yr, −19.8%; bootstrap: mean yearly drawdown 12.7%, 21% reached in 5% of years). |
 
 Full rules, numbers and readings are in `research/quant_lab/PREREGnn.md`; machine output is in
 `research/quant_lab/results/`.
