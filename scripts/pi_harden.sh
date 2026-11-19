@@ -8,7 +8,8 @@
 #  2. Hardware watchdog (15 s): if the Pi freezes, the chip reboots it instead of it staying dead until someone
 #     pulls the plug. On reboot both services start again on their own.
 #  3. Services never give up restarting (no start-rate limit), 10 s apart.
-#  4. The paper engine runs at normal priority on any core. A real-time FIFO/RR policy on isolated cores (as in
+#  4. The engine and the recorder run at normal priority, each pinned to its own reserved core (engine 3,
+#     recorder 2; pinning at normal priority is safe). A real-time FIFO/RR policy on isolated cores (as in
 #     docs/KERNEL_TUNING.md) can starve the kernel's own threads on those cores and hang the whole Pi; nothing in
 #     the engine needs it now that it only paper-trades on candles.
 # It does not change the boot command line, the power supply or the network; the doctor report shows those.
@@ -37,11 +38,13 @@ RuntimeWatchdogSec=15
 RebootWatchdogSec=2min"
 for s in piquant piquant-collect; do
   echo "3/4. $s"
-  extra=""
-  [ "$s" = piquant ] && extra="
+  # Normal priority, but each service pinned to one of the cores the boot line reserves (isolcpus=2,3), so
+  # the desktop, browser and Pi-hole on cores 0-1 never delay the recorder or the engine.
+  core=3; [ "$s" = piquant-collect ] && core=2
+  extra="
 CPUSchedulingPolicy=other
 CPUSchedulingPriority=0
-CPUAffinity="
+CPUAffinity=$core"
   put /etc/systemd/system/$s.service.d/zz-piquant-resilience.conf "[Unit]
 StartLimitIntervalSec=0
 
