@@ -40,3 +40,26 @@ in 6.
 
 If L1 passes, it is implemented as a Pi paper ledger (`L1_weekly_dualspeed`) beside the daily blend; if both fail,
 nothing is implemented and no variants are run.
+
+## Result (run once, 2026-11-18; results/round50.json)
+
+Both fail; nothing is implemented.
+
+| | %/mo | Max DD | Sharpe | Stress | Recent | Trend turnover/yr | Trend changes/yr |
+|---|---|---|---|---|---|---|---|
+| Daily blend A | +2.12 | −19.8% | 1.36 | +0.71 | +0.56 | 30.2 | 416 |
+| L1 weekly (Sunday) | +1.63 | −21.5% | 1.07 | +0.53 | +0.20 | 20.0 | 66 |
+| L2 monthly (month-end) | +1.11 | −23.4% | 0.81 | +0.17 | +0.34 | 11.1 | 19 |
+| weekly on Wednesday (not judged) | +1.92 | −20.4% | 1.24 | +0.57 | +0.18 | 19.2 | 67 |
+| monthly on the 15th (not judged) | +1.16 | −27.8% | 0.79 | +0.12 | −0.21 | 9.1 | 19 |
+
+- L1 fails 4 of 5 (return −0.49 %/mo, DD 1.7 points deeper, stress lower, turnover 66% of daily, not ≤ 50%).
+  L2 fails 3 of 5 (return −1.01 %/mo, DD 3.6 points deeper, stress lower).
+- Why: the daily blend's edge is the fast exit. Holding a week or a month keeps the position through the first days
+  of a fall that the daily rule already left (worst day −7.7% → −9.1 to −14.4%; worst month −6.5% → −7.9 to −16.0%).
+  Lower turnover did not help even under stress costs, because most daily "changes" are small ramp steps that cost
+  little; the losses come from late exits, not fees.
+- The result depends heavily on the chosen day (weekly: Sunday +1.63 vs Wednesday +1.92 %/mo; monthly 15th has a
+  −16% month), another sign that low-frequency timing is luck, not edge.
+
+Low-frequency decision schedules for the trend sleeve are closed. The daily blend stays as is.

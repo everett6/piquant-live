@@ -11,7 +11,7 @@ PiQuant is a personal crypto trading system with two parts:
 > backtests, and they come with large drawdowns.
 
 **Goal and where it stands (2026-11-13):** the owner's target is 7% a month, with drawdowns under 25%.
-- 51 pre-registrations and **812 charged trials** have found one strategy that reaches 7% a month in backtests:
+- 52 pre-registrations and **814 charged trials** have found one strategy that reaches 7% a month in backtests:
   P1, the BTC+ETH trend core at 2x. Its maximum drawdown is −84%.
 - One market-neutral strategy passed: C1, funding carry, at about +5–8% a year with a −1% drawdown.
 - Every attempt to cut P1's bear-market losses without cutting more profit has failed.
@@ -138,7 +138,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 2. **Run once.** The real run happens a single time, after synthetic tests pass. Failures are recorded with their
    numbers.
 3. **No variants of a failed test.** A failed idea is closed. Re-running it with different parameters is not allowed.
-4. **Count every trial.** A running trial counter (now **812**) is used for multiple-testing corrections.
+4. **Count every trial.** A running trial counter (now **814**) is used for multiple-testing corrections.
 5. **Never hand-edit results.** `results/roundNN.json` files are written only by the run scripts.
 
 **Standard daily-strategy setup** (PREREG7/11–16/23–25):
@@ -228,6 +228,7 @@ Rules (from `research/quant_lab/PREREG.md` and the owner's `CLAUDE.md`):
 | 49 | MFT Alpha-Decay & Self-Improving Loop (`PREREG46.md`): `Q46_ic_decay_throttled_s36` (`60d` Sharpe throttle -> `0.35x` DTB3), `Q46_ic_decay_throttled_q42`, `Q46_exp_grad_self_improving` (causal Multiplicative-Weights across `[QD, R3, C1, DTB3]`), 2020-01 on | **FAIL** (all 3) | `exp_grad` cut Max DD to **`−15.9%`** (Spot **`−14.8%`**) and raised Calmar to **`1.42`**, but trailed `Q42` on geo (`+1.88%` vs `+2.12%`; Spot `+2.06%`) and Sharpe (`1.252` vs `1.363`); `throttled_q42` cut DD `−18.5%` / Ulcer `9.80%` at `Sharpe 1.293`; `throttled_s36` `+2.44%/mo` (`Sharpe 1.234`). Live Go `decay_loop.go` + `/api/paper/alpha-decay` kept as observational health monitor. |
 | 48 | Blend A's dual-speed trend rule unchanged on stocks (SPY, QQQ), long/flat 1x with idle T-bills, each a 20% sleeve beside blend A (moved to `~/PiQuant/piquant-stocks`) | **FAIL** (both, on return only) | Trend cut the ETF drawdown (SPY −33.7% → −11.7%, QQQ −35.1% → −15.3%; since 1993/1999 −55% → −33%, −83% → −34%) but halved its return. As a sleeve: max DD −19.8% → −17.7%, Sharpe 1.36 → 1.41–1.44, return −0.23 to −0.29%/mo. Plain buy-and-hold SPY/QQQ as the sleeve (not judged) gave Sharpe 1.47–1.49. |
 | 49 | Plain buy-and-hold SPY / QQQ as a 20% sleeve beside blend A, rebalanced monthly; main window 2020-01..2026-10 (already seen) and unseen 2016-08..2019-12 (carry in T-bills) (moved to `~/PiQuant/piquant-stocks`) | **FAIL** (SPY on return only; QQQ on return and DD) | SPY: Sharpe 1.36 → 1.45 (main), 2.40 → 2.50 (early); max DD −19.8% → −19.4%, −19.6% → −15.7%; return −0.16%/mo (limit 0.15) and −0.71 in the 2016–19 crypto boom. QQQ DD −22.4% (main). Correlation with the blend 0.01–0.15. |
+| 50 | Low-frequency blend A: trend decided weekly (Sunday) or monthly (month-end) instead of daily, taper still daily | **FAIL** (both) | Weekly +1.63%/mo vs +2.12, DD −21.5% vs −19.8%, Sharpe 1.07; monthly +1.11%/mo, DD −23.4%. Late exits cost more than the saved trading (worst month −6.5% → −7.9 to −16.0%); the result swings with the chosen day. Not implemented. |
 
 Full rules, numbers and readings are in `research/quant_lab/PREREGnn.md`; machine output is in
 `research/quant_lab/results/`.
