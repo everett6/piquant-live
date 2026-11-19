@@ -73,16 +73,96 @@ def test_parse_llm_expressions_json_and_lines():
     parsed2 = AD.parse_llm_expressions(raw_lines)
     assert parsed2 == ["ema(btc_ret5, 10)", "tanh(eth_sma50_dist)"]
 
+    # Must ignore llama-cli banner and trailing `[ Prompt: ... | Generation: ... ]` bracket stats
+    raw_llama_cli = (
+        "Loading model...\n"
+        "build : b1-e4b620a\n"
+        '[\n'
+        ' "ema(btc_ret1, 10) * 0.5 - tanh(abs(vol_ratio_5_20 - 1.0))",\n'
+        ' "where(btc_vol20_ann < 0.8, ema(btc_sma50_dist, 7), -0.5)"\n'
+        ']\n'
+        "\n[ Prompt: 15.6 t/s | Generation: 3.2 t/s ]\nExiting...\n"
+    )
+    parsed3 = AD.parse_llm_expressions(raw_llama_cli)
+    assert parsed3 == [
+        "ema(btc_ret1, 10) * 0.5 - tanh(abs(vol_ratio_5_20 - 1.0))",
+        "where(btc_vol20_ann < 0.8, ema(btc_sma50_dist, 7), -0.5)",
+    ]
 
-def test_ollama_fallback_and_dry_run_synth_end_to_end(tmp_path):
+
+def test_generate_llamacpp_candidates_cli_and_server(tmp_path, monkeypatch):
+    fake_bin = tmp_path / "llama-cli"
+    fake_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_bin.chmod(0o755)
+    fake_model = tmp_path / "LFM3-1.7B-QAD-Q4_0.gguf"
+    fake_model.write_bytes(b"GGUF")
+
+    captured_cmd: list[str] = []
+
+    class _FakeProc:
+        returncode = 0
+        stdout = (
+            '[\n'
+            '  "ema(btc_sma50_dist, 10) * 2.0",\n'
+            '  "tanh(btc_ret21 * 3.0) - max(vol_ratio_5_20 - 1.2, 0.0)"\n'
+            ']\n'
+            "[ Prompt: 20.0 t/s | Generation: 4.5 t/s ]\n"
+        )
+        stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        captured_cmd.extend(cmd)
+        return _FakeProc()
+
+    monkeypatch.setattr(AD.subprocess, "run", _fake_run)
+
+    exprs, note, src = AD.generate_llamacpp_candidates(
+        n_candidates=2,
+        llama_bin=str(fake_bin),
+        llama_model=str(fake_model),
+        llama_threads=3,
+    )
+    assert note is None
+    assert src == "llamacpp:LFM3-1.7B-QAD-Q4_0.gguf"
+    assert len(exprs) == 2
+    assert "--reasoning" in captured_cmd and "off" in captured_cmd
+    assert "--no-repack" in captured_cmd
+    assert "-t" in captured_cmd and "3" in captured_cmd
+
+    # Also verify OpenAI-compatible llama-server path
+    class _FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "choices": [{"message": {"content": '["ema(btc_ret5, 8) * 2.0"]'}}]
+            }).encode("utf-8")
+
+    monkeypatch.setattr(AD.urllib.request, "urlopen", lambda req, timeout=None: _FakeResp())
+    exprs_srv, note_srv, src_srv = AD.generate_llamacpp_candidates(
+        n_candidates=1,
+        llama_url="http://127.0.0.1:8080",
+    )
+    assert note_srv is None
+    assert src_srv == "llamacpp:server"
+    assert exprs_srv == ["ema(btc_ret5, 8) * 2.0"]
+
+
+def test_llamacpp_and_ollama_fallback_dry_run_synth_end_to_end(tmp_path):
     state_p = str(tmp_path / "state.json")
     shadow_p = str(tmp_path / "shadow.json")
     log_p = str(tmp_path / "log.jsonl")
 
-    # Point Ollama URL at an unreachable port to verify graceful fallback to symbolic
+    # Missing llama-cli binary + unreachable Ollama URL must gracefully fall back to symbolic
     summary = AD.run_discovery(
         n_candidates=4,
         mode="auto",
+        llama_bin=str(tmp_path / "missing-llama-cli"),
+        llama_model=str(tmp_path / "missing.gguf"),
         ollama_url="http://127.0.0.1:19999",
         model="lfm2.5",
         role="overlay",
@@ -93,6 +173,7 @@ def test_ollama_fallback_and_dry_run_synth_end_to_end(tmp_path):
         log_path=log_p,
     )
     assert summary["evaluated"] == 4
+    assert summary["llamacpp_note"] is not None
     assert summary["ollama_note"] is not None
     assert summary["n_trials_total"] == AD.INITIAL_TRIALS + 4
     assert os.path.exists(state_p)

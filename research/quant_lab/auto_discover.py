@@ -1,8 +1,9 @@
 """Autonomous Causal Alpha-Discovery & Quarantined Shadow-Queue Daemon.
 
-Supports local LLM hypothesis generation via Ollama (e.g. Liquid AI `lfm2.5`,
-`qwen2.5-coder`, etc.) with automatic fallback to a deterministic symbolic
-expression generator when Ollama is unavailable.
+Supports native C++ `llama.cpp` inference (e.g. Liquid AI `LFM3-1.7B-QAD-Q4_0.gguf`
+or fine-tuned `piquant-news-lfm3-v1-Q4_K_M.gguf` via `llama-server` OpenAI API or
+direct `llama-cli`), local Ollama, and automatic fallback to a deterministic
+symbolic expression generator when local LLMs are unavailable.
 
 Every candidate expression passes 5 strict gates before entering the paper-only
 shadow queue (`results/shadow_candidates.json`):
@@ -21,6 +22,8 @@ import datetime as dt
 import json
 import os
 import re
+import shutil
+import subprocess
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -36,6 +39,11 @@ DEFAULT_RESULTS_DIR = os.path.join(HERE, "results")
 DEFAULT_STATE_PATH = os.path.join(DEFAULT_RESULTS_DIR, "auto_discover_state.json")
 DEFAULT_SHADOW_PATH = os.path.join(DEFAULT_RESULTS_DIR, "shadow_candidates.json")
 DEFAULT_LOG_PATH = os.path.join(DEFAULT_RESULTS_DIR, "auto_discover_log.jsonl")
+
+DEFAULT_LLAMA_BIN = os.path.expanduser("~/llama.cpp/build/bin/llama-cli")
+DEFAULT_LLAMA_MODEL = os.path.expanduser("~/models/LFM3-1.7B-QAD-Q4_0.gguf")
+DEFAULT_LLAMA_THREADS = 3
+DEFAULT_LLAMA_URL = ""
 
 INITIAL_TRIALS = 810
 MAX_EXPR_LEN = 300
@@ -391,32 +399,69 @@ def evaluate_purged_cv(
 
 
 def parse_llm_expressions(text: str) -> list[str]:
-    """Extract candidate expression strings from Ollama JSON or line-based output."""
+    """Extract candidate expression strings from LLM JSON or line-based output.
+
+    Uses `json.JSONDecoder.raw_decode` scanning for `[` so trailing CLI banners
+    or stats like `[ Prompt: 15.6 t/s | Generation: 3.2 t/s ]` never break JSON
+    array extraction.
+    """
     if not text:
         return []
     candidates: list[str] = []
-    # Try JSON array or object first
     cleaned = text.strip()
-    m = re.search(r"\[[\s\S]*\]", cleaned)
-    if m:
+
+    decoder = json.JSONDecoder()
+    pos = 0
+    while True:
+        idx = cleaned.find("[", pos)
+        if idx == -1:
+            break
         try:
-            parsed = json.loads(m.group(0))
+            parsed, end = decoder.raw_decode(cleaned, idx)
             if isinstance(parsed, list):
+                extracted: list[str] = []
                 for item in parsed:
                     if isinstance(item, str) and item.strip():
-                        candidates.append(item.strip())
+                        extracted.append(item.strip())
                     elif isinstance(item, dict) and isinstance(item.get("expr"), str):
-                        candidates.append(item["expr"].strip())
+                        extracted.append(item["expr"].strip())
+                if extracted:
+                    candidates.extend(extracted)
+                    break
+            pos = max(idx + 1, end)
         except json.JSONDecodeError:
-            pass
+            pos = idx + 1
 
     if not candidates:
+        skip_prefixes = (
+            "#",
+            "```",
+            "Loading model",
+            "build ",
+            "model ",
+            "ftype ",
+            "modalities ",
+            "using custom",
+            "available commands",
+            "/exit",
+            "/regen",
+            "/clear",
+            "/read",
+            "/glob",
+            "Exiting",
+            "[ Prompt:",
+            "[Start thinking]",
+            "> ",
+            "▄",
+            "█",
+            "▀",
+        )
         for line in cleaned.splitlines():
             s = line.strip()
-            if not s or s.startswith("#") or s.startswith("```"):
+            if not s or any(s.startswith(pfx) for pfx in skip_prefixes):
                 continue
             s = re.sub(r"^[\-\*\d\.\)\s]+", "", s).strip()
-            s = s.strip("`\"'")
+            s = s.strip("`\"',")
             if s:
                 candidates.append(s)
 
@@ -429,6 +474,134 @@ def parse_llm_expressions(text: str) -> list[str]:
     return out
 
 
+def _build_alpha_prompt(n_candidates: int, recent_feedback: list[str] | None = None) -> str:
+    fb_block = ""
+    if recent_feedback:
+        fb_block = "\nRecent rejected attempts (avoid repeating these failure modes):\n- " + "\n- ".join(
+            recent_feedback[-5:]
+        )
+
+    return (
+        f"Generate exactly {n_candidates} distinct quantitative crypto daily alpha overlay expressions "
+        f"as a JSON array of strings.\n"
+        f"Allowed feature names ONLY: {', '.join(ALLOWED_FEATURES)}.\n"
+        f"Allowed functions ONLY: abs(x), tanh(x), sign(x), sigmoid(x), clip(x,lo,hi), "
+        f"where(cond,a,b), min(a,b), max(a,b), ema(x,span), roll_mean(x,win).\n"
+        f"Allowed operators: + - * / < <= > >= & | ~.\n"
+        f"Example valid expressions:\n"
+        f"- ema(btc_sma50_dist, 10) * 3.0 - max(vol_ratio_5_20 - 1.2, 0.0) * 1.5\n"
+        f"- tanh(ema(btc_ret21, 5) * 4.0) - clip(btc_vol20_ann - 0.75, 0.0, 1.0) * 2.0\n"
+        f"Goal: low-turnover, fee-efficient daily signal that scales risk up in calm uptrends and down "
+        f"in vol spikes or choppy regimes. Keep expressions concise (<160 chars).{fb_block}\n"
+        f"Return ONLY a JSON array of {n_candidates} expression strings, nothing else."
+    )
+
+
+def generate_llamacpp_candidates(
+    n_candidates: int,
+    llama_bin: str = DEFAULT_LLAMA_BIN,
+    llama_model: str = DEFAULT_LLAMA_MODEL,
+    llama_threads: int = DEFAULT_LLAMA_THREADS,
+    llama_url: str = DEFAULT_LLAMA_URL,
+    recent_feedback: list[str] | None = None,
+    timeout_s: float = 180.0,
+    max_tokens: int = 256,
+    temperature: float = 0.2,
+) -> tuple[list[str], str | None, str]:
+    """Generate causal alpha expressions via native C++ `llama.cpp`.
+
+    Tries OpenAI-compatible `llama-server` (`/v1/chat/completions`) when
+    `llama_url` is provided, otherwise invokes `llama-cli` directly with
+    Pi 5-safe thread/memory flags (`-t 3`, `--no-repack`, `--reasoning off`).
+
+    Returns `(expressions, error_note, source_tag)`.
+    """
+    prompt = _build_alpha_prompt(n_candidates, recent_feedback=recent_feedback)
+    sys_prompt = (
+        "You are a quantitative crypto researcher. Output ONLY a valid JSON array "
+        "of expression strings using ONLY the allowed features and functions."
+    )
+
+    server_err: str | None = None
+    if llama_url:
+        payload = json.dumps({
+            "messages": [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }).encode("utf-8")
+        url = llama_url.rstrip("/") + "/v1/chat/completions"
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            choices = body.get("choices") or []
+            raw_text = ""
+            if choices and isinstance(choices[0], dict):
+                msg = choices[0].get("message") or {}
+                raw_text = str(msg.get("content") or "")
+            exprs = parse_llm_expressions(raw_text)
+            if exprs:
+                return exprs[:n_candidates], None, "llamacpp:server"
+            server_err = "llama-server returned no parseable expressions"
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+            server_err = f"llama-server unavailable ({exc})"
+
+    # Direct native C++ `llama-cli` invocation
+    bin_path = os.path.expanduser(llama_bin) if llama_bin else ""
+    if bin_path and not os.path.isfile(bin_path):
+        found = shutil.which(bin_path)
+        bin_path = found or ""
+    model_path = os.path.expanduser(llama_model) if llama_model else ""
+
+    if not bin_path or not os.access(bin_path, os.X_OK):
+        note = f"llama-cli unavailable ({llama_bin})"
+        if server_err:
+            note = f"{server_err}; {note}"
+        return [], note, "llamacpp"
+    if not model_path or not os.path.isfile(model_path):
+        note = f"llama GGUF model not found ({llama_model})"
+        if server_err:
+            note = f"{server_err}; {note}"
+        return [], note, "llamacpp"
+
+    threads = max(1, int(llama_threads))
+    cmd = [
+        bin_path,
+        "-m", model_path,
+        "-t", str(threads),
+        "-c", "1024",
+        "-n", str(max(64, int(max_tokens))),
+        "--temp", str(temperature),
+        "--top-k", "50",
+        "--repeat-penalty", "1.1",
+        "--reasoning", "off",
+        "--no-repack",
+        "-st",
+        "--no-display-prompt",
+        "--simple-io",
+        "-sys", sys_prompt,
+        "-p", prompt,
+    ]
+    model_tag = f"llamacpp:{os.path.basename(model_path)}"
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, check=False)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return [], f"llama-cli execution failed ({exc})", model_tag
+
+    if proc.returncode != 0:
+        err_tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        tail_msg = err_tail[-1] if err_tail else f"exit={proc.returncode}"
+        return [], f"llama-cli exited {proc.returncode}: {tail_msg}", model_tag
+
+    exprs = parse_llm_expressions(proc.stdout)
+    if not exprs:
+        return [], "llama-cli returned no parseable expressions", model_tag
+    return exprs[:n_candidates], None, model_tag
+
+
 def generate_ollama_candidates(
     n_candidates: int,
     ollama_url: str = "http://127.0.0.1:11434",
@@ -437,23 +610,7 @@ def generate_ollama_candidates(
     timeout_s: float = 25.0,
 ) -> tuple[list[str], str | None]:
     """Query local Ollama `/api/generate` for novel causal alpha expressions."""
-    fb_block = ""
-    if recent_feedback:
-        fb_block = "\nRecent rejected attempts (avoid repeating these failure modes):\n- " + "\n- ".join(
-            recent_feedback[-5:]
-        )
-
-    prompt = (
-        f"Generate exactly {n_candidates} distinct quantitative crypto daily alpha overlay expressions "
-        f"as a JSON array of strings.\n"
-        f"Allowed feature names ONLY: {', '.join(ALLOWED_FEATURES)}.\n"
-        f"Allowed functions ONLY: abs(x), tanh(x), sign(x), sigmoid(x), clip(x,lo,hi), "
-        f"where(cond,a,b), min(a,b), max(a,b), ema(x,span), roll_mean(x,win).\n"
-        f"Allowed operators: + - * / < <= > >= & | ~.\n"
-        f"Goal: low-turnover, fee-efficient daily signal that scales risk up in calm uptrends and down "
-        f"in vol spikes or choppy regimes. Keep expressions concise (<160 chars).{fb_block}\n"
-        f"Return ONLY a JSON array of expression strings, nothing else."
-    )
+    prompt = _build_alpha_prompt(n_candidates, recent_feedback=recent_feedback)
 
     payload = json.dumps({
         "model": model,
@@ -778,6 +935,10 @@ def _evaluate_real_full(
 def run_discovery(
     n_candidates: int = 8,
     mode: str = "auto",
+    llama_bin: str = DEFAULT_LLAMA_BIN,
+    llama_model: str = DEFAULT_LLAMA_MODEL,
+    llama_threads: int = DEFAULT_LLAMA_THREADS,
+    llama_url: str = DEFAULT_LLAMA_URL,
     ollama_url: str = "http://127.0.0.1:11434",
     model: str = "lfm2.5",
     role: str = "overlay",
@@ -792,18 +953,39 @@ def run_discovery(
     state = _load_state(state_path)
     recent_fb = _load_recent_feedback(log_path, limit=5)
 
-    # 1. Generate candidate expressions
+    # 1. Generate candidate expressions: C++ llama.cpp -> Ollama -> deterministic symbolic
     expr_pairs: list[tuple[str, str]] = []
+    llamacpp_note: str | None = None
     ollama_note: str | None = None
-    if mode in ("auto", "ollama"):
-        ollama_exprs, ollama_note = generate_ollama_candidates(
+
+    if mode in ("auto", "llamacpp"):
+        llama_exprs, llamacpp_note, llama_src = generate_llamacpp_candidates(
             n_candidates=n_candidates,
+            llama_bin=llama_bin,
+            llama_model=llama_model,
+            llama_threads=llama_threads,
+            llama_url=llama_url,
+            recent_feedback=recent_fb,
+        )
+        seen_llama: set[str] = set()
+        for e in llama_exprs:
+            if e not in seen_llama:
+                expr_pairs.append((e, llama_src))
+                seen_llama.add(e)
+
+    if mode == "ollama" or (mode == "auto" and len(expr_pairs) < n_candidates):
+        needed = n_candidates - len(expr_pairs)
+        ollama_exprs, ollama_note = generate_ollama_candidates(
+            n_candidates=needed,
             ollama_url=ollama_url,
             model=model,
             recent_feedback=recent_fb,
         )
+        seen = {e for e, _ in expr_pairs}
         for e in ollama_exprs:
-            expr_pairs.append((e, f"ollama:{model}"))
+            if e not in seen:
+                expr_pairs.append((e, f"ollama:{model}"))
+                seen.add(e)
 
     if mode == "symbolic" or (mode == "auto" and len(expr_pairs) < n_candidates):
         needed = n_candidates - len(expr_pairs)
@@ -938,6 +1120,7 @@ def run_discovery(
 
     return {
         "mode": mode,
+        "llamacpp_note": llamacpp_note,
         "ollama_note": ollama_note,
         "dry_run_synth": dry_run_synth,
         "evaluated": len(results),
@@ -952,7 +1135,11 @@ def run_discovery(
 def main() -> None:
     p = argparse.ArgumentParser(description="Autonomous causal alpha-discovery daemon (shadow-paper only).")
     p.add_argument("--n-candidates", type=int, default=8)
-    p.add_argument("--mode", choices=("auto", "ollama", "symbolic"), default="auto")
+    p.add_argument("--mode", choices=("auto", "llamacpp", "ollama", "symbolic"), default="auto")
+    p.add_argument("--llama-bin", default=DEFAULT_LLAMA_BIN, help="Path to native llama-cli binary")
+    p.add_argument("--llama-model", default=DEFAULT_LLAMA_MODEL, help="Path to GGUF model (e.g. LFM3-1.7B-QAD-Q4_0.gguf)")
+    p.add_argument("--llama-threads", type=int, default=DEFAULT_LLAMA_THREADS, help="CPU threads for llama.cpp (default 3)")
+    p.add_argument("--llama-url", default=DEFAULT_LLAMA_URL, help="Optional OpenAI-compatible llama-server base URL")
     p.add_argument("--ollama-url", default="http://127.0.0.1:11434")
     p.add_argument("--model", default="lfm2.5")
     p.add_argument("--role", choices=("overlay", "standalone"), default="overlay")
@@ -967,6 +1154,10 @@ def main() -> None:
     summary = run_discovery(
         n_candidates=args.n_candidates,
         mode=args.mode,
+        llama_bin=args.llama_bin,
+        llama_model=args.llama_model,
+        llama_threads=args.llama_threads,
+        llama_url=args.llama_url,
         ollama_url=args.ollama_url,
         model=args.model,
         role=args.role,
@@ -982,6 +1173,8 @@ def main() -> None:
         f"evaluated={summary['evaluated']} accepted={summary['accepted']} rejected={summary['rejected']} "
         f"n_trials={summary['n_trials_total']} shadow_queue={summary['shadow_queue_len']}"
     )
+    if summary["llamacpp_note"]:
+        print(f"  llamacpp note: {summary['llamacpp_note']}")
     if summary["ollama_note"]:
         print(f"  ollama note: {summary['ollama_note']} (fell back to symbolic generator)")
     for r in summary["results"]:
