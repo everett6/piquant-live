@@ -5,6 +5,7 @@
 # Usage:
 #   scripts/sync_gdrive_logs.sh [--dry-run] [--skip-pull] [--archive-dir <dir>]
 set -euo pipefail
+export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 
 DRY=0
 SKIP_PULL=0
@@ -50,7 +51,11 @@ if command -v rclone >/dev/null 2>&1 && rclone listremotes 2>/dev/null | grep -q
   [ "$DRY" -eq 1 ] && RCLONE_FLAGS+=(--dry-run)
   rclone "${RCLONE_FLAGS[@]}" "$ARCHIVE_DIR" "gdrive:PiQuant/LiveLogs"
   [ -d "$HOME/piquant-backups" ] && rclone "${RCLONE_FLAGS[@]}" "$HOME/piquant-backups" "gdrive:PiQuant/Backups"
-  [ -d "$HOME/piquant-collect/daily_csv" ] && rclone copy --update "$HOME/piquant-collect/daily_csv" "gdrive:PiQuant/Datasets" $([ "$DRY" -eq 1 ] && echo "--dry-run")
+  if [ -d "$HOME/piquant-collect/daily_csv" ]; then
+    CSV_FLAGS=(copy --update)
+    [ "$DRY" -eq 1 ] && CSV_FLAGS+=(--dry-run)
+    rclone "${CSV_FLAGS[@]}" "$HOME/piquant-collect/daily_csv" "gdrive:PiQuant/Datasets"
+  fi
   echo "sync_gdrive_logs: synced to rclone gdrive:PiQuant/"
 else
   echo "sync_gdrive_logs: local archive updated at $ARCHIVE_DIR (configure 'rclone config' remote 'gdrive' for unattended Drive sync)"
