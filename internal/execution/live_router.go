@@ -42,6 +42,8 @@ var (
 	ErrKillLocked = errors.New("execution: trading halted by persistent KILL_LOCK")
 	// ErrReconcileMismatch indicates actual venue balances diverge from expected balances beyond tolerance.
 	ErrReconcileMismatch = errors.New("execution: venue balance reconciliation mismatch")
+	// ErrHighLatency indicates venue ping latency exceeds the configured threshold or all probes failed.
+	ErrHighLatency = errors.New("execution: venue ping latency exceeds threshold")
 )
 
 // Quote holds top-of-book inside bid/ask/mid prices and quote timestamp from a trading venue.
@@ -98,6 +100,8 @@ type RouterConfig struct {
 	MaxDailyNotionalUSD float64
 	PostOnlyOffsetBps   float64
 	MinOrderUSD         float64
+	OrderTTL            time.Duration
+	OrderPollInterval   time.Duration
 	JournalPath         string
 	ReconcileTolerance  float64
 	FeeHurdle           guardrails.FeeHurdleSpec
@@ -140,22 +144,24 @@ type ExecutionResult struct {
 	Receipt          OrderReceipt `json:"receipt"`
 	DryRun           bool         `json:"dry_run"`
 	SkippedDuplicate bool         `json:"skipped_duplicate,omitempty"`
+	CancelledOnTTL   bool         `json:"cancelled_on_ttl,omitempty"`
 	NotionalUSD      float64      `json:"notional_usd"`
 }
 
 // JournalEntry is one line persisted to RouterConfig.JournalPath for idempotent recovery.
 type JournalEntry struct {
-	Timestamp     time.Time    `json:"timestamp"`
-	Venue         string       `json:"venue"`
-	ClientOrderID string       `json:"client_order_id"`
-	DayBucket     string       `json:"day_bucket"`
-	Symbol        string       `json:"symbol"`
-	Side          string       `json:"side"`
-	Price         float64      `json:"price"`
-	Quantity      float64      `json:"quantity"`
-	NotionalUSD   float64      `json:"notional_usd"`
-	DryRun        bool         `json:"dry_run"`
-	Receipt       OrderReceipt `json:"receipt"`
+	Timestamp      time.Time    `json:"timestamp"`
+	Venue          string       `json:"venue"`
+	ClientOrderID  string       `json:"client_order_id"`
+	DayBucket      string       `json:"day_bucket"`
+	Symbol         string       `json:"symbol"`
+	Side           string       `json:"side"`
+	Price          float64      `json:"price"`
+	Quantity       float64      `json:"quantity"`
+	NotionalUSD    float64      `json:"notional_usd"`
+	DryRun         bool         `json:"dry_run"`
+	CancelledOnTTL bool         `json:"cancelled_on_ttl,omitempty"`
+	Receipt        OrderReceipt `json:"receipt"`
 }
 
 type journalKey struct {
@@ -198,6 +204,12 @@ func NewLiveRouter(cfg RouterConfig, guard *guardrails.PreTradeGuard, venue Venu
 	}
 	if math.IsNaN(cfg.PostOnlyOffsetBps) || math.IsInf(cfg.PostOnlyOffsetBps, 0) || cfg.PostOnlyOffsetBps < 0 {
 		cfg.PostOnlyOffsetBps = 2.0
+	}
+	if cfg.OrderTTL < 0 {
+		cfg.OrderTTL = 0
+	}
+	if cfg.OrderTTL > 0 && cfg.OrderPollInterval <= 0 {
+		cfg.OrderPollInterval = 250 * time.Millisecond
 	}
 
 	r := &LiveRouter{
@@ -374,7 +386,7 @@ func (r *LiveRouter) SubmitTargetOrder(
 		return ExecutionResult{}, ErrLiveNotArmed
 	}
 
-	// 1. Check persistent KILL_LOCK before any risk-increasing order.
+	// 1. Check persistent KILL_LOCK and in-memory PreTradeGuard lock/kill-switch before any risk-increasing order.
 	if r.cfg.KillLockStatePath != "" && !isReduceOnly {
 		kl, err := paper.ReadKillLock(r.cfg.KillLockStatePath)
 		if err == nil {
@@ -383,6 +395,11 @@ func (r *LiveRouter) SubmitTargetOrder(
 		if !errors.Is(err, os.ErrNotExist) {
 			return ExecutionResult{}, fmt.Errorf("execution: read kill lock %s: %w", r.cfg.KillLockStatePath, err)
 		}
+	}
+	if tripped, reason, locked, _, _, _ := r.guard.Status(); locked {
+		return ExecutionResult{}, guardrails.ErrTradingLocked
+	} else if tripped && !isReduceOnly {
+		return ExecutionResult{}, fmt.Errorf("%w: %s", guardrails.ErrKillSwitchTripped, reason)
 	}
 
 	// 2. Fetch and validate venue quote freshness.
@@ -430,6 +447,7 @@ func (r *LiveRouter) SubmitTargetOrder(
 			Receipt:          prev.Receipt,
 			DryRun:           r.cfg.DryRun,
 			SkippedDuplicate: true,
+			CancelledOnTTL:   prev.CancelledOnTTL,
 			NotionalUSD:      prev.NotionalUSD,
 		}, nil
 	}
@@ -530,28 +548,146 @@ func (r *LiveRouter) SubmitTargetOrder(
 	if receipt.SubmittedAt.IsZero() {
 		receipt.SubmittedAt = now
 	}
+	cancelledOnTTL := false
+	if r.cfg.OrderTTL > 0 && receipt.OrderID != "" && !isOrderFilled(receipt, qty) {
+		var ttlErr error
+		receipt, cancelledOnTTL, ttlErr = r.waitForFillOrCancelTTL(ctx, receipt, qty)
+		if ttlErr != nil {
+			_ = r.recordEntry(JournalEntry{
+				Timestamp:      now,
+				Venue:          r.venue.Name(),
+				ClientOrderID:  clientOrderID,
+				DayBucket:      dayBucket,
+				Symbol:         sym,
+				Side:           sideUpper,
+				Price:          price,
+				Quantity:       qty,
+				NotionalUSD:    notionalUSD,
+				DryRun:         false,
+				CancelledOnTTL: cancelledOnTTL,
+				Receipt:        receipt,
+			})
+			return ExecutionResult{
+				ClientOrderID:  clientOrderID,
+				Receipt:        receipt,
+				DryRun:         false,
+				CancelledOnTTL: cancelledOnTTL,
+				NotionalUSD:    notionalUSD,
+			}, ttlErr
+		}
+	}
 	entry := JournalEntry{
-		Timestamp:     now,
-		Venue:         r.venue.Name(),
-		ClientOrderID: clientOrderID,
-		DayBucket:     dayBucket,
-		Symbol:        sym,
-		Side:          sideUpper,
-		Price:         price,
-		Quantity:      qty,
-		NotionalUSD:   notionalUSD,
-		DryRun:        false,
-		Receipt:       receipt,
+		Timestamp:      now,
+		Venue:          r.venue.Name(),
+		ClientOrderID:  clientOrderID,
+		DayBucket:      dayBucket,
+		Symbol:         sym,
+		Side:           sideUpper,
+		Price:          price,
+		Quantity:       qty,
+		NotionalUSD:    notionalUSD,
+		DryRun:         false,
+		CancelledOnTTL: cancelledOnTTL,
+		Receipt:        receipt,
 	}
 	if err := r.recordEntry(entry); err != nil {
 		return ExecutionResult{}, err
 	}
 	return ExecutionResult{
-		ClientOrderID: clientOrderID,
-		Receipt:       receipt,
-		DryRun:        false,
-		NotionalUSD:   notionalUSD,
+		ClientOrderID:  clientOrderID,
+		Receipt:        receipt,
+		DryRun:         false,
+		CancelledOnTTL: cancelledOnTTL,
+		NotionalUSD:    notionalUSD,
 	}, nil
+}
+
+func (r *LiveRouter) waitForFillOrCancelTTL(ctx context.Context, receipt OrderReceipt, targetQty float64) (OrderReceipt, bool, error) {
+	pollInterval := r.cfg.OrderPollInterval
+	if pollInterval <= 0 {
+		pollInterval = 250 * time.Millisecond
+	}
+	timer := time.NewTimer(r.cfg.OrderTTL)
+	defer timer.Stop()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		if ctx.Err() != nil {
+			return receipt, false, ctx.Err()
+		}
+		select {
+		case <-ctx.Done():
+			return receipt, false, ctx.Err()
+		case <-timer.C:
+			if ctx.Err() != nil {
+				return receipt, false, ctx.Err()
+			}
+			if latest, gerr := r.venue.GetOrder(ctx, receipt.OrderID); gerr == nil {
+				receipt = mergeOrderReceipt(receipt, latest)
+				if isOrderFilled(receipt, targetQty) {
+					return receipt, false, nil
+				}
+			}
+			if cerr := r.CancelOrder(ctx, receipt.OrderID); cerr != nil {
+				if latest, gerr := r.venue.GetOrder(ctx, receipt.OrderID); gerr == nil {
+					receipt = mergeOrderReceipt(receipt, latest)
+					if isOrderFilled(receipt, targetQty) {
+						return receipt, false, nil
+					}
+				}
+				return receipt, false, fmt.Errorf("execution: cancel order %s on TTL expiry: %w", receipt.OrderID, cerr)
+			}
+			receipt.Status = "CANCELLED"
+			return receipt, true, nil
+		case <-ticker.C:
+			latest, gerr := r.venue.GetOrder(ctx, receipt.OrderID)
+			if gerr != nil {
+				continue
+			}
+			receipt = mergeOrderReceipt(receipt, latest)
+			if isOrderFilled(receipt, targetQty) {
+				return receipt, false, nil
+			}
+		}
+	}
+}
+
+func isOrderFilled(rec OrderReceipt, targetQty float64) bool {
+	return strings.EqualFold(strings.TrimSpace(rec.Status), "FILLED") ||
+		(targetQty > 0 && rec.FilledQty >= targetQty)
+}
+
+func mergeOrderReceipt(base, latest OrderReceipt) OrderReceipt {
+	if latest.OrderID == "" {
+		latest.OrderID = base.OrderID
+	}
+	if latest.ClientOrderID == "" {
+		latest.ClientOrderID = base.ClientOrderID
+	}
+	if latest.Symbol == "" {
+		latest.Symbol = base.Symbol
+	}
+	if latest.Side == "" {
+		latest.Side = base.Side
+	}
+	if latest.Price <= 0 {
+		latest.Price = base.Price
+	}
+	if latest.Quantity <= 0 {
+		latest.Quantity = base.Quantity
+	}
+	if !latest.PostOnly {
+		latest.PostOnly = base.PostOnly
+	}
+	if strings.TrimSpace(latest.Status) == "" {
+		latest.Status = base.Status
+	}
+	if latest.SubmittedAt.IsZero() {
+		latest.SubmittedAt = base.SubmittedAt
+	}
+	latest.DryRun = false
+	return latest
 }
 
 // CancelOrder cancels an order on the venue (or returns nil for dry-run simulated IDs).
@@ -658,6 +794,111 @@ func (r *LiveRouter) recordEntry(entry JournalEntry) error {
 	r.seenOrders[journalKey{id: entry.ClientOrderID, dryRun: entry.DryRun}] = entry
 	r.dailyNotional += entry.NotionalUSD
 	return nil
+}
+
+// HighWaterMarkState persists monotonic peak NAV and UTC daily peak NAV across CLI executions.
+type HighWaterMarkState struct {
+	PeakNavUSD   float64 `json:"peak_nav_usd"`
+	LastNavUSD   float64 `json:"last_nav_usd"`
+	UpdatedAtUTC string  `json:"updated_at_utc"`
+	DailyPeakUSD float64 `json:"daily_peak_usd"`
+	DailyDateUTC string  `json:"daily_date_utc"`
+}
+
+// LoadHighWaterMark reads persisted high-water mark state from path.
+// When path does not exist yet, it returns a zero HighWaterMarkState and nil error.
+func LoadHighWaterMark(path string) (HighWaterMarkState, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return HighWaterMarkState{}, errors.New("execution: high-water mark path is required")
+	}
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return HighWaterMarkState{}, nil
+	}
+	if err != nil {
+		return HighWaterMarkState{}, fmt.Errorf("execution: read high-water mark %s: %w", path, err)
+	}
+	var st HighWaterMarkState
+	if err := json.Unmarshal(b, &st); err != nil {
+		return HighWaterMarkState{}, fmt.Errorf("execution: parse high-water mark %s: %w", path, err)
+	}
+	return st, nil
+}
+
+// UpdateAndSaveHighWaterMark updates monotonic PeakNavUSD and UTC-daily DailyPeakUSD against
+// currentNAV and writes the updated HighWaterMarkState atomically via .tmp + os.Rename.
+func UpdateAndSaveHighWaterMark(path string, currentNAV float64, now time.Time) (HighWaterMarkState, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return HighWaterMarkState{}, errors.New("execution: high-water mark path is required")
+	}
+	if !isFinitePositive(currentNAV) {
+		return HighWaterMarkState{}, fmt.Errorf("execution: invalid current NAV %.4f for high-water mark", currentNAV)
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+
+	prev, err := LoadHighWaterMark(path)
+	if err != nil {
+		return HighWaterMarkState{}, err
+	}
+
+	peak := prev.PeakNavUSD
+	if math.IsNaN(peak) || math.IsInf(peak, 0) || peak < currentNAV {
+		peak = currentNAV
+	}
+	today := now.Format("2006-01-02")
+	dailyPeak := prev.DailyPeakUSD
+	if prev.DailyDateUTC != today || math.IsNaN(dailyPeak) || math.IsInf(dailyPeak, 0) || dailyPeak < currentNAV {
+		dailyPeak = currentNAV
+	}
+
+	next := HighWaterMarkState{
+		PeakNavUSD:   peak,
+		LastNavUSD:   currentNAV,
+		UpdatedAtUTC: now.Format(time.RFC3339),
+		DailyPeakUSD: dailyPeak,
+		DailyDateUTC: today,
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return HighWaterMarkState{}, fmt.Errorf("execution: create hwm dir: %w", err)
+	}
+	data, err := json.MarshalIndent(next, "", "  ")
+	if err != nil {
+		return HighWaterMarkState{}, fmt.Errorf("execution: marshal high-water mark: %w", err)
+	}
+	data = append(data, '\n')
+
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return HighWaterMarkState{}, fmt.Errorf("execution: write high-water mark tmp %s: %w", tmp, err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return HighWaterMarkState{}, fmt.Errorf("execution: write high-water mark tmp %s: %w", tmp, err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return HighWaterMarkState{}, fmt.Errorf("execution: sync high-water mark tmp %s: %w", tmp, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return HighWaterMarkState{}, fmt.Errorf("execution: close high-water mark tmp %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return HighWaterMarkState{}, fmt.Errorf("execution: rename high-water mark %s: %w", path, err)
+	}
+	return next, nil
 }
 
 func isFinitePositive(v float64) bool {

@@ -26,6 +26,8 @@ type mockVenueClient struct {
 	placeErr       error
 	placeCalls     int
 	cancelCalls    int
+	getOrderCalls  int
+	onGetOrder     func(calls int, rec OrderReceipt) OrderReceipt
 	placedRequests []LimitOrderRequest
 	orders         map[string]OrderReceipt
 }
@@ -119,9 +121,14 @@ func (m *mockVenueClient) CancelOrder(_ context.Context, orderID string) error {
 func (m *mockVenueClient) GetOrder(_ context.Context, orderID string) (OrderReceipt, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.getOrderCalls++
 	rec, ok := m.orders[orderID]
 	if !ok {
 		return OrderReceipt{}, errors.New("order not found")
+	}
+	if m.onGetOrder != nil {
+		rec = m.onGetOrder(m.getOrderCalls, rec)
+		m.orders[orderID] = rec
 	}
 	return rec, nil
 }
@@ -577,5 +584,208 @@ func TestDeterministicClientOrderID(t *testing.T) {
 	}
 	if id1 == id3 {
 		t.Fatalf("different quantities produced identical client order id: %s", id1)
+	}
+}
+
+func TestLiveRouterOrderTTLCancelsUnfilledOrder(t *testing.T) {
+	ctx := context.Background()
+	venue := newMockVenue()
+	t.Setenv(LiveArmEnvVar, LiveArmEnvValue)
+	journal := filepath.Join(t.TempDir(), "ttl_cancel_journal.jsonl")
+
+	cfg := DefaultRouterConfig()
+	cfg.DryRun = false
+	cfg.LiveArmToken = LiveArmConfirmToken
+	cfg.JournalPath = journal
+	cfg.OrderTTL = 45 * time.Millisecond
+	cfg.OrderPollInterval = 10 * time.Millisecond
+
+	r, err := NewLiveRouter(cfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := r.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false)
+	if err != nil {
+		t.Fatalf("expected clean TTL cancel return, got err=%v", err)
+	}
+	if !res.CancelledOnTTL {
+		t.Fatalf("expected CancelledOnTTL=true, got false: %+v", res)
+	}
+	if res.Receipt.Status != "CANCELLED" {
+		t.Fatalf("expected receipt status CANCELLED, got %q", res.Receipt.Status)
+	}
+	venue.mu.Lock()
+	cancelCalls := venue.cancelCalls
+	getCalls := venue.getOrderCalls
+	venue.mu.Unlock()
+	if cancelCalls != 1 {
+		t.Fatalf("expected 1 CancelOrder call, got %d", cancelCalls)
+	}
+	if getCalls < 2 {
+		t.Fatalf("expected multiple GetOrder polls before TTL cancel, got %d", getCalls)
+	}
+
+	// Verify idempotent retry reflects CancelledOnTTL from journal.
+	resDup, err := r.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false)
+	if err != nil || !resDup.SkippedDuplicate || !resDup.CancelledOnTTL {
+		t.Fatalf("expected duplicate retry to preserve CancelledOnTTL, got %+v err=%v", resDup, err)
+	}
+
+	// DryRun with OrderTTL must remain instant (no sleeping/polling).
+	dryCfg := DefaultRouterConfig()
+	dryCfg.DryRun = true
+	dryCfg.OrderTTL = 5 * time.Second
+	dryCfg.OrderPollInterval = 10 * time.Millisecond
+	rDry, err := NewLiveRouter(dryCfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	dryRes, err := rDry.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false)
+	if err != nil {
+		t.Fatalf("dry-run with OrderTTL failed: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("dry-run slept unexpectedly (%s) with OrderTTL configured", elapsed)
+	}
+	if dryRes.CancelledOnTTL || dryRes.Receipt.Status != "DRY_RUN" {
+		t.Fatalf("unexpected dry-run result: %+v", dryRes)
+	}
+}
+
+func TestLiveRouterOrderTTLFillsDuringPolling(t *testing.T) {
+	ctx := context.Background()
+	venue := newMockVenue()
+	t.Setenv(LiveArmEnvVar, LiveArmEnvValue)
+	venue.onGetOrder = func(calls int, rec OrderReceipt) OrderReceipt {
+		if calls >= 2 {
+			rec.Status = "FILLED"
+			rec.FilledQty = rec.Quantity
+		}
+		return rec
+	}
+
+	cfg := DefaultRouterConfig()
+	cfg.DryRun = false
+	cfg.LiveArmToken = LiveArmConfirmToken
+	cfg.OrderTTL = 500 * time.Millisecond
+	cfg.OrderPollInterval = 10 * time.Millisecond
+
+	r, err := NewLiveRouter(cfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false)
+	if err != nil {
+		t.Fatalf("expected filled order return, got err=%v", err)
+	}
+	if res.CancelledOnTTL {
+		t.Fatalf("expected CancelledOnTTL=false for filled order")
+	}
+	if res.Receipt.Status != "FILLED" || res.Receipt.FilledQty != 0.01 {
+		t.Fatalf("expected FILLED receipt with qty 0.01, got %+v", res.Receipt)
+	}
+	venue.mu.Lock()
+	cancelCalls := venue.cancelCalls
+	venue.mu.Unlock()
+	if cancelCalls != 0 {
+		t.Fatalf("expected 0 CancelOrder calls on filled order, got %d", cancelCalls)
+	}
+}
+
+func TestLiveRouterOrderTTLRespectsContextCancel(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	venue := newMockVenue()
+	t.Setenv(LiveArmEnvVar, LiveArmEnvValue)
+	journal := filepath.Join(t.TempDir(), "ttl_ctx_journal.jsonl")
+
+	cfg := DefaultRouterConfig()
+	cfg.DryRun = false
+	cfg.LiveArmToken = LiveArmConfirmToken
+	cfg.JournalPath = journal
+	cfg.OrderTTL = 2 * time.Second
+	cfg.OrderPollInterval = 10 * time.Millisecond
+
+	r, err := NewLiveRouter(cfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_, err = r.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("TTL wait ignored ctx cancellation, took %s", elapsed)
+	}
+	if _, statErr := os.Stat(journal); statErr != nil {
+		t.Fatalf("expected placed order to be journaled on ctx cancel: %v", statErr)
+	}
+}
+
+func TestHighWaterMarkLoadUpdateAndUTCRollover(t *testing.T) {
+	dir := t.TempDir()
+	hwmPath := filepath.Join(dir, "paper", "exec_hwm.json")
+
+	// Missing file returns zero state cleanly.
+	initial, err := LoadHighWaterMark(hwmPath)
+	if err != nil {
+		t.Fatalf("LoadHighWaterMark missing failed: %v", err)
+	}
+	if initial.PeakNavUSD != 0 || initial.DailyPeakUSD != 0 {
+		t.Fatalf("expected zero initial state, got %+v", initial)
+	}
+
+	d1Morning := time.Date(2026, 11, 20, 9, 30, 0, 0, time.UTC)
+	st1, err := UpdateAndSaveHighWaterMark(hwmPath, 1000.0, d1Morning)
+	if err != nil {
+		t.Fatalf("UpdateAndSaveHighWaterMark #1 failed: %v", err)
+	}
+	if st1.PeakNavUSD != 1000.0 || st1.LastNavUSD != 1000.0 || st1.DailyPeakUSD != 1000.0 || st1.DailyDateUTC != "2026-11-20" {
+		t.Fatalf("unexpected hwm #1: %+v", st1)
+	}
+
+	// Higher NAV same day raises both PeakNavUSD and DailyPeakUSD.
+	d1Afternoon := time.Date(2026, 11, 20, 16, 0, 0, 0, time.UTC)
+	st2, err := UpdateAndSaveHighWaterMark(hwmPath, 1250.0, d1Afternoon)
+	if err != nil {
+		t.Fatalf("UpdateAndSaveHighWaterMark #2 failed: %v", err)
+	}
+	if st2.PeakNavUSD != 1250.0 || st2.LastNavUSD != 1250.0 || st2.DailyPeakUSD != 1250.0 || st2.DailyDateUTC != "2026-11-20" {
+		t.Fatalf("unexpected hwm #2: %+v", st2)
+	}
+
+	// Drawdown same day preserves both PeakNavUSD and DailyPeakUSD.
+	d1Evening := time.Date(2026, 11, 20, 23, 45, 0, 0, time.UTC)
+	st3, err := UpdateAndSaveHighWaterMark(hwmPath, 1100.0, d1Evening)
+	if err != nil {
+		t.Fatalf("UpdateAndSaveHighWaterMark #3 failed: %v", err)
+	}
+	if st3.PeakNavUSD != 1250.0 || st3.LastNavUSD != 1100.0 || st3.DailyPeakUSD != 1250.0 || st3.DailyDateUTC != "2026-11-20" {
+		t.Fatalf("unexpected hwm #3: %+v", st3)
+	}
+
+	// New UTC day resets DailyPeakUSD to current NAV while keeping monotonic PeakNavUSD.
+	d2Morning := time.Date(2026, 11, 21, 0, 5, 0, 0, time.UTC)
+	st4, err := UpdateAndSaveHighWaterMark(hwmPath, 1050.0, d2Morning)
+	if err != nil {
+		t.Fatalf("UpdateAndSaveHighWaterMark #4 failed: %v", err)
+	}
+	if st4.PeakNavUSD != 1250.0 || st4.LastNavUSD != 1050.0 || st4.DailyPeakUSD != 1050.0 || st4.DailyDateUTC != "2026-11-21" {
+		t.Fatalf("unexpected hwm #4: %+v", st4)
+	}
+
+	reloaded, err := LoadHighWaterMark(hwmPath)
+	if err != nil {
+		t.Fatalf("LoadHighWaterMark reload failed: %v", err)
+	}
+	if reloaded != st4 {
+		t.Fatalf("reloaded hwm mismatch: got %+v, want %+v", reloaded, st4)
+	}
+	if _, err := os.Stat(hwmPath + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected no lingering .tmp file, stat err=%v", err)
 	}
 }

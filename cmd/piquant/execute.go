@@ -39,45 +39,74 @@ type PlannedOrder struct {
 
 // ExecuteReport is the JSON summary emitted by `piquant execute`.
 type ExecuteReport struct {
-	TimestampUTC      string                      `json:"timestamp_utc"`
-	DryRun            bool                        `json:"dry_run"`
-	LiveArmed         bool                        `json:"live_armed"`
-	Venue             string                      `json:"venue"`
-	Portfolio         string                      `json:"portfolio"`
-	BlendName         string                      `json:"blend_name"`
-	NavUSD            float64                     `json:"nav_usd"`
-	CredentialsOK     bool                        `json:"credentials_configured"`
-	SimulatedBalances bool                        `json:"simulated_balances,omitempty"`
-	Balances          map[string]float64          `json:"balances"`
-	Quotes            map[string]execution.Quote  `json:"quotes,omitempty"`
-	Reconcile         execution.ReconcileReport   `json:"reconcile"`
-	Plans             []PlannedOrder              `json:"plans"`
-	Results           []execution.ExecutionResult `json:"results"`
-	Errors            []string                    `json:"errors,omitempty"`
+	TimestampUTC      string                       `json:"timestamp_utc"`
+	DryRun            bool                         `json:"dry_run"`
+	LiveArmed         bool                         `json:"live_armed"`
+	Venue             string                       `json:"venue"`
+	Portfolio         string                       `json:"portfolio"`
+	BlendName         string                       `json:"blend_name"`
+	NavUSD            float64                      `json:"nav_usd"`
+	PeakNavUSD        float64                      `json:"peak_nav_usd"`
+	DrawdownPct       float64                      `json:"drawdown_pct"`
+	HWMPath           string                       `json:"hwm_path,omitempty"`
+	PingPlan          *execution.PingExecutionPlan `json:"ping_plan,omitempty"`
+	CredentialsOK     bool                         `json:"credentials_configured"`
+	SimulatedBalances bool                         `json:"simulated_balances,omitempty"`
+	Balances          map[string]float64           `json:"balances"`
+	Quotes            map[string]execution.Quote   `json:"quotes,omitempty"`
+	Reconcile         execution.ReconcileReport    `json:"reconcile"`
+	Plans             []PlannedOrder               `json:"plans"`
+	Results           []execution.ExecutionResult  `json:"results"`
+	Errors            []string                     `json:"errors,omitempty"`
 }
 
 type executeOptions struct {
-	dryRun          bool
-	venue           string
-	portfolio       string
-	dir             string
-	carryDir        string
-	dtb3Path        string
-	dataDir         string
-	envPath         string
-	journalPath     string
-	maxDailyUSD     float64
-	maxOrderUSD     float64
-	maxQuoteAge     time.Duration
-	navUSD          float64
-	expectedEdgeBps float64
-	confirmLive     string
-	alertEnv        string
-	coinbaseBaseURL string
-	httpClient      *http.Client
+	dryRun            bool
+	venue             string
+	portfolio         string
+	dir               string
+	carryDir          string
+	dtb3Path          string
+	dataDir           string
+	envPath           string
+	journalPath       string
+	maxDailyUSD       float64
+	maxOrderUSD       float64
+	maxQuoteAge       time.Duration
+	navUSD            float64
+	expectedEdgeBps   float64
+	confirmLive       string
+	alertEnv          string
+	coinbaseBaseURL   string
+	httpClient        *http.Client
+	pingProbe         bool
+	maxPingMs         float64
+	orderTTL          time.Duration
+	pingEndpoints     []execution.ExchangeEndpoint
+	hwmPath           string
+	maxDrawdownPct    float64
+	roundTripFeeBps   float64
+	spreadBps         float64
+	safetyMarginBps   float64
+	taxRatePct        float64
+	orderPollInterval time.Duration
 }
 
 func runExecute(ctx context.Context, args []string) error {
+	opts, err := parseExecuteOptions(args)
+	if err != nil {
+		return err
+	}
+	report, err := executeWithOptions(ctx, opts)
+	if len(report.Venue) > 0 {
+		if b, merr := json.MarshalIndent(report, "", " "); merr == nil {
+			fmt.Println(string(b))
+		}
+	}
+	return err
+}
+
+func parseExecuteOptions(args []string) (executeOptions, error) {
 	fs := flag.NewFlagSet("execute", flag.ContinueOnError)
 	home, _ := os.UserHomeDir()
 	defaultData := defaultDataDir()
@@ -91,24 +120,37 @@ func runExecute(ctx context.Context, args []string) error {
 	dataDir := fs.String("data", defaultData, "data directory (default $PIQUANT_DATA_DIR or ~/piquant-data)")
 	envPath := fs.String("env", execution.DefaultCoinbaseEnvPath(), "Coinbase credentials file (COINBASE_API_KEY, COINBASE_API_SECRET)")
 	journalPath := fs.String("journal", "", "idempotent order journal JSONL path (default <data>/paper/order_journal.jsonl)")
+	hwmPath := fs.String("hwm-path", "", "persistent high-water mark JSON path (default <data>/paper/exec_hwm.json)")
 	maxDailyUSD := fs.Float64("max-daily-usd", 500, "maximum daily order notional USD")
 	maxOrderUSD := fs.Float64("max-order-usd", 250, "maximum single order notional USD")
 	maxQuoteAge := fs.Duration("max-quote-age", 2*time.Minute, "maximum allowed age of venue top-of-book quote")
+	maxDrawdownPct := fs.Float64("max-drawdown-pct", 15.0, "maximum drawdown % from persisted peak NAV before tripping kill switch")
 	navUSD := fs.Float64("nav", 1000, "target portfolio NAV USD (0 = derive from live venue balances)")
 	expectedEdgeBps := fs.Float64("expected-edge-bps", 25, "expected strategy alpha edge in bps for fee hurdle check")
+	roundTripFeeBps := fs.Float64("round-trip-fee-bps", 10.0, "round-trip venue fee hurdle in bps (e.g. Coinbase Advanced Trade intro 80-120 bps RT vs VIP <10-20 bps RT)")
+	spreadBps := fs.Float64("spread-bps", 2.0, "expected bid-ask spread hurdle in bps")
+	safetyMarginBps := fs.Float64("safety-margin-bps", 5.0, "minimum net alpha safety margin in bps")
+	taxRatePct := fs.Float64("tax-rate-pct", 33.3, "estimated short-term tax rate percentage mapped to TaxDragFraction")
+	pingProbe := fs.Bool("ping-probe", true, "probe venue ping latency before trading and abort if median RTT exceeds --max-ping-ms")
+	maxPingMs := fs.Float64("max-ping-ms", 1500.0, "maximum allowed venue HTTP median ping latency in ms")
+	orderTTL := fs.Duration("order-ttl", 0, "live post-only order TTL before auto-cancelling unfilled orders (0 = GTC; e.g. 15s)")
 	confirmLive := fs.String("confirm-live", "", "live arming token (must equal ARM_LIVE_EXECUTION with PIQUANT_LIVE_ARM=YES)")
 	alertEnv := addAlertFlag(fs)
 
 	if err := fs.Parse(args); err != nil {
-		return err
+		return executeOptions{}, err
 	}
 
 	resolvedJournal := strings.TrimSpace(*journalPath)
 	if resolvedJournal == "" {
 		resolvedJournal = filepath.Join(*dataDir, "paper", "order_journal.jsonl")
 	}
+	resolvedHWM := strings.TrimSpace(*hwmPath)
+	if resolvedHWM == "" {
+		resolvedHWM = filepath.Join(*dataDir, "paper", "exec_hwm.json")
+	}
 
-	opts := executeOptions{
+	return executeOptions{
 		dryRun:          *dryRun,
 		venue:           *venue,
 		portfolio:       *portfolio,
@@ -118,21 +160,23 @@ func runExecute(ctx context.Context, args []string) error {
 		dataDir:         *dataDir,
 		envPath:         *envPath,
 		journalPath:     resolvedJournal,
+		hwmPath:         resolvedHWM,
 		maxDailyUSD:     *maxDailyUSD,
 		maxOrderUSD:     *maxOrderUSD,
 		maxQuoteAge:     *maxQuoteAge,
+		maxDrawdownPct:  *maxDrawdownPct,
 		navUSD:          *navUSD,
 		expectedEdgeBps: *expectedEdgeBps,
+		roundTripFeeBps: *roundTripFeeBps,
+		spreadBps:       *spreadBps,
+		safetyMarginBps: *safetyMarginBps,
+		taxRatePct:      *taxRatePct,
+		pingProbe:       *pingProbe,
+		maxPingMs:       *maxPingMs,
+		orderTTL:        *orderTTL,
 		confirmLive:     *confirmLive,
 		alertEnv:        *alertEnv,
-	}
-	report, err := executeWithOptions(ctx, opts)
-	if len(report.Venue) > 0 {
-		if b, merr := json.MarshalIndent(report, "", " "); merr == nil {
-			fmt.Println(string(b))
-		}
-	}
-	return err
+	}, nil
 }
 
 func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport, error) {
@@ -157,18 +201,84 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 		return ExecuteReport{}, fmt.Errorf("coinbase live mode requires configured API credentials (set COINBASE_API_KEY/COINBASE_API_SECRET or %s)", opts.envPath)
 	}
 
+	hwmPath := strings.TrimSpace(opts.hwmPath)
+	if hwmPath == "" && strings.TrimSpace(opts.dataDir) != "" {
+		hwmPath = filepath.Join(opts.dataDir, "paper", "exec_hwm.json")
+	}
+
+	var pingPlan *execution.PingExecutionPlan
+	if opts.pingProbe {
+		endpoints := opts.pingEndpoints
+		if len(endpoints) == 0 {
+			endpoints = []execution.ExchangeEndpoint{
+				{Venue: "coinbase", URL: "https://api.exchange.coinbase.com/time"},
+			}
+		}
+		venues := execution.ProbeEndpoints(ctx, endpoints, 2, 3*time.Second)
+		plan := execution.PlanForLatency(venues, time.Now().UTC())
+		pingPlan = &plan
+		maxPingMs := opts.maxPingMs
+		if maxPingMs <= 0 {
+			maxPingMs = 1500.0
+		}
+		allFailed := true
+		for _, v := range venues {
+			if v.Successes > 0 {
+				allFailed = false
+				break
+			}
+		}
+		if allFailed || plan.BestHTTPMedianMs <= 0 || plan.BestHTTPMedianMs > maxPingMs {
+			var err error
+			if allFailed {
+				err = fmt.Errorf("%w: all %d ping probe endpoint(s) failed", execution.ErrHighLatency, len(endpoints))
+			} else {
+				err = fmt.Errorf("%w: %s median latency %.2fms > max %.2fms", execution.ErrHighLatency, plan.BestVenue, plan.BestHTTPMedianMs, maxPingMs)
+			}
+			return ExecuteReport{
+				TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+				DryRun:       opts.dryRun,
+				LiveArmed:    liveArmed,
+				Venue:        venueName,
+				Portfolio:    opts.portfolio,
+				HWMPath:      hwmPath,
+				PingPlan:     pingPlan,
+				Errors:       []string{err.Error()},
+			}, err
+		}
+	}
+
 	st, err := trend.Load(filepath.Join(opts.dir, "trend_state.json"))
 	if err != nil {
-		return ExecuteReport{}, err
+		return ExecuteReport{
+			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+			DryRun:       opts.dryRun,
+			LiveArmed:    liveArmed,
+			Venue:        venueName,
+			Portfolio:    opts.portfolio,
+			HWMPath:      hwmPath,
+			PingPlan:     pingPlan,
+			Errors:       []string{err.Error()},
+		}, err
 	}
 	if st == nil {
 		st = trend.NewState("")
 	}
 	cState, _ := carry.Load(filepath.Join(opts.carryDir, "carry_state.json"))
 	rates, _ := trend.LoadDTB3Rates(opts.dtb3Path)
-	blend, ok := trend.SelectBlend(st, cState, rates, opts.portfolio, nil)
+	blend, ok := trend.SelectBlend(st, cState, rates, opts.portfolio, pingPlan)
 	if !ok {
-		return ExecuteReport{}, fmt.Errorf("portfolio %q unavailable in trend state", opts.portfolio)
+		err := fmt.Errorf("portfolio %q unavailable in trend state", opts.portfolio)
+		return ExecuteReport{
+			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+			DryRun:       opts.dryRun,
+			LiveArmed:    liveArmed,
+			Venue:        venueName,
+			Portfolio:    opts.portfolio,
+			HWMPath:      hwmPath,
+			PingPlan:     pingPlan,
+			Errors:       []string{err.Error()},
+		}, err
 	}
 
 	httpClient := opts.httpClient
@@ -206,16 +316,49 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 
 	balances, err := venueClient.GetBalances(ctx)
 	if err != nil {
-		return ExecuteReport{}, fmt.Errorf("fetch %s balances: %w", venueClient.Name(), err)
+		err = fmt.Errorf("fetch %s balances: %w", venueClient.Name(), err)
+		return ExecuteReport{
+			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+			DryRun:       opts.dryRun,
+			LiveArmed:    liveArmed,
+			Venue:        venueClient.Name(),
+			Portfolio:    opts.portfolio,
+			BlendName:    blend.Name,
+			HWMPath:      hwmPath,
+			PingPlan:     pingPlan,
+			Errors:       []string{err.Error()},
+		}, err
 	}
 
 	btcQuote, err := venueClient.GetQuote(ctx, "BTC-USD")
 	if err != nil {
-		return ExecuteReport{}, fmt.Errorf("fetch BTC-USD quote: %w", err)
+		err = fmt.Errorf("fetch BTC-USD quote: %w", err)
+		return ExecuteReport{
+			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+			DryRun:       opts.dryRun,
+			LiveArmed:    liveArmed,
+			Venue:        venueClient.Name(),
+			Portfolio:    opts.portfolio,
+			BlendName:    blend.Name,
+			HWMPath:      hwmPath,
+			PingPlan:     pingPlan,
+			Errors:       []string{err.Error()},
+		}, err
 	}
 	ethQuote, err := venueClient.GetQuote(ctx, "ETH-USD")
 	if err != nil {
-		return ExecuteReport{}, fmt.Errorf("fetch ETH-USD quote: %w", err)
+		err = fmt.Errorf("fetch ETH-USD quote: %w", err)
+		return ExecuteReport{
+			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+			DryRun:       opts.dryRun,
+			LiveArmed:    liveArmed,
+			Venue:        venueClient.Name(),
+			Portfolio:    opts.portfolio,
+			BlendName:    blend.Name,
+			HWMPath:      hwmPath,
+			PingPlan:     pingPlan,
+			Errors:       []string{err.Error()},
+		}, err
 	}
 
 	nav := opts.navUSD
@@ -226,10 +369,51 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 		}
 	}
 	if nav <= 0 {
-		return ExecuteReport{}, fmt.Errorf("cannot determine positive portfolio NAV (got %.2f)", nav)
+		err = fmt.Errorf("cannot determine positive portfolio NAV (got %.2f)", nav)
+		return ExecuteReport{
+			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+			DryRun:       opts.dryRun,
+			LiveArmed:    liveArmed,
+			Venue:        venueClient.Name(),
+			Portfolio:    opts.portfolio,
+			BlendName:    blend.Name,
+			HWMPath:      hwmPath,
+			PingPlan:     pingPlan,
+			Errors:       []string{err.Error()},
+		}, err
 	}
 
+	now := time.Now().UTC()
+	hwm := execution.HighWaterMarkState{PeakNavUSD: nav, LastNavUSD: nav}
+	if hwmPath != "" {
+		hwm, err = execution.UpdateAndSaveHighWaterMark(hwmPath, nav, now)
+		if err != nil {
+			err = fmt.Errorf("update high-water mark %s: %w", hwmPath, err)
+			return ExecuteReport{
+				TimestampUTC: now.Format(time.RFC3339),
+				DryRun:       opts.dryRun,
+				LiveArmed:    liveArmed,
+				Venue:        venueClient.Name(),
+				Portfolio:    opts.portfolio,
+				BlendName:    blend.Name,
+				NavUSD:       roundCents(nav),
+				HWMPath:      hwmPath,
+				PingPlan:     pingPlan,
+				Errors:       []string{err.Error()},
+			}, err
+		}
+	}
+	drawdownPct := 0.0
+	if hwm.PeakNavUSD > 0 && nav < hwm.PeakNavUSD {
+		drawdownPct = (1.0 - nav/hwm.PeakNavUSD) * 100.0
+	}
+
+	maxDrawdownPct := opts.maxDrawdownPct
+	if maxDrawdownPct <= 0 {
+		maxDrawdownPct = 15.0
+	}
 	guardCfg := guardrails.DefaultGuardrailConfig()
+	guardCfg.MaxDailyDrawdownPct = maxDrawdownPct
 	if opts.maxOrderUSD > 0 {
 		guardCfg.Exposure.MaxOrderQtyUSD = opts.maxOrderUSD
 	}
@@ -239,7 +423,7 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 	guard := guardrails.NewPreTradeGuard(guardCfg)
 	guard.UpdatePortfolioState(
 		nav,
-		nav,
+		hwm.PeakNavUSD,
 		map[string]float64{
 			"BTC-USD": balances["BTC"],
 			"ETH-USD": balances["ETH"],
@@ -248,22 +432,42 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 			"BTC-USD": btcQuote.Mid,
 			"ETH-USD": ethQuote.Mid,
 		},
-		time.Now().UTC(),
+		now,
 	)
+	if tripped, reason, _, _, _, _ := guard.Status(); tripped {
+		alerter.Send("drawdown", "Execute drawdown kill switch tripped", reason)
+	}
 
 	routerCfg := execution.DefaultRouterConfig()
 	routerCfg.DryRun = opts.dryRun
 	routerCfg.LiveArmToken = opts.confirmLive
 	routerCfg.KillLockStatePath = filepath.Join(opts.dataDir, "paper", "dryrun_state.json")
-	routerCfg.MaxQuoteAge = opts.maxQuoteAge
+	if opts.maxQuoteAge > 0 {
+		routerCfg.MaxQuoteAge = opts.maxQuoteAge
+	}
+	if pingPlan != nil && pingPlan.StaleBookGuardMs > 0 {
+		guardAge := time.Duration(pingPlan.StaleBookGuardMs) * time.Millisecond
+		if guardAge < 30*time.Second {
+			guardAge = 30 * time.Second
+		}
+		if routerCfg.MaxQuoteAge <= 0 || guardAge < routerCfg.MaxQuoteAge {
+			routerCfg.MaxQuoteAge = guardAge
+		}
+	}
 	routerCfg.MaxDailyNotionalUSD = opts.maxDailyUSD
+	routerCfg.OrderTTL = opts.orderTTL
+	routerCfg.OrderPollInterval = opts.orderPollInterval
 	routerCfg.JournalPath = opts.journalPath
+	taxDrag := opts.taxRatePct / 100.0
+	if taxDrag < 0 {
+		taxDrag = 0
+	}
 	routerCfg.FeeHurdle = guardrails.FeeHurdleSpec{
-		RoundTripFeeBps: 10.0,
-		SpreadBps:       2.0,
+		RoundTripFeeBps: opts.roundTripFeeBps,
+		SpreadBps:       opts.spreadBps,
 		SlippageBps:     0.0,
-		SafetyMarginBps: 5.0,
-		TaxDragFraction: 0.333,
+		SafetyMarginBps: opts.safetyMarginBps,
+		TaxDragFraction: taxDrag,
 	}
 	routerCfg.OnAlert = func(key, subject, body string) {
 		alerter.Send(key, subject, body)
@@ -271,17 +475,34 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 
 	router, err := execution.NewLiveRouter(routerCfg, guard, venueClient)
 	if err != nil {
-		return ExecuteReport{}, err
+		return ExecuteReport{
+			TimestampUTC: now.Format(time.RFC3339),
+			DryRun:       opts.dryRun,
+			LiveArmed:    liveArmed,
+			Venue:        venueClient.Name(),
+			Portfolio:    opts.portfolio,
+			BlendName:    blend.Name,
+			NavUSD:       roundCents(nav),
+			PeakNavUSD:   roundCents(hwm.PeakNavUSD),
+			DrawdownPct:  roundCents(drawdownPct),
+			HWMPath:      hwmPath,
+			PingPlan:     pingPlan,
+			Errors:       []string{err.Error()},
+		}, err
 	}
 
 	report := ExecuteReport{
-		TimestampUTC:      time.Now().UTC().Format(time.RFC3339),
+		TimestampUTC:      now.Format(time.RFC3339),
 		DryRun:            opts.dryRun,
 		LiveArmed:         liveArmed,
 		Venue:             venueClient.Name(),
 		Portfolio:         opts.portfolio,
 		BlendName:         blend.Name,
 		NavUSD:            roundCents(nav),
+		PeakNavUSD:        roundCents(hwm.PeakNavUSD),
+		DrawdownPct:       roundCents(drawdownPct),
+		HWMPath:           hwmPath,
+		PingPlan:          pingPlan,
 		CredentialsOK:     creds.Ready(),
 		SimulatedBalances: simulatedBalances,
 		Balances:          balances,
@@ -324,6 +545,7 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 	}
 
 	availUSD := balances["USD"]
+	var submitErrs []error
 	for _, leg := range legs {
 		targetUSD := nav * (leg.targetPct / 100.0)
 		currentQty := balances[leg.asset]
@@ -385,16 +607,21 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 		res, err := router.SubmitTargetOrder(ctx, leg.symbol, side, orderQty, opts.expectedEdgeBps, isReduceOnly)
 		if err != nil {
 			report.Errors = append(report.Errors, fmt.Sprintf("%s %s: %v", leg.symbol, side, err))
+			submitErrs = append(submitErrs, fmt.Errorf("%s %s: %w", leg.symbol, side, err))
 			continue
 		}
 		if side == "BUY" && !res.SkippedDuplicate {
-			availUSD = math.Max(0, availUSD-res.NotionalUSD)
+			spentUSD := res.NotionalUSD
+			if res.CancelledOnTTL {
+				spentUSD = res.Receipt.FilledQty * res.Receipt.Price
+			}
+			availUSD = math.Max(0, availUSD-spentUSD)
 		}
 		report.Results = append(report.Results, res)
 	}
 
-	if len(report.Errors) > 0 {
-		return report, errors.New(strings.Join(report.Errors, "; "))
+	if len(submitErrs) > 0 {
+		return report, errors.Join(submitErrs...)
 	}
 	return report, nil
 }
