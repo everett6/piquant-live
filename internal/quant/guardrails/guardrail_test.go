@@ -402,4 +402,36 @@ func TestHole52_PreTradeGuardConstructorNaN(t *testing.T) {
 	}
 }
 
+func TestCheckFeeHurdle(t *testing.T) {
+	// Rejects an entry whose expected edge (10 bps) fails 12 bps futures fee + 2 bps spread + 2 bps slip + 4 bps safety (20 bps)
+	err := CheckFeeHurdle(FeeHurdleSpec{
+		ExpectedEdgeBps: 10.0,
+		RoundTripFeeBps: 12.0,
+		SpreadBps:       2.0,
+		SlippageBps:     2.0,
+		SafetyMarginBps: 4.0,
+		TaxDragFraction: 0.333,
+	}, false)
+	if !errors.Is(err, ErrInsufficientNetEdge) {
+		t.Fatalf("expected ErrInsufficientNetEdge, got %v", err)
+	}
+
+	// Reduce-only risk exits are always permitted even if expected edge < fees
+	if err := CheckFeeHurdle(FeeHurdleSpec{ExpectedEdgeBps: 0.0, RoundTripFeeBps: 14.0}, true); err != nil {
+		t.Fatalf("reduce-only exit must not be blocked by fee hurdle: %v", err)
+	}
+
+	// Passes when expected edge cleanly clears costs + safety
+	if err := CheckFeeHurdle(FeeHurdleSpec{
+		ExpectedEdgeBps: 24.0,
+		RoundTripFeeBps: 12.0,
+		SpreadBps:       2.0,
+		SlippageBps:     2.0,
+		SafetyMarginBps: 4.0,
+		TaxDragFraction: 0.333,
+	}, false); err != nil {
+		t.Fatalf("expected edge clearing fee hurdle to pass, got %v", err)
+	}
+}
+
 

@@ -20,6 +20,7 @@ var (
 	ErrTradingLocked       = errors.New("guardrails: trading is locked by risk administrator")
 	ErrInvalidOrderParams  = errors.New("guardrails: invalid order parameters (NaN, Inf, or <= 0)")
 	ErrInvalidReduceOnly   = errors.New("guardrails: reduce-only order direction or size conflicts with open position")
+	ErrInsufficientNetEdge = errors.New("guardrails: expected alpha edge does not clear fees, spread, slippage, and safety hurdle")
 )
 
 // OrderRequest represents a pre-trade order candidate requiring compliance checks.
@@ -402,4 +403,41 @@ func (g *PreTradeGuard) Status() (isTripped bool, reason string, isLocked bool, 
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.killSwitchTripped, g.killSwitchReason, g.tradingLocked, g.peakEquity, g.currentEquity, g.tokens
+}
+
+// FeeHurdleSpec describes the transaction cost and safety hurdle an MFT/ML entry must clear.
+type FeeHurdleSpec struct {
+	ExpectedEdgeBps float64
+	RoundTripFeeBps float64
+	SpreadBps       float64
+	SlippageBps     float64
+	SafetyMarginBps float64
+	TaxDragFraction float64 // e.g. 0.333 for US/CA taxable, 0.0 for Roth/IRA
+}
+
+// CheckFeeHurdle rejects new risk-increasing entries whose expected gross edge does not clear
+// round-trip venue fees, bid-ask spread, slippage, and safety margin. Reduce-only exits always pass.
+func CheckFeeHurdle(spec FeeHurdleSpec, isReduceOnly bool) error {
+	if isReduceOnly {
+		return nil
+	}
+	for _, v := range []float64{spec.ExpectedEdgeBps, spec.RoundTripFeeBps, spec.SpreadBps, spec.SlippageBps, spec.SafetyMarginBps, spec.TaxDragFraction} {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return fmt.Errorf("%w: non-finite fee hurdle input", ErrInsufficientNetEdge)
+		}
+	}
+	totalCost := spec.RoundTripFeeBps + spec.SpreadBps + spec.SlippageBps
+	required := totalCost + spec.SafetyMarginBps
+	if spec.ExpectedEdgeBps < required {
+		return fmt.Errorf("%w: expected %.2f bps < required %.2f bps (cost %.2f + safety %.2f)",
+			ErrInsufficientNetEdge, spec.ExpectedEdgeBps, required, totalCost, spec.SafetyMarginBps)
+	}
+	netPreTax := spec.ExpectedEdgeBps - totalCost
+	if spec.TaxDragFraction > 0 && spec.TaxDragFraction < 1 {
+		netAfterTax := netPreTax * (1.0 - spec.TaxDragFraction)
+		if netAfterTax <= 0 {
+			return fmt.Errorf("%w: after-tax net edge %.2f bps <= 0", ErrInsufficientNetEdge, netAfterTax)
+		}
+	}
+	return nil
 }

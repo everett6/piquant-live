@@ -50,7 +50,34 @@ func openStore(dir string) (*secrets.Store, error) {
 		fmt.Fprintln(os.Stderr, "warning:", warning)
 	}
 	if !store.Has(secrets.DashboardToken) {
-		return nil, fmt.Errorf("no dashboard token in %s; run `piquant setup` first", store.Path())
+		envTok := strings.TrimSpace(os.Getenv("PIQUANT_DASHBOARD_TOKEN"))
+		auto := strings.TrimSpace(os.Getenv("PIQUANT_AUTO_SETUP")) == "1"
+		if envTok == "" && !auto {
+			return nil, fmt.Errorf("no dashboard token in %s; run `piquant setup` first", store.Path())
+		}
+		if envTok == "" {
+			tok, terr := secrets.NewToken()
+			if terr != nil {
+				return nil, terr
+			}
+			envTok = tok
+		}
+		if err := store.Set(secrets.DashboardToken, envTok); err != nil {
+			return nil, err
+		}
+		if !store.Has(secrets.PeerToken) {
+			ptok := strings.TrimSpace(os.Getenv("PIQUANT_PEER_TOKEN"))
+			if ptok == "" {
+				ptok, err = secrets.NewToken()
+				if err != nil {
+					return nil, err
+				}
+			}
+			if err := store.Set(secrets.PeerToken, ptok); err != nil {
+				return nil, err
+			}
+		}
+		fmt.Fprintf(os.Stderr, "[SETUP] initialized headless cloud dashboard token in %s (DashboardToken=%.6s...)\n", store.Path(), envTok)
 	}
 	return store, nil
 }

@@ -1,0 +1,202 @@
+{
+ "prereg": "PREREG50",
+ "n_trials_after": 814,
+ "window": [
+  "2020-01-01",
+  "2026-11-01"
+ ],
+ "variants": {
+  "daily_A": {
+   "base": {
+    "geo_monthly_pct": 2.1228291129634282,
+    "max_dd_pct": -19.798187323876515,
+    "sharpe": 1.3631434253782897,
+    "A_geo_monthly_pct": 0.5599374898352706,
+    "by_regime": {
+     "bear": -1.1951044847077799,
+     "flat": -0.3850756120900812,
+     "bull": 5.952611339720963
+    },
+    "annual_pct": 28.66903710361395,
+    "worst_day_pct": -7.745606866166963,
+    "worst_month_pct": -6.46559517763714
+   },
+   "stress": {
+    "geo_monthly_pct": 0.7062427418690537,
+    "max_dd_pct": -23.096866080982046,
+    "sharpe": 0.5808680744857732,
+    "A_geo_monthly_pct": -0.23810064984961574,
+    "by_regime": {
+     "bear": -1.4667815568018998,
+     "flat": -0.8143423442826592,
+     "bull": 3.1073635119519283
+    },
+    "annual_pct": 8.811981162766669,
+    "worst_day_pct": -7.855519397750026,
+    "worst_month_pct": -6.612164155069422
+   }
+  },
+  "L1_weekly": {
+   "base": {
+    "geo_monthly_pct": 1.633698585529593,
+    "max_dd_pct": -21.51488332086625,
+    "sharpe": 1.071709071233673,
+    "A_geo_monthly_pct": 0.1971066640701749,
+    "by_regime": {
+     "bear": -1.6644544592388795,
+     "flat": -0.37912255332101946,
+     "bull": 5.174660153791482
+    },
+    "annual_pct": 21.46545044199586,
+    "worst_day_pct": -9.692113077146761,
+    "worst_month_pct": -7.909879835500333
+   },
+   "stress": {
+    "geo_monthly_pct": 0.5345618656435459,
+    "max_dd_pct": -28.569732146077687,
+    "sharpe": 0.4881014155046815,
+    "A_geo_monthly_pct": -0.3176522195396685,
+    "by_regime": {
+     "bear": -1.4356889691949672,
+     "flat": -0.6940594136871943,
+     "bull": 2.6156757262757977
+    },
+    "annual_pct": 6.606742970182378,
+    "worst_day_pct": -9.83430730527257,
+    "worst_month_pct": -8.1821290334943
+   }
+  },
+  "L2_monthly": {
+   "base": {
+    "geo_monthly_pct": 1.1081224801465202,
+    "max_dd_pct": -23.385798790394986,
+    "sharpe": 0.8082611650661827,
+    "A_geo_monthly_pct": 0.3422444859425863,
+    "by_regime": {
+     "bear": -1.6299722568158617,
+     "flat": 0.25480694464753895,
+     "bull": 3.629084667727521
+    },
+    "annual_pct": 14.138602388511789,
+    "worst_day_pct": -9.09048365180267,
+    "worst_month_pct": -7.8597698687365325
+   },
+   "stress": {
+    "geo_monthly_pct": 0.17270804435814976,
+    "max_dd_pct": -31.596272940615254,
+    "sharpe": 0.21467027813906686,
+    "A_geo_monthly_pct": -0.16433778745398106,
+    "by_regime": {
+     "bear": -1.8100571237831324,
+     "flat": -0.38464553550503816,
+     "bull": 1.9000013259834345
+    },
+    "annual_pct": 2.0922968332350633,
+    "worst_day_pct": -9.225781109240648,
+    "worst_month_pct": -6.232049442488918
+   }
+  },
+  "shift_weekly_wed": {
+   "base": {
+    "geo_monthly_pct": 1.9179500413700978,
+    "max_dd_pct": -20.44677763877073,
+    "sharpe": 1.2382866565343578,
+    "A_geo_monthly_pct": 0.18004541553964767,
+    "by_regime": {
+     "bear": -1.3038826531360226,
+     "flat": 0.07866984248284616,
+     "bull": 5.333463795175593
+    },
+    "annual_pct": 25.605355528567465,
+    "worst_day_pct": -8.13509636544211,
+    "worst_month_pct": -8.01048323054684
+   },
+   "stress": {
+    "geo_monthly_pct": 0.5738696448918412,
+    "max_dd_pct": -24.733749811287964,
+    "sharpe": 0.5008386084630688,
+    "A_geo_monthly_pct": -0.39672539882153574,
+    "by_regime": {
+     "bear": -1.4393915093128,
+     "flat": -0.5800043336144004,
+     "bull": 2.659171281032983
+    },
+    "annual_pct": 7.108003113307393,
+    "worst_day_pct": -7.855619445703778,
+    "worst_month_pct": -6.058138302313654
+   }
+  },
+  "shift_monthly_15th": {
+   "base": {
+    "geo_monthly_pct": 1.1570606082643713,
+    "max_dd_pct": -27.794484404426022,
+    "sharpe": 0.7942706909035293,
+    "A_geo_monthly_pct": -0.21255214878144404,
+    "by_regime": {
+     "bear": -2.3291229128989035,
+     "flat": 0.5606973853496948,
+     "bull": 4.127461349536919
+    },
+    "annual_pct": 14.803311397175968,
+    "worst_day_pct": -14.36822984977611,
+    "worst_month_pct": -16.022509374503368
+   },
+   "stress": {
+    "geo_monthly_pct": 0.1180306403194623,
+    "max_dd_pct": -33.47829843297569,
+    "sharpe": 0.1692261930638626,
+    "A_geo_monthly_pct": -0.7306266181221465,
+    "by_regime": {
+     "bear": -2.391542951655181,
+     "flat": -0.10351270809831382,
+     "bull": 2.0792262982817626
+    },
+    "annual_pct": 1.4255985681094208,
+    "worst_day_pct": -12.827242372974995,
+    "worst_month_pct": -15.069347780559394
+   }
+  }
+ },
+ "info": {
+  "daily_A": {
+   "trend_turnover_per_year": 30.233006036923573,
+   "trend_changes_per_year": 416.47435897435895
+  },
+  "L1_weekly": {
+   "trend_turnover_per_year": 20.02082005327906,
+   "trend_changes_per_year": 65.5128205128205
+  },
+  "L2_monthly": {
+   "trend_turnover_per_year": 11.102472255080283,
+   "trend_changes_per_year": 18.717948717948715
+  },
+  "shift_weekly_wed": {
+   "trend_turnover_per_year": 19.21889397036085,
+   "trend_changes_per_year": 66.82892628205127
+  },
+  "shift_monthly_15th": {
+   "trend_turnover_per_year": 9.107489959236574,
+   "trend_changes_per_year": 18.571714743589745
+  }
+ },
+ "checks": {
+  "L1_weekly": {
+   "1_return_within_0p10": false,
+   "2_dd_within_1pt": false,
+   "3_stress_ge_A": false,
+   "4_recent_positive": true,
+   "5_turnover_le_half": false
+  },
+  "L2_monthly": {
+   "1_return_within_0p10": false,
+   "2_dd_within_1pt": false,
+   "3_stress_ge_A": false,
+   "4_recent_positive": true,
+   "5_turnover_le_half": true
+  }
+ },
+ "pass": {
+  "L1_weekly": false,
+  "L2_monthly": false
+ }
+}

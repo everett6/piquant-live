@@ -1,0 +1,389 @@
+{
+ "prereg": "PREREG42",
+ "n_trials": 781,
+ "window": [
+  "2020-01-01",
+  "2026-11-01"
+ ],
+ "regime_months": {
+  "bull": 38,
+  "bear": 26,
+  "flat": 18
+ },
+ "variants": {
+  "S36_qd_carry_blend": {
+   "base": {
+    "geo_monthly_pct": 2.638332326361299,
+    "max_dd_pct": -27.7745864722304,
+    "sharpe": 1.2852945405454141,
+    "A_geo_monthly_pct": 1.0397745007556602,
+    "by_regime": {
+     "bear": -2.4498291349235553,
+     "flat": 0.010495168846052982,
+     "bull": 8.022348422244034
+    },
+    "calmar": 1.1398905235903294,
+    "months": 82,
+    "losing_months": 0.3902439024390244,
+    "worst_month_pct": -12.410113807625379,
+    "worst_day_pct": -11.344078346153013,
+    "worst_day": "2021-01-21",
+    "y2022_geo_monthly_pct": -1.3496003519029018,
+    "deflated_sharpe": 0.5723408865357807,
+    "deflated_sharpe_781": 0.5703,
+    "mean_taper_mult": 0.8446,
+    "mean_dd_pct": 12.7822,
+    "ulcer_index_pct": 14.6799,
+    "dd_p95_pct": 23.8895,
+    "cdar_95_pct": 26.2137,
+    "pct_days_underwater": 95.07,
+    "max_underwater_days": 792,
+    "mean_recovery_days": 39.55
+   },
+   "stress": {
+    "geo_monthly_pct": 0.757253076019045,
+    "max_dd_pct": -33.32050437941532,
+    "sharpe": 0.511844646903493,
+    "A_geo_monthly_pct": -0.22477796381709975,
+    "by_regime": {
+     "bear": -2.6230757135136615,
+     "flat": -0.7921149655529237,
+     "bull": 4.137147437485698
+    },
+    "calmar": 0.27271606722262925,
+    "months": 82,
+    "losing_months": 0.45121951219512196,
+    "worst_month_pct": -12.206003417328326,
+    "worst_day_pct": -11.5049026026023,
+    "worst_day": "2021-01-21",
+    "y2022_geo_monthly_pct": -1.392302020417893,
+    "deflated_sharpe": 0.03362927124229509,
+    "deflated_sharpe_781": 0.0332,
+    "mean_taper_mult": 0.5555,
+    "mean_dd_pct": 23.8624,
+    "ulcer_index_pct": 25.3733,
+    "dd_p95_pct": 32.1531,
+    "cdar_95_pct": 32.3533,
+    "pct_days_underwater": 97.88,
+    "max_underwater_days": 1881,
+    "mean_recovery_days": 111.05
+   }
+  },
+  "Q42_volcap_s36_blend": {
+   "base": {
+    "geo_monthly_pct": 1.942144577100911,
+    "max_dd_pct": -21.460963847433934,
+    "sharpe": 1.359046595712185,
+    "A_geo_monthly_pct": 0.7125552847157864,
+    "by_regime": {
+     "bear": -1.539104283995273,
+     "flat": -0.15330952620896154,
+     "bull": 5.640851036447437
+    },
+    "calmar": 1.0859593767964701,
+    "months": 82,
+    "losing_months": 0.36585365853658536,
+    "worst_month_pct": -8.080098254907934,
+    "worst_day_pct": -6.232932781542315,
+    "worst_day": "2020-09-03",
+    "y2022_geo_monthly_pct": -1.0154204217785365,
+    "deflated_sharpe": 0.6471906256173019,
+    "deflated_sharpe_781": 0.6452,
+    "mean_taper_mult": 0.8071,
+    "mean_dd_pct": 9.5108,
+    "ulcer_index_pct": 11.0644,
+    "dd_p95_pct": 19.0127,
+    "cdar_95_pct": 20.3521,
+    "pct_days_underwater": 94.63,
+    "max_underwater_days": 756,
+    "mean_recovery_days": 36.91
+   },
+   "stress": {
+    "geo_monthly_pct": 0.599470804569914,
+    "max_dd_pct": -25.548124801764118,
+    "sharpe": 0.563600163624138,
+    "A_geo_monthly_pct": -0.24123031935750217,
+    "by_regime": {
+     "bear": -1.7464251514203604,
+     "flat": -0.766342618718893,
+     "bull": 3.023345514403147
+    },
+    "calmar": 0.2815725111199645,
+    "months": 82,
+    "losing_months": 0.4634146341463415,
+    "worst_month_pct": -8.487531745821373,
+    "worst_day_pct": -6.354441371119488,
+    "worst_day": "2020-09-03",
+    "y2022_geo_monthly_pct": -1.1116450463253293,
+    "deflated_sharpe": 0.044353896227783574,
+    "deflated_sharpe_781": 0.0439,
+    "mean_taper_mult": 0.5791,
+    "mean_dd_pct": 16.3373,
+    "ulcer_index_pct": 17.8715,
+    "dd_p95_pct": 24.2989,
+    "cdar_95_pct": 24.5335,
+    "pct_days_underwater": 97.28,
+    "max_underwater_days": 1881,
+    "mean_recovery_days": 71.41
+   }
+  },
+  "Q42_dualspeed_60_40_carry": {
+   "base": {
+    "geo_monthly_pct": 2.1228291129634274,
+    "max_dd_pct": -19.798187323876505,
+    "sharpe": 1.3631434253782895,
+    "A_geo_monthly_pct": 0.5599374898352718,
+    "by_regime": {
+     "bear": -1.1951044847077803,
+     "flat": -0.38507561209007973,
+     "bull": 5.952611339720961
+    },
+    "calmar": 1.2866808934997642,
+    "months": 82,
+    "losing_months": 0.3902439024390244,
+    "worst_month_pct": -6.465595177637177,
+    "worst_day_pct": -7.7456068661669635,
+    "worst_day": "2021-01-21",
+    "y2022_geo_monthly_pct": -0.9168224479609761,
+    "deflated_sharpe": 0.6517797953275392,
+    "deflated_sharpe_781": 0.6498,
+    "mean_taper_mult": 0.8348,
+    "mean_dd_pct": 8.9298,
+    "ulcer_index_pct": 10.1412,
+    "dd_p95_pct": 15.7697,
+    "cdar_95_pct": 18.2025,
+    "pct_days_underwater": 94.95,
+    "max_underwater_days": 831,
+    "mean_recovery_days": 39.5
+   },
+   "stress": {
+    "geo_monthly_pct": 0.7062427418690529,
+    "max_dd_pct": -23.096866080982046,
+    "sharpe": 0.5808680744857725,
+    "A_geo_monthly_pct": -0.238100649849616,
+    "by_regime": {
+     "bear": -1.4667815568019018,
+     "flat": -0.8143423442826602,
+     "bull": 3.1073635119519287
+    },
+    "calmar": 0.3669291267791034,
+    "months": 82,
+    "losing_months": 0.4878048780487805,
+    "worst_month_pct": -6.612164155069335,
+    "worst_day_pct": -7.855519397750029,
+    "worst_day": "2021-01-21",
+    "y2022_geo_monthly_pct": -1.098609141622056,
+    "deflated_sharpe": 0.04826996433890374,
+    "deflated_sharpe_781": 0.0477,
+    "mean_taper_mult": 0.5788,
+    "mean_dd_pct": 15.9267,
+    "ulcer_index_pct": 17.0914,
+    "dd_p95_pct": 22.2828,
+    "cdar_95_pct": 22.4404,
+    "pct_days_underwater": 97.8,
+    "max_underwater_days": 1818,
+    "mean_recovery_days": 106.13
+   }
+  },
+  "Q42_balanced_50_50_carry": {
+   "base": {
+    "geo_monthly_pct": 2.1206113214713778,
+    "max_dd_pct": -19.92247783827742,
+    "sharpe": 1.396390539272634,
+    "A_geo_monthly_pct": 0.8151419596144082,
+    "by_regime": {
+     "bear": -1.5829911499650406,
+     "flat": 0.18894644609653313,
+     "bull": 5.923749905104094
+    },
+    "calmar": 1.2773178147933035,
+    "months": 82,
+    "losing_months": 0.3780487804878049,
+    "worst_month_pct": -8.643276416375254,
+    "worst_day_pct": -8.081690849090423,
+    "worst_day": "2021-01-21",
+    "y2022_geo_monthly_pct": -0.9168744002449332,
+    "deflated_sharpe": 0.6815794948745124,
+    "deflated_sharpe_781": 0.6797,
+    "mean_taper_mult": 0.8369,
+    "mean_dd_pct": 8.7281,
+    "ulcer_index_pct": 10.1084,
+    "dd_p95_pct": 16.8055,
+    "cdar_95_pct": 18.6882,
+    "pct_days_underwater": 94.55,
+    "max_underwater_days": 783,
+    "mean_recovery_days": 38.06
+   },
+   "stress": {
+    "geo_monthly_pct": 0.6843041513367214,
+    "max_dd_pct": -23.615572651341942,
+    "sharpe": 0.583623174522754,
+    "A_geo_monthly_pct": -0.15986153485710392,
+    "by_regime": {
+     "bear": -1.8112841186024293,
+     "flat": -0.4791085099565162,
+     "bull": 3.1282666097260705
+    },
+    "calmar": 0.34772181633181926,
+    "months": 82,
+    "losing_months": 0.45121951219512196,
+    "worst_month_pct": -8.855893045934879,
+    "worst_day_pct": -8.205731276963895,
+    "worst_day": "2021-01-21",
+    "y2022_geo_monthly_pct": -1.000353412677279,
+    "deflated_sharpe": 0.050250350388933496,
+    "deflated_sharpe_781": 0.0497,
+    "mean_taper_mult": 0.5614,
+    "mean_dd_pct": 16.5103,
+    "ulcer_index_pct": 17.6233,
+    "dd_p95_pct": 23.0094,
+    "cdar_95_pct": 23.3188,
+    "pct_days_underwater": 97.64,
+    "max_underwater_days": 1881,
+    "mean_recovery_days": 90.26
+   }
+  }
+ },
+ "operational_spot": {
+  "S36_qd_carry_blend_spot": {
+   "geo_monthly_pct": 2.9305235234527016,
+   "max_dd_pct": -27.273521703587566,
+   "sharpe": 1.4002147748807716,
+   "A_geo_monthly_pct": 1.3030905691653292,
+   "by_regime": {
+    "bear": -2.3446683378624655,
+    "flat": 0.2278186529315912,
+    "bull": 8.509955492281092
+   },
+   "calmar": 1.2893927914269552,
+   "months": 82,
+   "losing_months": 0.3780487804878049,
+   "worst_month_pct": -12.328824266283016,
+   "worst_day_pct": -11.327278346186729,
+   "worst_day": "2021-01-21",
+   "y2022_geo_monthly_pct": -1.3135456479473073,
+   "deflated_sharpe": 0.6852153032543193,
+   "deflated_sharpe_781": 0.6834,
+   "mean_taper_mult": 0.8637,
+   "mean_dd_pct": 11.9885,
+   "ulcer_index_pct": 13.9187,
+   "dd_p95_pct": 23.2876,
+   "cdar_95_pct": 25.6714,
+   "pct_days_underwater": 94.35,
+   "max_underwater_days": 759,
+   "mean_recovery_days": 35.15
+  },
+  "Q42_volcap_s36_blend_spot": {
+   "geo_monthly_pct": 2.177205042303533,
+   "max_dd_pct": -21.123327100793567,
+   "sharpe": 1.48947647605907,
+   "A_geo_monthly_pct": 0.9687544172157577,
+   "by_regime": {
+    "bear": -1.4684419200811558,
+    "flat": 0.016985015597606574,
+    "bull": 6.037637168983915
+   },
+   "calmar": 1.236853474027814,
+   "months": 82,
+   "losing_months": 0.35365853658536583,
+   "worst_month_pct": -8.017852924025183,
+   "worst_day_pct": -6.219812308993935,
+   "worst_day": "2020-09-03",
+   "y2022_geo_monthly_pct": -0.9956360341208882,
+   "deflated_sharpe": 0.7650637030775294,
+   "deflated_sharpe_781": 0.7634,
+   "mean_taper_mult": 0.8278,
+   "mean_dd_pct": 8.9041,
+   "ulcer_index_pct": 10.4543,
+   "dd_p95_pct": 18.6246,
+   "cdar_95_pct": 19.9926,
+   "pct_days_underwater": 93.95,
+   "max_underwater_days": 753,
+   "mean_recovery_days": 33.5
+  },
+  "Q42_dualspeed_60_40_carry_spot": {
+   "geo_monthly_pct": 2.3513590717599646,
+   "max_dd_pct": -19.366993677189726,
+   "sharpe": 1.4828808211517843,
+   "A_geo_monthly_pct": 0.7635661382953055,
+   "by_regime": {
+    "bear": -1.1249006651726272,
+    "flat": -0.2389236444770172,
+    "bull": 6.348229869927991
+   },
+   "calmar": 1.4569276642224804,
+   "months": 82,
+   "losing_months": 0.3780487804878049,
+   "worst_month_pct": -6.426487819017132,
+   "worst_day_pct": -7.728817724599324,
+   "worst_day": "2021-01-21",
+   "y2022_geo_monthly_pct": -0.8868268843035038,
+   "deflated_sharpe": 0.7604145005739236,
+   "deflated_sharpe_781": 0.7588,
+   "mean_taper_mult": 0.8562,
+   "mean_dd_pct": 8.2763,
+   "ulcer_index_pct": 9.5083,
+   "dd_p95_pct": 15.2235,
+   "cdar_95_pct": 17.7253,
+   "pct_days_underwater": 94.31,
+   "max_underwater_days": 755,
+   "mean_recovery_days": 35.13
+  },
+  "Q42_balanced_50_50_carry_spot": {
+   "geo_monthly_pct": 2.3330573228015847,
+   "max_dd_pct": -19.52199438091946,
+   "sharpe": 1.5132528594459482,
+   "A_geo_monthly_pct": 1.002096298574211,
+   "by_regime": {
+    "bear": -1.5049246064947583,
+    "flat": 0.3449032679983762,
+    "bull": 6.2716830195815545
+   },
+   "calmar": 1.4341100262267574,
+   "months": 82,
+   "losing_months": 0.36585365853658536,
+   "worst_month_pct": -8.58338686513581,
+   "worst_day_pct": -8.069690849114505,
+   "worst_day": "2021-01-21",
+   "y2022_geo_monthly_pct": -0.8904344828658397,
+   "deflated_sharpe": 0.7814996526210676,
+   "deflated_sharpe_781": 0.78,
+   "mean_taper_mult": 0.8543,
+   "mean_dd_pct": 8.2243,
+   "ulcer_index_pct": 9.595,
+   "dd_p95_pct": 16.3318,
+   "cdar_95_pct": 18.2578,
+   "pct_days_underwater": 93.63,
+   "max_underwater_days": 755,
+   "mean_recovery_days": 34.37
+  }
+ },
+ "checks": {
+  "Q42_volcap_s36_blend": {
+   "1_expected_dd_and_ulcer_cut": true,
+   "2_max_dd_ge_neg23_and_beats_s36": true,
+   "3_sharpe_and_calmar_gt_s36": false,
+   "4_geo_ge_1p75_and_bear_gt_s36": true,
+   "5_recent_a_and_stress_pos": true
+  },
+  "Q42_dualspeed_60_40_carry": {
+   "1_expected_dd_and_ulcer_cut": true,
+   "2_max_dd_ge_neg23_and_beats_s36": true,
+   "3_sharpe_and_calmar_gt_s36": true,
+   "4_geo_ge_1p75_and_bear_gt_s36": true,
+   "5_recent_a_and_stress_pos": true
+  },
+  "Q42_balanced_50_50_carry": {
+   "1_expected_dd_and_ulcer_cut": true,
+   "2_max_dd_ge_neg23_and_beats_s36": true,
+   "3_sharpe_and_calmar_gt_s36": true,
+   "4_geo_ge_1p75_and_bear_gt_s36": true,
+   "5_recent_a_and_stress_pos": true
+  }
+ },
+ "pass": {
+  "Q42_volcap_s36_blend": false,
+  "Q42_dualspeed_60_40_carry": true,
+  "Q42_balanced_50_50_carry": true
+ }
+}

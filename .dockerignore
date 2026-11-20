@@ -1,0 +1,11 @@
+.git
+.claude
+.pytest_cache
+antigravity-add-model
+bin
+data
+graphify-out
+research/quant_lab/data
+research/quant_lab/__pycache__
+scripts/__pycache__
+CLAUDE.md

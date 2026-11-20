@@ -1,0 +1,22 @@
+[Unit]
+Description=PiQuant Nightly Causal Alpha Discovery & Shadow Paper Eval (Raspberry Pi 5)
+After=network-online.target
+Wants=network-online.target
+Documentation=https://github.com/everett6/PiQuant
+
+[Service]
+Type=oneshot
+User=everett
+WorkingDirectory=/home/everett/PiQuant/piquant-live
+
+# Pin strictly away from Core 2 (piquant-collect) and Core 3 (piquant).
+CPUAffinity=0 1
+Nice=15
+IOSchedulingClass=idle
+MemoryMax=1800M
+TimeoutStartSec=900
+
+ExecStart=/bin/bash -lc '/home/everett/prereg22-env/bin/python3 research/quant_lab/refresh_daily_csv.py --fetch-public && /home/everett/prereg22-env/bin/python3 research/quant_lab/auto_discover.py --mode llamacpp --venue spot --n-candidates 6 --llama-threads 2 && /home/everett/prereg22-env/bin/python3 research/quant_lab/shadow_paper_eval.py'
+
+[Install]
+WantedBy=multi-user.target

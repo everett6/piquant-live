@@ -6,27 +6,37 @@ package trend
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"sort"
 	"time"
+
+	"piquant-live/internal/durable"
 )
 
 // Variant is a frozen PREREG6 strategy definition.
 type Variant struct {
-	Name        string  `json:"name"`
-	Lev         float64 `json:"lev"`                  // position when trend holds (0 when not); BH holds Lev always
-	FeeBps      float64 `json:"fee_bps"`              // per unit of turnover
-	SlipBps     float64 `json:"slip_bps"`             // per unit of turnover
-	FundingBpsH float64 `json:"funding_bps_h"`        // per hour per unit of |position|
-	SMA         int     `json:"sma"`                  // 0 = always hold (benchmark)
-	KillDD      float64 `json:"kill_dd"`              // stop the variant at this drawdown from peak (0 = never)
-	Pair        bool    `json:"pair,omitempty"`       // PREREG11: half BTC, half ETH sleeve, each Lev when above its own SMA
-	ExitSMA     int     `json:"exit_sma,omitempty"`   // PREREG13 R3: also exit below SMA(ExitSMA); enter only at/above it
-	DailyStop   float64 `json:"daily_stop,omitempty"` // flatten at the close of a day losing this fraction (re-enter next close)
-	Capital     float64 `json:"capital,omitempty"`    // display only: starting dollars for equity_usd
-	Pullback    bool    `json:"pullback,omitempty"`   // PREREG16 D2: 15% pullback above SMA200; exit > SMA20 or day 10
+	Name         string  `json:"name"`
+	Lev          float64 `json:"lev"`                     // position when trend holds (0 when not); BH holds Lev always
+	FeeBps       float64 `json:"fee_bps"`                 // per unit of turnover
+	SlipBps      float64 `json:"slip_bps"`                // per unit of turnover
+	FundingBpsH  float64 `json:"funding_bps_h"`           // per hour per unit of |position|
+	SMA          int     `json:"sma"`                     // 0 = always hold (benchmark)
+	KillDD       float64 `json:"kill_dd"`                 // stop the variant at this drawdown from peak (0 = never)
+	Pair         bool    `json:"pair,omitempty"`          // PREREG11: half BTC, half ETH sleeve, each Lev when above its own SMA
+	ExitSMA      int     `json:"exit_sma,omitempty"`      // PREREG13 R3: also exit below SMA(ExitSMA); enter only at/above it
+	DailyStop    float64 `json:"daily_stop,omitempty"`    // flatten at the close of a day losing this fraction (re-enter next close)
+	Capital      float64 `json:"capital,omitempty"`       // display only: starting dollars for equity_usd
+	Pullback     bool    `json:"pullback,omitempty"`      // PREREG16 D2: 15% pullback above SMA200; exit > SMA20 or day 10
+	Clocks       bool    `json:"clocks,omitempty"`        // PREREG30 E4: four daily clocks on 6-hour bars (stepped by AdvanceGrid)
+	Tunnel       bool    `json:"tunnel,omitempty"`        // PREREG34 QB: size = Lev * (1 - exp(-2 ln(close/SMA) / sigma30)) above the SMA
+	Coherence    bool    `json:"coherence,omitempty"`     // PREREG35 QD: size = Lev * (1 - exp(-age / 5)), age = closes in a row above the SMA
+	TaperStart   float64 `json:"taper_start,omitempty"`   // PREREG36: drawdown where soft taper starts (e.g. 0.10)
+	TaperFull    float64 `json:"taper_full,omitempty"`    // PREREG36: drawdown where soft taper reaches TaperFloor (e.g. 0.28)
+	TaperFloor   float64 `json:"taper_floor,omitempty"`   // PREREG36: minimum leverage multiplier above TaperFull (e.g. 0.40)
+	VolTarget    float64 `json:"vol_target,omitempty"`    // PREREG44: balance leverage in [1.0x, Lev] via clip(VolTarget/annVol20d, 1/Lev, 1)
+	VolHarvester bool    `json:"vol_harvester,omitempty"` // PREREG44: counter-volatility dip harvesting on SMA=0 Buy-and-Hold
 }
 
 // Variants are frozen by PREREG6.
@@ -45,6 +55,32 @@ var Variants = []Variant{
 	// PREREG16 D2 uptrend pullback (failed: +162 bps/trade, t 1.30): BTC and ETH halves at 1x, tracked forward on
 	// paper at the user's request (2026-11-11), post hoc, for comparison only. SMA is unused (rule is fixed).
 	{Name: "D2_btc_eth_pullback_1x", Lev: 1, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 200, Pair: true, Pullback: true},
+	// PREREG13 R1, the P1 rule at 1x (backtest +5.18%/mo, drawdown -57%, bear months -4.2 against P1's +8.50, -84%,
+	// -8.0). Since 2021-04 it made +1.62%/mo against 2x's +2.01 with a third less drawdown (PREREG26). Tracked forward
+	// on paper (2026-11-13), post hoc, for comparison only.
+	{Name: "R1_btc_eth_1x", Lev: 1, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true},
+	// PREREG30 E4 (passed 2026-11-13 by small margins: +8.61%/mo, drawdown -82.3%, Sharpe 1.499 against the
+	// 00:00 clock's +8.43, -83.5%, 1.476): P1's rule on four clocks, stepped every 6 hours by AdvanceGrid.
+	{Name: "E4_btc_eth_4clock_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true, Clocks: true},
+	// PREREG34 QB tunnelling (passed 2026-11-13 by small margins: +8.55%/mo, drawdown -79.8%, Sharpe 1.516, bear months
+	// -6.2 against P1's +8.50, -83.9%, 1.489, -8.0; worse than P1 since 2023): P1's rule, sized by the gap above SMA50.
+	{Name: "QB_btc_eth_tunnel_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true, Tunnel: true},
+	// PREREG35 QD coherence time (passed 2026-11-13: +8.45%/mo, drawdown -76.5%, Sharpe 1.525, bear months -5.3
+	// against P1's +8.50, -83.9%, 1.489, -8.0; worse than P1 since 2023): P1's rule, ramped in with the trend's age.
+	{Name: "QD_btc_eth_coherence_2x", Lev: 2, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true, Coherence: true},
+	// PREREG36 (PASS 5/5 on 70/30 carry blend): 1x Safe-QD (coherence trend with 10%->28% non-locking soft DD
+	// taper to 0.40 floor) tracked on both US spot (0 funding, 3 bps/side; standalone +3.20%/mo, DD -32.7%,
+	// Sharpe 1.224) and US futures (6+1 bps, 0.1 bp/h), and combined with 30% C1 carry + DTB3 in S36_qd_carry_blend.
+	{Name: "S36_safe_qd_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, Pair: true, Coherence: true, TaperStart: 0.10, TaperFull: 0.28, TaperFloor: 0.40},
+	{Name: "S36_safe_qd_fut_1x", Lev: 1, FeeBps: 6, SlipBps: 1, FundingBpsH: 0.1, SMA: 50, Pair: true, Coherence: true, TaperStart: 0.10, TaperFull: 0.28, TaperFloor: 0.40},
+	// PREREG42 (PASS 5/5 on both Q42_dualspeed_60_40_carry & Q42_balanced_50_50_carry): earlier 6%->20% soft DD
+	// taper (0.40 floor) on spot 1x Safe-QD and Fast-Exit R3xQD legs to cut expected drawdown (mean DD & Ulcer) ~31%.
+	{Name: "Q42_safe_qd_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, Pair: true, Coherence: true, TaperStart: 0.06, TaperFull: 0.20, TaperFloor: 0.40},
+	{Name: "Q42_r3_fastexit_qd_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, ExitSMA: 20, Pair: true, Coherence: true, TaperStart: 0.06, TaperFull: 0.20, TaperFloor: 0.40},
+	// PREREG44: 1.0x..2.5x Volatility-Balanced Safe-QD/Dual-Speed + Rebalanced Buy-and-Hold Volatility Harvester.
+	{Name: "Q44_bh_vol_harvester_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 0, Pair: true, VolHarvester: true},
+	{Name: "Q44_qd_vol_1x_2p5x_spot", Lev: 2.5, FeeBps: 2, SlipBps: 1, SMA: 50, Pair: true, Coherence: true, VolTarget: 0.80, TaperStart: 0.08, TaperFull: 0.30, TaperFloor: 0.35},
+	{Name: "Q44_dualspeed_r3_1x_2p5x_spot", Lev: 2.5, FeeBps: 2, SlipBps: 1, SMA: 50, ExitSMA: 20, Pair: true, Coherence: true, VolTarget: 0.85, TaperStart: 0.08, TaperFull: 0.28, TaperFloor: 0.35},
 	{Name: "PAPER50_btc_eth_0p2x", Lev: 0.2, FeeBps: 120, SlipBps: 5, SMA: 50, Pair: true, DailyStop: 0.02, KillDD: 0.05, Capital: 50},
 }
 
@@ -69,17 +105,21 @@ type DayRec struct {
 
 // Ledger tracks one variant.
 type Ledger struct {
-	Variant Variant  `json:"variant"`
-	Equity  float64  `json:"equity"`
-	Peak    float64  `json:"peak"`
-	MaxDD   float64  `json:"max_dd"`
-	Pos     float64  `json:"pos"`
-	PosAlt  float64  `json:"pos_alt,omitempty"`     // ETH sleeve position (pair variants)
-	Stops   int      `json:"daily_stops,omitempty"` // days the daily loss stop flattened the book
-	HoldB   int      `json:"hold_b,omitempty"`      // pullback variants: closes held so far (BTC, ETH sleeves)
-	HoldE   int      `json:"hold_e,omitempty"`
-	Killed  bool     `json:"killed"`
-	Days    []DayRec `json:"days"`
+	Variant Variant `json:"variant"`
+	Equity  float64 `json:"equity"`
+	Peak    float64 `json:"peak"`
+	MaxDD   float64 `json:"max_dd"`
+	Pos     float64 `json:"pos"`
+	PosAlt  float64 `json:"pos_alt,omitempty"`     // ETH sleeve position (pair variants)
+	Stops   int     `json:"daily_stops,omitempty"` // days the daily loss stop flattened the book
+	HoldB   int     `json:"hold_b,omitempty"`      // pullback variants: closes held so far (BTC, ETH sleeves)
+	HoldE   int     `json:"hold_e,omitempty"`
+	Killed  bool    `json:"killed"`
+	// Risk guards (guard.go): sleeves capped at MaxSafeLev, intraday emergency stops and the level that re-arms them.
+	MarginCaps     int      `json:"margin_caps,omitempty"`
+	EmergencyStops int      `json:"emergency_stops,omitempty"`
+	EmergencyArm   float64  `json:"emergency_arm,omitempty"`
+	Days           []DayRec `json:"days"`
 }
 
 // State is the persisted forward test.
@@ -90,6 +130,9 @@ type State struct {
 	Ledgers    map[string]*Ledger `json:"ledgers"`
 	ETHHistory []Day              `json:"eth_history,omitempty"` // ETH closes for pair variants (capped)
 	ETHLast    string             `json:"eth_last,omitempty"`
+	GridB      []Bar              `json:"grid_btc,omitempty"` // 6-hour closes for the four-clock variants (capped)
+	GridE      []Bar              `json:"grid_eth,omitempty"`
+	GridLast   int64              `json:"grid_last,omitempty"` // start of the last 6-hour bar applied
 }
 
 const historyCap = 400
@@ -160,9 +203,17 @@ func (st *State) Advance(days []Day) int {
 			continue // seed only
 		}
 		bar := d.Close/prev - 1
-		for _, name := range sortedKeys(st.Ledgers) {
-			if l := st.Ledgers[name]; !l.Variant.Pair {
-				l.step(d.Date, bar, st.History)
+		if len(st.Ledgers) == len(Variants) {
+			for i := range Variants {
+				if l := st.Ledgers[Variants[i].Name]; l != nil && !l.Variant.Pair {
+					l.step(d.Date, bar, st.History)
+				}
+			}
+		} else {
+			for _, name := range sortedKeys(st.Ledgers) {
+				if l := st.Ledgers[name]; !l.Variant.Pair {
+					l.step(d.Date, bar, st.History)
+				}
 			}
 		}
 		n++
@@ -240,9 +291,17 @@ func (st *State) AdvanceETH(days []Day) int {
 		btcHist := st.History[:bi+1]
 		barB := btcHist[bi].Close/btcHist[bi-1].Close - 1
 		barE := d.Close/prevE - 1
-		for _, name := range sortedKeys(st.Ledgers) {
-			if l := st.Ledgers[name]; l.Variant.Pair {
-				l.stepPair(d.Date, barB, barE, btcHist, st.ETHHistory)
+		if len(st.Ledgers) == len(Variants) {
+			for i := range Variants {
+				if l := st.Ledgers[Variants[i].Name]; l != nil && l.Variant.Pair && !l.Variant.Clocks {
+					l.stepPair(d.Date, barB, barE, btcHist, st.ETHHistory)
+				}
+			}
+		} else {
+			for _, name := range sortedKeys(st.Ledgers) {
+				if l := st.Ledgers[name]; l.Variant.Pair && !l.Variant.Clocks {
+					l.stepPair(d.Date, barB, barE, btcHist, st.ETHHistory)
+				}
 			}
 		}
 		n++
@@ -254,22 +313,168 @@ func (st *State) AdvanceETH(days []Day) int {
 func (v Variant) sleeve(pos, bar float64, hist []Day) (ret, target float64) {
 	ret = pos*bar - math.Abs(pos)*v.FundingBpsH*24*1e-4
 	c := hist[len(hist)-1].Close
+	if v.SMA == 0 {
+		target = v.Lev
+		if v.VolHarvester {
+			target = v.Lev * bhVolHarvestMult(hist)
+		}
+		ret -= math.Abs(target-pos) * (v.FeeBps + v.SlipBps) * 1e-4
+		return ret, target
+	}
 	if m, ok := sma(hist, v.SMA); ok {
 		switch {
 		case v.ExitSMA <= 0:
 			if c > m {
 				target = v.Lev
+				if v.Tunnel {
+					target = v.Lev * tunnelShare(hist, c, m)
+				}
+				if v.Coherence {
+					target = v.Lev * coherenceShare(hist, v.SMA)
+				}
 			}
 		default:
 			if f, ok2 := sma(hist, v.ExitSMA); ok2 {
-				if (pos > 0 && c >= f && c >= m) || (pos <= 0 && c > m && c >= f) {
+				if v.Coherence {
+					if c > m && c >= f {
+						target = v.Lev * r3CoherenceShare(hist, v.SMA, v.ExitSMA)
+					}
+				} else if (pos > 0 && c >= f && c >= m) || (pos <= 0 && c > m && c >= f) {
 					target = v.Lev
 				}
 			}
 		}
 	}
+	if target > 0 && v.VolTarget > 0 && v.Lev > 1.0 {
+		target *= volBalanceShare(hist, v.VolTarget, v.Lev)
+	}
 	ret -= math.Abs(target-pos) * (v.FeeBps + v.SlipBps) * 1e-4
 	return ret, target
+}
+
+func sampleStdLastN(hist []Day, n int) (float64, bool) {
+	if len(hist) <= n || n < 2 {
+		return 0, false
+	}
+	sub := hist[len(hist)-(n+1):]
+	var sum, sum2 float64
+	for i := 1; i <= n; i++ {
+		if sub[i-1].Close <= 0 {
+			return 0, false
+		}
+		r := sub[i].Close/sub[i-1].Close - 1
+		sum += r
+		sum2 += r * r
+	}
+	fn := float64(n)
+	mu := sum / fn
+	v := (sum2 - fn*mu*mu) / (fn - 1)
+	if v <= 0 {
+		return 0, false
+	}
+	return math.Sqrt(v), true
+}
+
+// volBalanceShare returns the fraction in [1.0/maxLev, 1.0] balancing effective leverage in [1.0x, maxLev]
+// inversely against trailing 20-day annualized volatility.
+func volBalanceShare(hist []Day, volTarget, maxLev float64) float64 {
+	if maxLev <= 1.0 {
+		return 1.0
+	}
+	volD, ok := sampleStdLastN(hist, 20)
+	if !ok {
+		return 1.0 / maxLev
+	}
+	annVol := volD * math.Sqrt(365.0)
+	effLev := math.Max(1.0, math.Min(maxLev, volTarget/math.Max(annVol, 1e-6)))
+	return effLev / maxLev
+}
+
+// bhVolHarvestMult modulates a 1x Buy-and-Hold sleeve in [0.65, 1.35] using counter-volatility dip harvesting.
+func bhVolHarvestMult(hist []Day) float64 {
+	volD, ok := sampleStdLastN(hist, 20)
+	if !ok || len(hist) < 6 || hist[len(hist)-6].Close <= 0 {
+		return 1.0
+	}
+	ret5 := hist[len(hist)-1].Close/hist[len(hist)-6].Close - 1
+	z := math.Max(-3.0, math.Min(3.0, -ret5/(math.Max(volD, 1e-4)*math.Sqrt(5.0))))
+	return math.Max(0.65, math.Min(1.35, 1.0+0.35*math.Tanh(z)))
+}
+
+// tunnelShare is PREREG34 QB's size as a share of full leverage: 1 - exp(-2 ln(close/sma) / sigma), with sigma the
+// sample standard deviation of the last 30 daily returns (strategies34.tunnel_positions). 0 without 31 closes.
+func tunnelShare(hist []Day, c, m float64) float64 {
+	if c <= m || m <= 0 {
+		return 0
+	}
+	sigma, ok := sampleStdLastN(hist, 30)
+	if !ok {
+		return 0
+	}
+	return 1 - math.Exp(-2*math.Log(c/m)/sigma)
+}
+
+// coherenceShare is PREREG35 QD's size as a share of full leverage: 1 - exp(-age / 5), with age the number of
+// consecutive closes above their own SMA(n), the latest included (strategies35.coherence_positions).
+// Computed in O(maxAge + n) via a sliding window sum instead of O(maxAge * n).
+func coherenceShare(hist []Day, n int) float64 {
+	const tau, maxAge = 5.0, 200
+	if n <= 0 || len(hist) < n {
+		return 0
+	}
+	var sum float64
+	for i := len(hist) - n; i < len(hist); i++ {
+		sum += hist[i].Close
+	}
+	fn := float64(n)
+	age := 0
+	for k := len(hist); k >= n && age < maxAge; k-- {
+		if hist[k-1].Close <= sum/fn {
+			break
+		}
+		age++
+		if k > n {
+			sum += hist[k-1-n].Close - hist[k-1].Close
+		}
+	}
+	return 1 - math.Exp(-float64(age)/tau)
+}
+
+// r3CoherenceShare is PREREG40/42's R3 fast-exit coherence ramp: consecutive closes ending now where
+// close > SMA(smaN) and close >= SMA(exitSMA), scaled by 1 - exp(-age / 5) in O(maxAge + max(smaN, exitSMA)).
+func r3CoherenceShare(hist []Day, smaN, exitSMA int) float64 {
+	const tau, maxAge = 5.0, 200
+	if smaN <= 0 || exitSMA <= 0 {
+		return 0
+	}
+	minLen := smaN
+	if exitSMA > minLen {
+		minLen = exitSMA
+	}
+	if len(hist) < minLen {
+		return 0
+	}
+	var sumL, sumS float64
+	for i := len(hist) - smaN; i < len(hist); i++ {
+		sumL += hist[i].Close
+	}
+	for i := len(hist) - exitSMA; i < len(hist); i++ {
+		sumS += hist[i].Close
+	}
+	fnL, fnS := float64(smaN), float64(exitSMA)
+	age := 0
+	for k := len(hist); k >= minLen && age < maxAge; k-- {
+		c := hist[k-1].Close
+		if c <= sumL/fnL || c < sumS/fnS {
+			break
+		}
+		age++
+		if k > minLen {
+			sumL += hist[k-1-smaN].Close - c
+			sumS += hist[k-1-exitSMA].Close - c
+		}
+	}
+	return 1 - math.Exp(-float64(age)/tau)
 }
 
 // pullbackTarget is PREREG16 D2 for one sleeve: enter at a close above SMA200 and at or below 85% of the highest
@@ -318,7 +523,18 @@ func (l *Ledger) stepPair(date string, barB, barE float64, histB, histE []Day) {
 	} else if v.DailyStop > 0 && held <= -v.DailyStop {
 		tb, te = 0, 0 // daily loss stop: flat at this close, normal rule again from the next close
 		l.Stops++
+	} else if v.TaperFull > v.TaperStart {
+		eqPre := l.Equity * (1 + held)
+		peakPre := math.Max(l.Peak, eqPre)
+		ddPre := 0.0
+		if peakPre > 0 {
+			ddPre = 1 - eqPre/peakPre
+		}
+		m := softTaper(ddPre, v.TaperStart, v.TaperFull, v.TaperFloor)
+		tb *= m
+		te *= m
 	}
+	tb, te = l.capMargin(tb), l.capMargin(te)
 	ret := held - 0.5*math.Abs(tb-l.Pos)*c - 0.5*math.Abs(te-l.PosAlt)*c
 	l.Equity *= 1 + ret
 	if l.Equity > l.Peak {
@@ -338,6 +554,17 @@ func (l *Ledger) stepPair(date string, barB, barE float64, histB, histE []Day) {
 	l.Pos, l.PosAlt = tb, te
 	l.Days = append(l.Days, DayRec{Date: date, Ret: ret, PosOut: 0.5*tb + 0.5*te, Equity: l.Equity,
 		PosB: tb, PosE: te, CloseB: histB[len(histB)-1].Close, CloseE: histE[len(histE)-1].Close})
+}
+
+func softTaper(dd, start, full, floor float64) float64 {
+	if full <= start || start <= 0 || dd <= start {
+		return 1
+	}
+	if dd >= full {
+		return floor
+	}
+	frac := (dd - start) / (full - start)
+	return 1 - (1-floor)*frac
 }
 
 // Reset restarts one variant flat at equity 1 (the manual restart after a kill switch).
@@ -442,7 +669,7 @@ func (st *State) Score(asOf time.Time) []Summary {
 	var out []Summary
 	for _, name := range sortedKeys(st.Ledgers) {
 		l := st.Ledgers[name]
-		s := Summary{Name: name, Equity: l.Equity, MaxDD: l.MaxDD, Sharpe: sharpe(l.Days), Killed: l.Killed, CurrentPos: l.Pos,
+		s := Summary{Name: name, Equity: l.Equity, MaxDD: l.MaxDD, Sharpe: sharpe(l.Days) * l.Variant.sharpeScale(), Killed: l.Killed, CurrentPos: l.Pos,
 			EquityUSD: l.Variant.Capital * l.Equity, DailyStops: l.Stops}
 		if bhM != nil && name != "BH" {
 			for m, r := range l.Monthly() {
@@ -481,14 +708,26 @@ func sharpe(days []DayRec) float64 {
 	return mu / math.Sqrt(v) * math.Sqrt(365)
 }
 
+// sharpeScale corrects the daily annualisation for variants whose records are 6-hour bars.
+func (v Variant) sharpeScale() float64 {
+	if v.Clocks {
+		return 2 // sqrt(4 bars per day)
+	}
+	return 1
+}
+
 // Load reads a state file; a missing file returns (nil, nil).
+// A main file that is empty or broken (for example after a power cut) falls back to the previous good copy.
 func Load(path string) (*State, error) {
-	b, err := os.ReadFile(path)
+	b, fromBackup, err := durable.ReadJSON(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if fromBackup {
+		fmt.Fprintf(os.Stderr, "[TREND] %s was empty or broken; loaded the previous copy %s\n", path, durable.BackupPath(path))
 	}
 	var st State
 	if err := json.Unmarshal(b, &st); err != nil {
@@ -498,18 +737,7 @@ func Load(path string) (*State, error) {
 	return &st, nil
 }
 
-// Save writes the state atomically.
+// Save writes the state so that a power cut cannot leave it empty, keeping the previous copy as path.bak.
 func (st *State) Save(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(st, "", " ")
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return durable.WriteJSON(path, st, " ")
 }

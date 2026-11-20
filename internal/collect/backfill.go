@@ -89,6 +89,11 @@ func FetchCoinbaseDailyCandles(ctx context.Context, client *http.Client, product
 	return fetchCoinbaseCandlesGran(ctx, client, product, start, end, 86400)
 }
 
+// FetchCoinbase6hCandles returns 6-hour candles (at most 300 per request).
+func FetchCoinbase6hCandles(ctx context.Context, client *http.Client, product string, start, end time.Time) ([]CandleRow, error) {
+	return fetchCoinbaseCandlesGran(ctx, client, product, start, end, 21600)
+}
+
 func fetchCoinbaseCandles(ctx context.Context, client *http.Client, product string, start, end time.Time) ([]CandleRow, error) {
 	return fetchCoinbaseCandlesGran(ctx, client, product, start, end, 60)
 }

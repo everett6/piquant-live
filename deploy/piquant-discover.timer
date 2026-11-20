@@ -1,0 +1,12 @@
+[Unit]
+Description=PiQuant Nightly Causal Alpha Discovery Timer (00:35 UTC)
+Documentation=https://github.com/everett6/PiQuant
+
+[Timer]
+OnCalendar=*-*-* 00:35:00 UTC
+RandomizedDelaySec=120
+Persistent=true
+Unit=piquant-discover.service
+
+[Install]
+WantedBy=timers.target

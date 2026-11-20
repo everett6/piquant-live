@@ -20,6 +20,7 @@ import (
 	"piquant-live/internal/experiment"
 	"piquant-live/internal/paper"
 	"piquant-live/internal/secrets"
+	"piquant-live/internal/trend"
 )
 
 type dryRunFlags struct {
@@ -62,6 +63,8 @@ type dryRunFlags struct {
 	clock             *clockFlags
 	alertEnv          *string
 	trendDir          string
+	carryDir          string
+	dtb3Path          string
 	enableNews        bool
 	region            string
 	makerFeeBps       float64
@@ -119,6 +122,8 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	f.alertEnv = addAlertFlag(fs)
 	fs.BoolVar(&f.allowQuarantined, "allow-quarantined", false, "permit quarantined code paths (market making, auto-recalibration, global region) for research only")
 	fs.StringVar(&f.trendDir, "trend-dir", "", "trend core ledger directory (default <data dir>/trend)")
+	fs.StringVar(&f.carryDir, "carry-dir", os.Getenv("PIQUANT_CARRY_DIR"), "carry state directory (optional)")
+	fs.StringVar(&f.dtb3Path, "dtb3", os.Getenv("PIQUANT_DTB3_PATH"), "FRED DTB3 CSV path (optional)")
 	fs.IntVar(&f.expBreaker, "expectancy-breaker", 50, "stop new entries after N closed trades if mean net bps/trade is < 0 at the upper 95% bound (0 = off; default 50: round 4 showed the live entry loses ~its cost per trade)")
 	fs.StringVar(&f.feedVenue, "feed-venue", "auto", "primary market feed for fills and flow features: 'auto' (coinbase for us-futures, else binance), 'binance' or 'coinbase'")
 	fs.StringVar(&f.region, "region", paper.RegionUS, "trading region rules: 'us' (Binance.US spot, 1x, long-only), 'us-futures' (US regulated nano futures, up to 5x, long/short) or 'global'")
@@ -389,7 +394,9 @@ func runDryRun(ctx context.Context, args []string) error {
 		gate := paper.NewTrendGate(48 * time.Hour)
 		dryRunEngine.SetTrendGate(gate)
 		go runTrendCore(ctx, tdir, gate)
-		fmt.Printf("[TREND] daily SMA50 gate on; 2x/1x trend core ledger in %s\n", tdir)
+		go runEmergencyWatch(ctx, tdir, al)
+		fmt.Printf("[TREND] daily SMA50 gate on; 2x/1x trend core ledger in %s; intraday %.0f%% emergency check every minute, sleeves capped at %.1fx\n",
+			tdir, trend.EmergencyDD*100, trend.MaxSafeLev)
 	}
 
 	alertTrendDir := ""
@@ -460,6 +467,9 @@ func runDryRun(ctx context.Context, args []string) error {
 		ClusterMode: "pi5_only",
 		Manager:     mgr,
 		DryRun:      dryRunEngine,
+		TrendDir:    f.trendDir,
+		CarryDir:    f.carryDir,
+		DTB3Path:    f.dtb3Path,
 	})
 	if err != nil {
 		return err

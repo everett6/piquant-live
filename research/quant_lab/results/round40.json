@@ -1,0 +1,213 @@
+{
+ "n_trials": 775,
+ "window": [
+  "2020-01-01",
+  "2026-11-01"
+ ],
+ "regime_months": {
+  "bull": 38,
+  "bear": 26,
+  "flat": 18
+ },
+ "variants": {
+  "S36_qd_carry_blend": {
+   "base": {
+    "geo_monthly_pct": 2.638332326361299,
+    "max_dd_pct": -27.7745864722304,
+    "sharpe": 1.2852945405454141,
+    "A_geo_monthly_pct": 1.0397745007556602,
+    "by_regime": {
+     "bear": -2.4498291349235553,
+     "flat": 0.010495168846052982,
+     "bull": 8.022348422244034
+    },
+    "calmar": 1.1398905235903294,
+    "months": 82,
+    "losing_months": 0.3902439024390244,
+    "worst_month_pct": -12.410113807625379,
+    "worst_day_pct": -11.344078346153013,
+    "worst_day": "2021-01-21",
+    "y2022_geo_monthly_pct": -1.3496003519029018,
+    "deflated_sharpe": 0.5723408865357807
+   },
+   "stress": {
+    "geo_monthly_pct": 0.757253076019045,
+    "max_dd_pct": -33.32050437941532,
+    "sharpe": 0.511844646903493,
+    "A_geo_monthly_pct": -0.22477796381709975,
+    "by_regime": {
+     "bear": -2.6230757135136615,
+     "flat": -0.7921149655529237,
+     "bull": 4.137147437485698
+    },
+    "calmar": 0.27271606722262925,
+    "months": 82,
+    "losing_months": 0.45121951219512196,
+    "worst_month_pct": -12.206003417328326,
+    "worst_day_pct": -11.5049026026023,
+    "worst_day": "2021-01-21",
+    "y2022_geo_monthly_pct": -1.392302020417893,
+    "deflated_sharpe": 0.03362927124229509
+   }
+  },
+  "Q40_6h_qd_carry": {
+   "base": {
+    "geo_monthly_pct": 2.5991358164829994,
+    "max_dd_pct": -27.433730447666914,
+    "sharpe": 1.2815920391793123,
+    "A_geo_monthly_pct": 1.0123438490411034,
+    "by_regime": {
+     "bear": -2.1828728575412604,
+     "flat": -0.29913721174690056,
+     "bull": 7.869635235905376
+    },
+    "calmar": 1.1369080795371196,
+    "months": 82,
+    "losing_months": 0.4024390243902439,
+    "worst_month_pct": -11.46634424460094,
+    "worst_day_pct": -11.445063679168065,
+    "worst_day": "2021-01-21",
+    "y2022_geo_monthly_pct": -1.381728604249808,
+    "deflated_sharpe": 0.5684609791634797
+   },
+   "stress": {
+    "geo_monthly_pct": 0.811184175173139,
+    "max_dd_pct": -34.434813825550606,
+    "sharpe": 0.5395091350934957,
+    "A_geo_monthly_pct": -0.22307645582962968,
+    "by_regime": {
+     "bear": -2.4524556678104474,
+     "flat": -0.8996656243985093,
+     "bull": 4.187407537451008
+    },
+    "calmar": 0.28268513811028334,
+    "months": 82,
+    "losing_months": 0.4634146341463415,
+    "worst_month_pct": -11.736590108097598,
+    "worst_day_pct": -11.341389796364677,
+    "worst_day": "2021-01-21",
+    "y2022_geo_monthly_pct": -1.5677525616983883,
+    "deflated_sharpe": 0.039321132439939455
+   }
+  },
+  "Q40_r3_fastexit_blend": {
+   "base": {
+    "geo_monthly_pct": 2.103916490697123,
+    "max_dd_pct": -21.022258055059062,
+    "sharpe": 1.253994084207005,
+    "A_geo_monthly_pct": 0.24913081292174447,
+    "by_regime": {
+     "bear": -0.7382966806396816,
+     "flat": -1.2416386768388934,
+     "bull": 6.0783962166040695
+    },
+    "calmar": 1.2009650829250342,
+    "months": 82,
+    "losing_months": 0.4268292682926829,
+    "worst_month_pct": -6.842398612026194,
+    "worst_day_pct": -6.966881329540666,
+    "worst_day": "2021-01-11",
+    "y2022_geo_monthly_pct": -1.0985639165288175,
+    "deflated_sharpe": 0.5408694802035101
+   },
+   "stress": {
+    "geo_monthly_pct": 0.7395420584738047,
+    "max_dd_pct": -28.783083511651398,
+    "sharpe": 0.5611979916780397,
+    "A_geo_monthly_pct": -0.4144706806596339,
+    "by_regime": {
+     "bear": -1.0046451267443293,
+     "flat": -1.3859236562253145,
+     "bull": 3.18438800397412
+    },
+    "calmar": 0.3083236269002679,
+    "months": 82,
+    "losing_months": 0.5121951219512195,
+    "worst_month_pct": -5.710837453247536,
+    "worst_day_pct": -7.130489873501256,
+    "worst_day": "2021-01-11",
+    "y2022_geo_monthly_pct": -1.4004270021638678,
+    "deflated_sharpe": 0.04272714282467177
+   }
+  }
+ },
+ "operational_spot": {
+  "S36_qd_carry_blend_spot": {
+   "geo_monthly_pct": 2.9305235234527016,
+   "max_dd_pct": -27.273521703587566,
+   "sharpe": 1.4002147748807716,
+   "A_geo_monthly_pct": 1.3030905691653292,
+   "by_regime": {
+    "bear": -2.3446683378624655,
+    "flat": 0.2278186529315912,
+    "bull": 8.509955492281092
+   },
+   "calmar": 1.2893927914269552,
+   "months": 82,
+   "losing_months": 0.3780487804878049,
+   "worst_month_pct": -12.328824266283016,
+   "worst_day_pct": -11.327278346186729,
+   "worst_day": "2021-01-21",
+   "y2022_geo_monthly_pct": -1.3135456479473073,
+   "deflated_sharpe": 0.6852153032543193
+  },
+  "Q40_6h_qd_carry_spot": {
+   "geo_monthly_pct": 2.8885316973066937,
+   "max_dd_pct": -26.901222639837542,
+   "sharpe": 1.3972693344963256,
+   "A_geo_monthly_pct": 1.268336710472809,
+   "by_regime": {
+    "bear": -2.0792746529505575,
+    "flat": -0.07388395672926612,
+    "bull": 8.348628117455878
+   },
+   "calmar": 1.2885057616804905,
+   "months": 82,
+   "losing_months": 0.3902439024390244,
+   "worst_month_pct": -11.386226486842833,
+   "worst_day_pct": -11.449962901613887,
+   "worst_day": "2021-01-21",
+   "y2022_geo_monthly_pct": -1.3432046330951506,
+   "deflated_sharpe": 0.6822202665287108
+  },
+  "Q40_r3_fastexit_blend_spot": {
+   "geo_monthly_pct": 2.342622556927326,
+   "max_dd_pct": -20.15837759914031,
+   "sharpe": 1.3749715984116684,
+   "A_geo_monthly_pct": 0.4614455514954931,
+   "by_regime": {
+    "bear": -0.6500342728201823,
+    "flat": -1.0874884457482241,
+    "bull": 6.480121569639588
+   },
+   "calmar": 1.3945304152020042,
+   "months": 82,
+   "losing_months": 0.4268292682926829,
+   "worst_month_pct": -7.064129302191355,
+   "worst_day_pct": -7.070618239141741,
+   "worst_day": "2022-11-08",
+   "y2022_geo_monthly_pct": -1.0248344402216794,
+   "deflated_sharpe": 0.6645160531140833
+  }
+ },
+ "checks": {
+  "Q40_6h_qd_carry": {
+   "max_dd_ge_minus_32": true,
+   "geo_and_calmar_gt_s36": false,
+   "sharpe_gt_s36": false,
+   "bear_ge_s36": true,
+   "recent_a_and_stress_pos": true
+  },
+  "Q40_r3_fastexit_blend": {
+   "max_dd_ge_minus_32": true,
+   "geo_and_calmar_gt_s36": false,
+   "sharpe_gt_s36": false,
+   "bear_ge_s36": true,
+   "recent_a_and_stress_pos": true
+  }
+ },
+ "pass": {
+  "Q40_6h_qd_carry": false,
+  "Q40_r3_fastexit_blend": false
+ }
+}

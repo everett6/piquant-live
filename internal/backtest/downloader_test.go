@@ -10,14 +10,19 @@ func TestHistoricalDataDownloadAndVerification(t *testing.T) {
 	dataDir := filepath.Join("..", "..", "data", "historical")
 	_ = os.MkdirAll(dataDir, 0755)
 
-	d := NewDownloader(dataDir)
-	err := d.DownloadFullDataset()
-	if err != nil {
-		t.Fatalf("DownloadFullDataset failed: %v", err)
+	btcPath := filepath.Join(dataDir, "btc_daily_full.csv")
+	ethPath := filepath.Join(dataDir, "eth_daily_full.csv")
+	if _, errB := os.Stat(btcPath); os.IsNotExist(errB) {
+		if err := NewDownloader(dataDir).DownloadFullDataset(); err != nil {
+			t.Fatalf("DownloadFullDataset failed: %v", err)
+		}
+	} else if _, errE := os.Stat(ethPath); os.IsNotExist(errE) {
+		if err := NewDownloader(dataDir).DownloadFullDataset(); err != nil {
+			t.Fatalf("DownloadFullDataset failed: %v", err)
+		}
 	}
 
 	// 1. Verify BTC CSV
-	btcPath := filepath.Join(dataDir, "btc_daily_full.csv")
 	btcBars, err := LoadHistoricalCSV(btcPath)
 	if err != nil {
 		t.Fatalf("Failed to load BTC CSV: %v", err)
@@ -95,7 +100,6 @@ func TestHistoricalDataDownloadAndVerification(t *testing.T) {
 	}
 
 	// 2. Verify ETH CSV
-	ethPath := filepath.Join(dataDir, "eth_daily_full.csv")
 	ethBars, err := LoadHistoricalCSV(ethPath)
 	if err != nil {
 		t.Fatalf("Failed to load ETH CSV: %v", err)

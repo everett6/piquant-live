@@ -12,7 +12,9 @@ import (
 	"syscall"
 	"time"
 
+	"piquant-live/internal/carry"
 	"piquant-live/internal/collect"
+	"piquant-live/internal/execution"
 	"piquant-live/internal/paper"
 	"piquant-live/internal/trend"
 )
@@ -26,8 +28,12 @@ func runTrend(args []string) error {
 	fs := flag.NewFlagSet("trend", flag.ContinueOnError)
 	home, _ := os.UserHomeDir()
 	dir := fs.String("dir", filepath.Join(home, "piquant-trend"), "state directory")
+	carryDir := fs.String("carry-dir", filepath.Join(home, "piquant-collect", "carry"), "carry state directory for S36 blend")
+	dtb3Path := fs.String("dtb3", filepath.Join(home, "piquant-data", "macro", "DTB3.csv"), "FRED DTB3 CSV path")
 	once := fs.Bool("once", false, "advance once and exit")
 	report := fs.Bool("report", false, "print the scorecard and exit")
+	blend := fs.Bool("blend", false, "include S36_qd_carry_blend composite scorecard + ping execution plan")
+	pingSample := fs.Bool("ping", false, "measure live exchange ping for S36 execution guidance (only with --blend)")
 	reset := fs.String("reset", "", "restart one variant flat at equity 1 (e.g. after its kill switch) and exit")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -52,6 +58,9 @@ func runTrend(args []string) error {
 		if st == nil {
 			return fmt.Errorf("no state in %s", *dir)
 		}
+		if *blend {
+			return printTrendWithBlend(context.Background(), st, *carryDir, *dtb3Path, *pingSample)
+		}
 		return printTrend(st)
 	}
 	path := filepath.Join(*dir, "trend_state.json")
@@ -66,6 +75,10 @@ func runTrend(args []string) error {
 		st, err = advanceTrend(ctx, client, st, path)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "[TREND]", err)
+		} else if *blend {
+			if perr := printTrendWithBlend(ctx, st, *carryDir, *dtb3Path, *pingSample); perr != nil {
+				fmt.Fprintln(os.Stderr, "[TREND]", perr)
+			}
 		} else if perr := printTrend(st); perr != nil {
 			fmt.Fprintln(os.Stderr, "[TREND]", perr)
 		}
@@ -105,6 +118,17 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 		// PREREG16 D2 needs SMA200: extend both histories backwards (no ledger is touched).
 		st.Backfill(append(pre, post...), append(epre, epost...))
 	}
+	// PREREG30 E4: four clocks on 6-hour bars. A failed fetch is retried on the next pass; bars are never skipped.
+	g0 := now.Add(-299 * 6 * time.Hour)
+	gb, gbErr := collect.FetchCoinbase6hCandles(ctx, client, "BTC-USD", g0, now)
+	ge, geErr := collect.FetchCoinbase6hCandles(ctx, client, "ETH-USD", g0, now)
+	if gbErr == nil && geErr == nil {
+		if k := st.AdvanceGrid(gridBars(gb, now), gridBars(ge, now)); k > 0 {
+			fmt.Printf("[TREND] four-clock ledger advanced %d six-hour bar(s)\n", k)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "[TREND] fetch 6h candles:", gbErr, geErr)
+	}
 	if err := st.Save(path); err != nil {
 		return st, err
 	}
@@ -113,6 +137,17 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 		return st, fmt.Errorf("fetch ETH daily candles: %w", ethErr)
 	}
 	return st, nil
+}
+
+// gridBars keeps completed 6-hour candles.
+func gridBars(rows []collect.CandleRow, now time.Time) []trend.Bar {
+	var out []trend.Bar
+	for _, r := range rows {
+		if !time.Unix(r.T, 0).Add(6 * time.Hour).After(now) {
+			out = append(out, trend.Bar{T: r.T, Close: r.Close})
+		}
+	}
+	return out
 }
 
 // splitDays keeps completed daily candles and splits them at the registration date (seed vs forward days).
@@ -141,10 +176,12 @@ func runTrendCore(ctx context.Context, dir string, gate *paper.TrendGate) {
 		fmt.Fprintln(os.Stderr, "[TREND] load:", err)
 	}
 	for {
+		trendMu.Lock() // the emergency watch writes the same file
 		if fresh, lerr := trend.Load(path); lerr == nil && fresh != nil {
 			st = fresh // pick up manual edits such as `piquant trend --reset`
 		}
 		st, err = advanceTrend(ctx, client, st, path)
+		trendMu.Unlock()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "[TREND]", err)
 		} else if up, c, m, ok := st.Regime(50); ok && gate != nil {
@@ -160,6 +197,46 @@ func runTrendCore(ctx context.Context, dir string, gate *paper.TrendGate) {
 
 func printTrend(st *trend.State) error {
 	b, err := json.MarshalIndent(st.Score(time.Now()), "", " ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(b))
+	return nil
+}
+
+func printTrendWithBlend(ctx context.Context, st *trend.State, carryDir, dtb3Path string, probePing bool) error {
+	var cs *carry.State
+	if loaded, err := carry.Load(filepath.Join(carryDir, "carry_state.json")); err == nil {
+		cs = loaded
+	}
+	rates, _ := trend.LoadDTB3Rates(dtb3Path)
+	var planPtr *execution.PingExecutionPlan
+	if probePing {
+		venues := execution.ProbeEndpoints(ctx, execution.DefaultEndpoints, 2, 3*time.Second)
+		p := execution.PlanForLatency(venues, time.Now().UTC())
+		planPtr = &p
+	}
+	var blends []trend.BlendSummary
+	if bs, ok := trend.ComputeS36Blend(st, cs, rates, "S36_safe_qd_spot_1x", "S36_qd_carry_blend_spot", planPtr); ok {
+		blends = append(blends, bs)
+	}
+	if bf, ok := trend.ComputeS36Blend(st, cs, rates, "S36_safe_qd_fut_1x", "S36_qd_carry_blend_fut", planPtr); ok {
+		blends = append(blends, bf)
+	}
+	q42Blends := trend.ComputeQ42Blends(st, cs, rates, planPtr)
+	q44Blends := trend.ComputeQ44Blends(st, cs, rates, planPtr)
+	payload := struct {
+		Scorecard []trend.Summary      `json:"scorecard"`
+		S36Blend  []trend.BlendSummary `json:"s36_qd_carry_blend,omitempty"`
+		Q42Blends []trend.BlendSummary `json:"q42_expected_dd_blends,omitempty"`
+		Q44Blends []trend.BlendSummary `json:"q44_vol_harvester_blends,omitempty"`
+	}{
+		Scorecard: st.Score(time.Now()),
+		S36Blend:  blends,
+		Q42Blends: q42Blends,
+		Q44Blends: q44Blends,
+	}
+	b, err := json.MarshalIndent(payload, "", " ")
 	if err != nil {
 		return err
 	}

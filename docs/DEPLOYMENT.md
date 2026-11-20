@@ -132,3 +132,42 @@ If the Raspberry Pi 3B is powered down or network connectivity is lost:
 2. The user can access the fallback dashboard directly on the Pi 5 at:
    `http://piquant-core.local:8080` (or `http://<pi5-ip>:8080`).
 3. When the Pi 3B comes back online, it reconnects automatically with exponential backoff.
+
+---
+
+## 6. Performance Tuning on the Live Pi 5 (applied 2026-11-18)
+
+Measured first: the Pi was about 97% idle (load 0.1). The collector used about 3% CPU, held each minute's ticks in RAM
+and wrote them as gzip once a minute (about 2 MB/hour to the SD card). The bot used about 2% CPU. The real delays are
+network ones (WiFi jitter, plus 70–280 ms to the exchanges), not CPU or disk.
+
+| Change | How | Undo |
+|---|---|---|
+| WiFi power saving off | `/etc/NetworkManager/conf.d/99-wifi-powersave-off.conf` (`wifi.powersave = 2`) plus the `PineLakeCT` profile | delete the file, `nmcli connection modify PineLakeCT 802-11-wireless.powersave 0` |
+| Unused services off | `cups`, `cups-browsed`, `cups.socket`, `cups.path`, `ModemManager` disabled (no printer, no modem) | `sudo systemctl enable --now <unit>` |
+| Recorder and engine pinned to the reserved cores | The boot line has `isolcpus=2,3`, so nothing ran on cores 2–3. `zz-piquant-resilience.conf`: `piquant-collect` gets `CPUAffinity=2`, `piquant` gets `CPUAffinity=3`, normal priority (`scripts/pi_harden.sh` writes the same) | set `CPUAffinity=` (empty) and restart |
+| Recorder files about 6% smaller | gzip best compression in `internal/collect/store.go` (same rows, same readers) | — |
+| Overclock 2.4 → 2.8 GHz | `/boot/firmware/config.txt`: `arm_freq=2800`, `over_voltage_delta=50000` (+50 mV) | `sudo cp /boot/firmware/config.txt.bak-pre-oc /boot/firmware/config.txt` and reboot |
+
+Overclock check: the first test (6 minutes, 67.5 °C) only loaded cores 0–1, because the other two are reserved. A
+second test pinned one job to each of the 4 cores: it peaked at 78.5 °C after 90 s with no throttling
+(`get_throttled=0x0`), and 24 SHA-256 checks all matched. Sustained full load on all 4 cores would reach the 80 °C
+soft limit, where the firmware lowers the clock a little; normal load is about 5%, at about 55 °C.
+
+Space on the desktop (2026-11-18): `~/piquant-collect/pqbin` (the 2024 Binance trade months) was packed with
+`scripts/zstd_pack.sh`. That's lossless and each file is hash-checked before its original is removed. Restore one with
+`zstd -d --long=27 FILE.pqbin.zst` before running `backtest-ticks` on it. `historical_l2` was re-gzipped at level 9
+(same bytes when unzipped, about 10% smaller).
+
+Already in place before this (`/etc/sysctl.d/99-piquant-rt.conf`): 16 MB socket buffers, busy polling, TCP Fast Open,
+swappiness 1. The performance CPU governor was also already set.
+
+Not done, on purpose:
+- **No custom kernel or kernel bypass.** DPDK/AF_XDP-style bypass saves microseconds, while the WiFi hop and the
+  internet path to the exchanges cost tens to hundreds of milliseconds. A custom kernel on the remote recorder could
+  also leave it unbootable.
+- **The 16K-page kernel is not switched on.** `kernel=kernel8.img` keeps 4K pages, which Waydroid needs.
+- **No tmpfs for data.** The Linux page cache already keeps the data in RAM: 5.4 GB of the 8 GB is cache.
+
+The biggest remaining win needs a person: **get the Ethernet cable to link** (`eth0` shows no carrier and 0 link changes since boot, so the cable is not making contact at one end). WiFi to the router averages
+14–40 ms with spikes over 100 ms; a cable would be about 1 ms.

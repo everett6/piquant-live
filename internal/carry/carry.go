@@ -13,11 +13,12 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"piquant-live/internal/durable"
 )
 
 const (
@@ -229,8 +230,9 @@ func FundingURL(symbol, month string) string {
 }
 
 // Load reads the state (os.ErrNotExist when there is none yet).
+// A main file that is empty or broken falls back to the previous good copy (path.bak).
 func Load(path string) (*State, error) {
-	b, err := os.ReadFile(path)
+	b, _, err := durable.ReadJSON(path)
 	if err != nil {
 		return nil, err
 	}
@@ -247,17 +249,9 @@ func Load(path string) (*State, error) {
 	return &st, nil
 }
 
-// Save writes the state atomically.
+// Save writes the state so that a power cut cannot leave it empty, keeping the previous copy as path.bak.
 func (st *State) Save(path string) error {
-	b, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return durable.WriteJSON(path, st, "  ")
 }
 
 // Summary is a one-line report.

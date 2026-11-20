@@ -1,0 +1,300 @@
+{
+ "n_trials": 757,
+ "window": [
+  "2021-01-01",
+  "2026-11-01"
+ ],
+ "regime_months": {
+  "bull": 31,
+  "bear": 23,
+  "flat": 16
+ },
+ "variants": {
+  "P1_2x": {
+   "us-futures": {
+    "geo_monthly_pct": 3.643688089116122,
+    "months": 70,
+    "max_dd_pct": -83.92925947922734,
+    "sharpe": 0.9323454905626318,
+    "worst_day_pct": -32.475319301820846,
+    "A_geo_monthly_pct": 3.3230227569089323,
+    "y2022_geo_monthly_pct": -9.573847243416287,
+    "by_regime": {
+     "bear": -11.201861210004674,
+     "flat": -4.138184222510441,
+     "bull": 25.582706170485608
+    }
+   },
+   "us-futures-stress": {
+    "geo_monthly_pct": -3.2370521401893635,
+    "months": 70,
+    "max_dd_pct": -97.67007747617255,
+    "sharpe": -0.043708649678021426,
+    "worst_day_pct": -32.90731930182085,
+    "A_geo_monthly_pct": -3.3876870985534477,
+    "y2022_geo_monthly_pct": -12.553755933287944,
+    "by_regime": {
+     "bear": -14.335122817962024,
+     "flat": -10.064408026263324,
+     "bull": 13.916404018713543
+    }
+   }
+  },
+  "R1_1x": {
+   "us-futures": {
+    "geo_monthly_pct": 2.568335651606881,
+    "months": 70,
+    "max_dd_pct": -56.9453236311056,
+    "sharpe": 0.9323454905626318,
+    "worst_day_pct": -16.237659650910423,
+    "A_geo_monthly_pct": 2.0501403235855222,
+    "y2022_geo_monthly_pct": -4.419518734286749,
+    "by_regime": {
+     "bear": -5.485234360773886,
+     "flat": -1.8035480349093782,
+     "bull": 12.559968424728346
+    }
+   },
+   "us-futures-stress": {
+    "geo_monthly_pct": -0.8892671181419948,
+    "months": 70,
+    "max_dd_pct": -78.21498788624675,
+    "sharpe": -0.043708649678021426,
+    "worst_day_pct": -16.453659650910424,
+    "A_geo_monthly_pct": -1.3164929644671504,
+    "y2022_geo_monthly_pct": -5.992077395177513,
+    "by_regime": {
+     "bear": -7.229894310597365,
+     "flat": -4.892204456306107,
+     "bull": 7.29977868828719
+    }
+   }
+  },
+  "R2_1p5x": {
+   "us-futures": {
+    "geo_monthly_pct": 3.2997870776486895,
+    "months": 70,
+    "max_dd_pct": -73.1927026601861,
+    "sharpe": 0.932345490562632,
+    "worst_day_pct": -24.356489476365635,
+    "A_geo_monthly_pct": 2.7842371902794976,
+    "y2022_geo_monthly_pct": -6.905879305368125,
+    "by_regime": {
+     "bear": -8.325330614845262,
+     "flat": -2.9044403249364175,
+     "bull": 19.054045474740388
+    }
+   },
+   "us-futures-stress": {
+    "geo_monthly_pct": -1.8822623466629982,
+    "months": 70,
+    "max_dd_pct": -92.02033779203025,
+    "sharpe": -0.04370864967802129,
+    "worst_day_pct": -24.680489476365633,
+    "A_geo_monthly_pct": -2.2615290810326982,
+    "y2022_geo_monthly_pct": -9.20425963916581,
+    "by_regime": {
+     "bear": -10.80956010540488,
+     "flat": -7.447175568587,
+     "bull": 10.728310083881974
+    }
+   }
+  },
+  "G1_fixed_level": {
+   "us-futures": {
+    "geo_monthly_pct": 3.6968216730603825,
+    "months": 70,
+    "max_dd_pct": -82.64653784278629,
+    "sharpe": 0.968245467866497,
+    "worst_day_pct": -24.895748935144518,
+    "A_geo_monthly_pct": 3.3230227569089323,
+    "y2022_geo_monthly_pct": -9.573847243416287,
+    "by_regime": {
+     "bear": -9.73637441256663,
+     "flat": -4.9279334703373046,
+     "bull": 24.07998199192476
+    }
+   },
+   "us-futures-stress": {
+    "geo_monthly_pct": -2.56350848297162,
+    "months": 70,
+    "max_dd_pct": -96.5911062191717,
+    "sharpe": -0.08808293149745834,
+    "worst_day_pct": -25.327748935144523,
+    "A_geo_monthly_pct": -3.3876870985534477,
+    "y2022_geo_monthly_pct": -12.553755933287944,
+    "by_regime": {
+     "bear": -12.68461383907892,
+     "flat": -10.293267841322926,
+     "bull": 13.728494884569642
+    }
+   }
+  },
+  "G1_fixed_level_line": {
+   "us-futures": {
+    "geo_monthly_pct": 3.562286615912723,
+    "months": 70,
+    "max_dd_pct": -80.4822968252107,
+    "sharpe": 0.9323454905626324,
+    "worst_day_pct": -29.464712037431678,
+    "A_geo_monthly_pct": 3.1460561901203463,
+    "y2022_geo_monthly_pct": -8.563419005753271,
+    "by_regime": {
+     "bear": -10.132273897139232,
+     "flat": -3.6651982182980762,
+     "bull": 23.163283545127744
+    }
+   },
+   "us-futures-stress": {
+    "geo_monthly_pct": -2.6926569425563525,
+    "months": 70,
+    "max_dd_pct": -96.1890701634858,
+    "sharpe": -0.04370864967802143,
+    "worst_day_pct": -29.856663706385916,
+    "A_geo_monthly_pct": -2.9494484966109917,
+    "y2022_geo_monthly_pct": -11.295956497138485,
+    "by_regime": {
+     "bear": -13.035442467514544,
+     "flat": -9.0871117761848,
+     "bull": 12.766524534770973
+    }
+   }
+  },
+  "G2_relative_level": {
+   "us-futures": {
+    "geo_monthly_pct": 2.481164970409314,
+    "months": 70,
+    "max_dd_pct": -83.88647087669379,
+    "sharpe": 0.7714358184855573,
+    "worst_day_pct": -27.632443228000337,
+    "A_geo_monthly_pct": 3.7111089679987135,
+    "y2022_geo_monthly_pct": -9.573847243416287,
+    "by_regime": {
+     "bear": -10.69211516404561,
+     "flat": -4.092897980103448,
+     "bull": 21.160785104806372
+    }
+   },
+   "us-futures-stress": {
+    "geo_monthly_pct": -3.33358433498354,
+    "months": 70,
+    "max_dd_pct": -97.52299974721684,
+    "sharpe": -0.21491571683870483,
+    "worst_day_pct": -27.848443228000335,
+    "A_geo_monthly_pct": -2.502061296901655,
+    "y2022_geo_monthly_pct": -12.553755933287944,
+    "by_regime": {
+     "bear": -13.774073773628146,
+     "flat": -9.13118343457068,
+     "bull": 12.059821365919694
+    }
+   }
+  },
+  "G2_relative_level_line": {
+   "us-futures": {
+    "geo_monthly_pct": 3.485028867516708,
+    "months": 70,
+    "max_dd_pct": -78.06233566077798,
+    "sharpe": 0.9323454905626319,
+    "worst_day_pct": -27.611844210613658,
+    "A_geo_monthly_pct": 3.023763844683164,
+    "y2022_geo_monthly_pct": -7.953907513198903,
+    "by_regime": {
+     "bear": -9.475520159418902,
+     "flat": -3.3831764376473132,
+     "bull": 21.672554939220685
+    }
+   },
+   "us-futures-stress": {
+    "geo_monthly_pct": -2.3822028565596285,
+    "months": 70,
+    "max_dd_pct": -94.91813483076083,
+    "sharpe": -0.04370864967802172,
+    "worst_day_pct": -27.979148272757744,
+    "A_geo_monthly_pct": -2.6917584138335133,
+    "y2022_geo_monthly_pct": -10.531038996276704,
+    "by_regime": {
+     "bear": -12.230881155026394,
+     "flat": -8.489541314536947,
+     "bull": 12.039299145548735
+    }
+   }
+  }
+ },
+ "gate": {
+  "G1_fixed_level": {
+   "avg_leverage_trend_on": 1.8145910599733277,
+   "BTC": {
+    "share_of_trend_on_days_gated": 0.16696113074204946,
+    "gated_days": 189,
+    "next_day_pct": {
+     "gated": 0.24807979932358967,
+     "ungated": 0.188833217213893
+    },
+    "next_7d_pct": {
+     "gated": 1.1848920710560835,
+     "ungated": 1.1352704987490505
+    }
+   },
+   "ETH": {
+    "share_of_trend_on_days_gated": 0.20385674931129477,
+    "gated_days": 222,
+    "next_day_pct": {
+     "gated": 0.3591750666137611,
+     "ungated": 0.25741330903464904
+    },
+    "next_7d_pct": {
+     "gated": 3.1436295272197885,
+     "ungated": 1.2508534634030266
+    }
+   }
+  },
+  "G2_relative_level": {
+   "avg_leverage_trend_on": 1.7004817691855918,
+   "BTC": {
+    "share_of_trend_on_days_gated": 0.2941696113074205,
+    "gated_days": 333,
+    "next_day_pct": {
+     "gated": 0.3684233607039301,
+     "ungated": 0.1279997832170849
+    },
+    "next_7d_pct": {
+     "gated": 2.0725333254129032,
+     "ungated": 0.7563843359042022
+    }
+   },
+   "ETH": {
+    "share_of_trend_on_days_gated": 0.30486685032139577,
+    "gated_days": 332,
+    "next_day_pct": {
+     "gated": 0.504905410489889,
+     "ungated": 0.1787128235649307
+    },
+    "next_7d_pct": {
+     "gated": 3.100208319985959,
+     "ungated": 0.9948567312785715
+    }
+   }
+  }
+ },
+ "checks": {
+  "G1_fixed_level": {
+   "bear_ge_P1_plus_3": false,
+   "return_ge_line": true,
+   "max_dd_no_worse_than_line": false,
+   "A_positive": true,
+   "stress_ge_P1_stress": true
+  },
+  "G2_relative_level": {
+   "bear_ge_P1_plus_3": false,
+   "return_ge_line": false,
+   "max_dd_no_worse_than_line": false,
+   "A_positive": true,
+   "stress_ge_P1_stress": false
+  }
+ },
+ "pass": {
+  "G1_fixed_level": false,
+  "G2_relative_level": false
+ }
+}

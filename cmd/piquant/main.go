@@ -76,12 +76,20 @@ func main() {
 		err = runUnlock(args)
 	case "collect":
 		err = runCollect(ctx, args)
+	case "backfill-gaps":
+		err = runBackfillGaps(ctx, args)
 	case "extract":
 		err = runExtract(ctx, args)
 	case "trend":
 		err = runTrend(args)
 	case "news":
 		err = runNews(ctx, args)
+	case "ping":
+		err = runPing(ctx, args)
+	case "schwab":
+		err = runSchwab(ctx, args)
+	case "execute":
+		err = runExecute(ctx, args)
 	case "version", "-v", "--version":
 		printVersion()
 	case "help", "-h", "--help":
@@ -119,9 +127,13 @@ func usage() {
   piquant carry       PREREG19 funding-carry paper ledger (monthly; --once to advance)
   piquant alert-test  send a test email using ~/.config/piquant/alert.env
   piquant collect     record live prices + news and backfill history (dev PC)
+  piquant backfill-gaps  fetch trades missing from ticks/ (id gaps) into ticks_backfill/ (--dir --from --to --dry-run)
   piquant trend       PREREG6 forward paper test of the SMA50 trend filter (--once, --report)
   piquant extract     score stored headlines with a local LLM (Ollama)
   piquant news        macro & micro news intelligence oracle with exploit defense
+  piquant ping        measure venue TCP/HTTP ping and compute latency-safe execution plan
+  piquant schwab      Charles Schwab v1 OAuth2 + read-only ETF rebalance preview (IBIT/ETHA/SGOV)
+  piquant execute     safe live-ready spot execution router (dry-run default; live requires dual arm)
   piquant version     print build information
 
 Run "piquant <command> -h" for the options of one command.

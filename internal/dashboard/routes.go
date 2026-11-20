@@ -16,16 +16,20 @@ import (
 	"time"
 
 	"piquant-live/internal/backtest"
+	"piquant-live/internal/carry"
 	"piquant-live/internal/cluster"
 	"piquant-live/internal/discovery"
+	"piquant-live/internal/execution"
 	"piquant-live/internal/experiment"
 	"piquant-live/internal/macro"
 	"piquant-live/internal/models"
 	"piquant-live/internal/models/common"
 	"piquant-live/internal/paper"
+	"piquant-live/internal/quant/alpha"
 	"piquant-live/internal/quant/orchestrator"
 	"piquant-live/internal/secrets"
 	"piquant-live/internal/tax"
+	"piquant-live/internal/trend"
 )
 
 // routes registers every handler.
@@ -57,6 +61,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/paper/blotter", s.handlePaperBlotter)
 	s.mux.HandleFunc("/api/paper/dryrun", s.handlePaperDryRun)
 	s.mux.HandleFunc("/api/paper/tearsheet", s.handlePaperTearSheet)
+	s.mux.HandleFunc("/api/paper/trend-blend", s.handlePaperTrendBlend)
+	s.mux.HandleFunc("/api/recorder", s.handleRecorder)
+	s.mux.HandleFunc("/api/paper/alpha-decay", s.handlePaperAlphaDecay)
+	s.mux.HandleFunc("/api/paper/shadow-queue", s.handlePaperShadowQueue)
+	s.mux.HandleFunc("/api/paper/schwab-plan", s.handlePaperSchwabPlan)
 	s.mux.HandleFunc("/api/paper/reports", s.handlePaperReports)
 	s.mux.HandleFunc("/api/paper/reports/latest", s.handlePaperReportsLatest)
 	s.mux.HandleFunc("/api/paper/recent-windows", s.handlePaperRecentWindows)
@@ -1827,6 +1836,273 @@ func (s *Server) handlePaperMFT(w http.ResponseWriter, r *http.Request) {
 		"positions":       st.Positions,
 		"leverage":        st.Leverage,
 		"scalping_state":  st.ScalpingState,
+	})
+}
+
+func (s *Server) resolveTrendDir() string {
+	if s.opts.TrendDir != "" {
+		return s.opts.TrendDir
+	}
+	for _, dp := range s.opts.DataDirs {
+		cand := filepath.Join(dp, "trend")
+		if _, err := os.Stat(filepath.Join(cand, "trend_state.json")); err == nil {
+			return cand
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "piquant-data", "trend")
+	}
+	return "data/trend"
+}
+
+func (s *Server) resolveCarryDir() string {
+	if s.opts.CarryDir != "" {
+		return s.opts.CarryDir
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "piquant-collect", "carry")
+	}
+	return "data/carry"
+}
+
+// handleRecorder returns the tick recorder's own status files (ticks_status.json and status.json in the
+// collect directory, the parent of the carry directory) with their age in seconds. Missing files are null.
+func (s *Server) handleRecorder(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	dir := filepath.Dir(s.resolveCarryDir())
+	out := map[string]any{"dir": dir}
+	for key, name := range map[string]string{"ticks": "ticks_status.json", "collector": "status.json"} {
+		path := filepath.Join(dir, name)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			out[key] = nil
+			continue
+		}
+		var v map[string]any
+		if json.Unmarshal(b, &v) != nil {
+			out[key] = nil
+			continue
+		}
+		if fi, err := os.Stat(path); err == nil {
+			v["age_seconds"] = time.Since(fi.ModTime()).Seconds()
+		}
+		out[key] = v
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) resolveDTB3Path() string {
+	if s.opts.DTB3Path != "" {
+		return s.opts.DTB3Path
+	}
+	for _, dp := range s.opts.DataDirs {
+		cand := filepath.Join(dp, "macro", "DTB3.csv")
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "piquant-data", "macro", "DTB3.csv")
+	}
+	return ""
+}
+
+func (s *Server) resolvePingPlan(r *http.Request) *execution.PingExecutionPlan {
+	force := r.URL.Query().Get("probe") == "1"
+	s.pingMu.Lock()
+	defer s.pingMu.Unlock()
+	if !force && s.cachedPingPlan != nil && time.Since(s.cachedPingAt) < 10*time.Minute {
+		cp := *s.cachedPingPlan
+		return &cp
+	}
+	if s.opts.DisableLivePing {
+		p := execution.PlanForLatency(nil, time.Now().UTC())
+		s.cachedPingPlan = &p
+		s.cachedPingAt = time.Now()
+		return &p
+	}
+	lats := execution.ProbeEndpoints(r.Context(), execution.DefaultEndpoints, 2, 1500*time.Millisecond)
+	p := execution.PlanForLatency(lats, time.Now().UTC())
+	s.cachedPingPlan = &p
+	s.cachedPingAt = time.Now()
+	cp := p
+	return &cp
+}
+
+// handlePaperTrendBlend exposes the PREREG6/35/36 daily trend scorecard, S36_qd_carry_blend
+// composite target weights (70% Safe-QD + idle DTB3 + 30% C1 Carry), and ping execution plan.
+func (s *Server) handlePaperTrendBlend(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	tPath := filepath.Join(s.resolveTrendDir(), "trend_state.json")
+	st, err := trend.Load(tPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if st == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":    "uninitialized",
+			"path":      tPath,
+			"ping_plan": s.resolvePingPlan(r),
+		})
+		return
+	}
+
+	cState, _ := carry.Load(filepath.Join(s.resolveCarryDir(), "carry_state.json"))
+	rates, _ := trend.LoadDTB3Rates(s.resolveDTB3Path())
+	plan := s.resolvePingPlan(r)
+
+	scorecard := st.Score(time.Now().UTC())
+	blends := make([]trend.BlendSummary, 0, 2)
+	if bs, ok := trend.ComputeS36Blend(st, cState, rates, "S36_safe_qd_spot_1x", "S36_qd_carry_blend_spot", plan); ok {
+		blends = append(blends, bs)
+	}
+	if bf, ok := trend.ComputeS36Blend(st, cState, rates, "S36_safe_qd_fut_1x", "S36_qd_carry_blend_fut", plan); ok {
+		blends = append(blends, bf)
+	}
+	q42Blends := trend.ComputeQ42Blends(st, cState, rates, plan)
+	q44Blends := trend.ComputeQ44Blends(st, cState, rates, plan)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":                   "ok",
+		"last_date":                st.LastDate,
+		"scorecard":                scorecard,
+		"s36_qd_carry_blend":       blends,
+		"q42_expected_dd_blends":   q42Blends,
+		"q44_vol_harvester_blends": q44Blends,
+		"venue_leverage_profiles":  paper.SupportedVenueProfiles(),
+		"ping_plan":                plan,
+	})
+}
+
+// handlePaperSchwabPlan returns a read-only Charles Schwab v1 ETF proxy preview (IBIT, ETHA, SGOV)
+// aligned to the chosen composite blend (default: Q42_dualspeed_60_40_carry_spot).
+func (s *Server) handlePaperSchwabPlan(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	tPath := filepath.Join(s.resolveTrendDir(), "trend_state.json")
+	st, err := trend.Load(tPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if st == nil {
+		st = trend.NewState("")
+	}
+	cState, _ := carry.Load(filepath.Join(s.resolveCarryDir(), "carry_state.json"))
+	rates, _ := trend.LoadDTB3Rates(s.resolveDTB3Path())
+
+	selector := r.URL.Query().Get("portfolio")
+	navUSD := 0.0
+	if rawNav := strings.TrimSpace(r.URL.Query().Get("nav")); rawNav != "" {
+		if parsed, perr := strconv.ParseFloat(rawNav, 64); perr == nil && parsed > 0 {
+			navUSD = parsed
+		}
+	}
+	blend, ok := trend.SelectBlend(st, cState, rates, selector, nil)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or unavailable portfolio selector"})
+		return
+	}
+	creds := execution.LoadSchwabCredentials(s.opts.SchwabEnvPath)
+	client := &http.Client{Timeout: 8 * time.Second}
+	plan := execution.BuildSchwabPlanFromTargets(
+		r.Context(), client, creds,
+		s.opts.SchwabTokenURL, s.opts.SchwabMarketDataBase, s.opts.SchwabTraderBase,
+		blend.Name, blend.TargetBTCPortPct, blend.TargetETHPortPct, blend.IdleTrendCashPct, blend.CarrySleevePct, navUSD,
+	)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"blend":  blend,
+		"schwab": plan,
+	})
+}
+
+// handlePaperAlphaDecay runs the causal MFT alpha-decay detector & Multiplicative-Weights
+// self-improving sleeve allocator across live tracked ledgers (Safe-QD, R3 Fast-Exit, C1 Carry, DTB3).
+func (s *Server) handlePaperAlphaDecay(w http.ResponseWriter, r *http.Request) {
+	if s.authenticate(r) == authNone {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	st, err := trend.Load(filepath.Join(s.resolveTrendDir(), "trend_state.json"))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if st == nil {
+		st = trend.NewState("")
+	}
+	cState, _ := carry.Load(filepath.Join(s.resolveCarryDir(), "carry_state.json"))
+	rates, _ := trend.LoadDTB3Rates(s.resolveDTB3Path())
+
+	extractRets := func(name string) []float64 {
+		l := st.Ledgers[name]
+		if l == nil {
+			return nil
+		}
+		out := make([]float64, len(l.Days))
+		for i, d := range l.Days {
+			out[i] = d.Ret
+		}
+		return out
+	}
+	qdRets := extractRets("Q42_safe_qd_spot_1x")
+	r3Rets := extractRets("Q42_r3_fastexit_qd_spot_1x")
+	n := len(qdRets)
+	if len(r3Rets) < n {
+		n = len(r3Rets)
+	}
+
+	carryMap := map[string]float64{}
+	if cState != nil {
+		for _, d := range cState.Days {
+			carryMap[d.Date] = d.Ret
+		}
+	}
+	latestRate := 0.0
+	if l := st.Ledgers["Q42_safe_qd_spot_1x"]; l != nil && n > 0 {
+		firstDate := l.Days[0].Date
+		var latestRateDate string
+		for d, rVal := range rates {
+			if d <= firstDate && d > latestRateDate {
+				latestRateDate = d
+				latestRate = rVal
+			}
+		}
+	}
+	carryRets := make([]float64, n)
+	dtb3Rets := make([]float64, n)
+	if l := st.Ledgers["Q42_safe_qd_spot_1x"]; l != nil && n > 0 {
+		for i := 0; i < n; i++ {
+			date := l.Days[i].Date
+			carryRets[i] = carryMap[date]
+			if rv, ok := rates[date]; ok {
+				latestRate = rv
+			}
+			dtb3Rets[i] = latestRate / 100.0 / 365.0
+		}
+	}
+
+	alloc := alpha.RunSelfImprovingLoop(map[string][]float64{
+		"qd":    qdRets[:n],
+		"r3":    r3Rets[:n],
+		"carry": carryRets,
+		"dtb3":  dtb3Rets,
+	}, 0.15, 0.25, 0.70)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":              "ok",
+		"last_date":           st.LastDate,
+		"self_improving_loop": alloc,
 	})
 }
 
