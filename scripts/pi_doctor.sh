@@ -29,6 +29,7 @@ fi
 row "memory" "$(free -h | awk '/Mem/{print $3" used of "$2}')"
 row "disk free (home)" "$(df -h ~ | awk 'NR==2{print $4" free, "$5" used"}')"
 row "clock" "$(timedatectl show -p NTPSynchronized --value 2>/dev/null | sed 's/yes/NTP synced/;s/no/NOT synced/')"
+row "DNS" "$(if [ -r /etc/resolv.conf ]; then awk '/^[[:space:]]*nameserver[[:space:]]+/{printf "%s%s", sep, $2; sep=", "} END{if(!sep) printf "none"}' /etc/resolv.conf; else echo "unreadable"; fi)"
 row "kernel cmdline extras" "$(tr ' ' '\n' </proc/cmdline | grep -E 'isolcpus|nohz_full|rcu_nocbs|nosoftlockup' | tr '\n' ' ')"
 row "hardware watchdog" "$(systemctl show -p RuntimeWatchdogUSec --value 2>/dev/null) (0 = off)"
 echo "Kernel messages this boot (errors that matter)"
@@ -120,5 +121,30 @@ if os.path.exists(hwm_p):
         row("exec_hwm", f"UNREADABLE ({e.__class__.__name__})")
 else:
     row("exec_hwm", "absent")
+
+tb_dir = os.path.expanduser("~/piquant-collect/ticks_backfill")
+if os.path.isdir(tb_dir):
+    tb_files = [
+        os.path.join(root, f)
+        for root, _, files in os.walk(tb_dir)
+        for f in files
+    ]
+    tb_bytes = 0
+    for f in tb_files:
+        try:
+            tb_bytes += os.path.getsize(f)
+        except OSError:
+            pass
+    if tb_bytes >= 1024 ** 3:
+        tb_sz = f"{tb_bytes / (1024 ** 3):.2f} GiB"
+    elif tb_bytes >= 1024 ** 2:
+        tb_sz = f"{tb_bytes / (1024 ** 2):.1f} MiB"
+    elif tb_bytes >= 1024:
+        tb_sz = f"{tb_bytes / 1024:.1f} KiB"
+    else:
+        tb_sz = f"{tb_bytes} B"
+    row("ticks_backfill", f"{len(tb_files)} files, {tb_sz}")
+else:
+    row("ticks_backfill", "absent")
 PY
 REMOTE

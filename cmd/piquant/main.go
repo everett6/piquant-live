@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -154,6 +155,22 @@ func defaultDataDir() string {
 		return home + "/piquant-data"
 	}
 	return "data"
+}
+
+// defaultTrendDir is where the forward trend ledger lives, preferring <data>/trend
+// and falling back to ~/piquant-trend only when legacy state exists there while <data>/trend does not.
+func defaultTrendDir() string {
+	cand := filepath.Join(defaultDataDir(), "trend")
+	if _, err := os.Stat(filepath.Join(cand, "trend_state.json")); err == nil {
+		return cand
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		legacy := filepath.Join(home, "piquant-trend")
+		if _, err := os.Stat(filepath.Join(legacy, "trend_state.json")); err == nil {
+			return legacy
+		}
+	}
+	return cand
 }
 
 // defaultLogDir is where the services write their logs.

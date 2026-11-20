@@ -27,7 +27,7 @@ const prereg6Date = "2026-11-11"
 func runTrend(args []string) error {
 	fs := flag.NewFlagSet("trend", flag.ContinueOnError)
 	home, _ := os.UserHomeDir()
-	dir := fs.String("dir", filepath.Join(home, "piquant-trend"), "state directory")
+	dir := fs.String("dir", defaultTrendDir(), "state directory")
 	carryDir := fs.String("carry-dir", filepath.Join(home, "piquant-collect", "carry"), "carry state directory for S36 blend")
 	dtb3Path := fs.String("dtb3", filepath.Join(home, "piquant-data", "macro", "DTB3.csv"), "FRED DTB3 CSV path")
 	once := fs.Bool("once", false, "advance once and exit")

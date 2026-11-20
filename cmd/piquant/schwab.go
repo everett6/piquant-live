@@ -20,7 +20,7 @@ func runSchwab(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("schwab", flag.ContinueOnError)
 	home, _ := os.UserHomeDir()
 	envPath := fs.String("env", execution.DefaultSchwabEnvPath(), "Schwab credentials file (SCHWAB_APP_KEY, SCHWAB_APP_SECRET, SCHWAB_REFRESH_TOKEN)")
-	dir := fs.String("dir", filepath.Join(home, "piquant-trend"), "trend state directory")
+	dir := fs.String("dir", defaultTrendDir(), "trend state directory")
 	carryDir := fs.String("carry-dir", filepath.Join(home, "piquant-collect", "carry"), "carry state directory")
 	dtb3Path := fs.String("dtb3", filepath.Join(home, "piquant-data", "macro", "DTB3.csv"), "FRED DTB3 CSV path")
 	authURL := fs.Bool("auth-url", false, "print the Schwab v1 OAuth2 consent URL and exit")

@@ -114,7 +114,7 @@ func parseExecuteOptions(args []string) (executeOptions, error) {
 	dryRun := fs.Bool("dry-run", true, "simulate orders without submitting to the exchange (requires --dry-run=false + --confirm-live + PIQUANT_LIVE_ARM=YES for live)")
 	venue := fs.String("venue", "coinbase-spot", "execution venue (coinbase-spot)")
 	portfolio := fs.String("portfolio", "q42_dualspeed", "target portfolio: q42_dualspeed | q42_balanced | q44_bh_harvester | q44_barbell | s36_spot | s36_fut")
-	dir := fs.String("dir", filepath.Join(home, "piquant-trend"), "trend state directory")
+	dir := fs.String("dir", defaultTrendDir(), "trend state directory")
 	carryDir := fs.String("carry-dir", filepath.Join(home, "piquant-collect", "carry"), "carry state directory")
 	dtb3Path := fs.String("dtb3", filepath.Join(home, "piquant-data", "macro", "DTB3.csv"), "FRED DTB3 CSV path")
 	dataDir := fs.String("data", defaultData, "data directory (default $PIQUANT_DATA_DIR or ~/piquant-data)")

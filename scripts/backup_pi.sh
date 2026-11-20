@@ -79,6 +79,10 @@ PI=$(pi_host) || { echo "Pi not reachable (tried \$PI, raspberrypi.local, cached
 
 TARGETS=(
   "piquant-data/paper"
+  "piquant-data/trend"
+  "piquant-data/macro"
+  "piquant-data/carry"
+  "piquant-data/config"
   "piquant-trend"
   "piquant-collect/carry"
   "PiQuant/piquant-live/research/quant_lab/results/auto_discover_state.json"

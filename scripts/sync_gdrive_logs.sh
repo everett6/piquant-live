@@ -37,16 +37,24 @@ if [ "$SKIP_PULL" -eq 0 ]; then
   mkdir -p "$ARCHIVE_DIR"
   RSYNC_FLAGS=(-az "--exclude=${TODAY_UTC}*")
   [ "$DRY" -eq 1 ] && RSYNC_FLAGS+=(--dry-run --itemize-changes)
-  rsync "${RSYNC_FLAGS[@]}" \
-    "$PI:piquant-collect/prices" \
-    "$PI:piquant-collect/ticks" \
-    "$PI:piquant-collect/book" \
-    "$PI:piquant-collect/news" \
-    "$PI:PiQuant/piquant-live/research/quant_lab/results/auto_discover_log.jsonl" \
-    "$ARCHIVE_DIR/"
+  PULL_SOURCES=(
+    "$PI:piquant-collect/prices"
+    "$PI:piquant-collect/ticks"
+    "$PI:piquant-collect/book"
+    "$PI:piquant-collect/news"
+    "$PI:PiQuant/piquant-live/research/quant_lab/results/auto_discover_log.jsonl"
+  )
+  if ssh -o ConnectTimeout=10 -o BatchMode=yes "$PI" 'test -d "$HOME/piquant-collect/ticks_backfill"' >/dev/null 2>&1; then
+    PULL_SOURCES+=("$PI:piquant-collect/ticks_backfill")
+  fi
+  rsync "${RSYNC_FLAGS[@]}" "${PULL_SOURCES[@]}" "$ARCHIVE_DIR/"
 fi
 
 if command -v rclone >/dev/null 2>&1 && rclone listremotes 2>/dev/null | grep -qx 'gdrive:'; then
+  if ! rclone lsd gdrive: --contimeout 5s --timeout 10s >/dev/null 2>&1; then
+    echo "sync_gdrive_logs: skipping Drive upload (run '~/.local/bin/rclone config reconnect gdrive:' to authorize)"
+    exit 0
+  fi
   RCLONE_FLAGS=(copy --fast-list --transfers 4 --ignore-existing)
   [ "$DRY" -eq 1 ] && RCLONE_FLAGS+=(--dry-run)
   rclone "${RCLONE_FLAGS[@]}" "$ARCHIVE_DIR" "gdrive:PiQuant/LiveLogs"

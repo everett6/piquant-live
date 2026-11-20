@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -417,5 +418,76 @@ func TestExecuteLiveOrderTTLCancelAndCoinbaseAccounts(t *testing.T) {
 		if !res.CancelledOnTTL || res.Receipt.Status != "CANCELLED" {
 			t.Fatalf("expected CancelledOnTTL=true & CANCELLED status, got %+v", res)
 		}
+	}
+}
+
+func TestDefaultTrendDir(t *testing.T) {
+	touchTrendState := func(t *testing.T, dir string) {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "trend_state.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatalf("write trend_state.json in %s: %v", dir, err)
+		}
+	}
+
+	cases := []struct {
+		name       string
+		hasData    bool
+		hasLegacy  bool
+		wantLegacy bool
+	}{
+		{
+			name:    "resolves data trend dir when state exists",
+			hasData: true,
+		},
+		{
+			name:      "prefers data trend dir over legacy when both exist",
+			hasData:   true,
+			hasLegacy: true,
+		},
+		{
+			name:       "falls back to legacy home dir only when data state absent",
+			hasLegacy:  true,
+			wantLegacy: true,
+		},
+		{
+			name: "defaults to data trend dir when neither exists",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			home := filepath.Join(root, "home")
+			dataDir := filepath.Join(root, "data")
+			t.Setenv("HOME", home)
+			t.Setenv("PIQUANT_DATA_DIR", dataDir)
+
+			dataTrend := filepath.Join(dataDir, "trend")
+			legacyTrend := filepath.Join(home, "piquant-trend")
+			if tc.hasData {
+				touchTrendState(t, dataTrend)
+			}
+			if tc.hasLegacy {
+				touchTrendState(t, legacyTrend)
+			}
+
+			want := dataTrend
+			if tc.wantLegacy {
+				want = legacyTrend
+			}
+			if got := defaultTrendDir(); got != want {
+				t.Fatalf("defaultTrendDir() = %q, want %q", got, want)
+			}
+			opts, err := parseExecuteOptions(nil)
+			if err != nil {
+				t.Fatalf("parseExecuteOptions(nil) failed: %v", err)
+			}
+			if opts.dir != want {
+				t.Fatalf("parseExecuteOptions(nil).dir = %q, want %q", opts.dir, want)
+			}
+		})
 	}
 }
