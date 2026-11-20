@@ -38,12 +38,28 @@ if [ -d /var/log/journal ]; then
   journalctl -b -1 -n 12 --no-pager 2>/dev/null | sed 's/^/  /'
 fi
 echo "Services"
-for s in piquant piquant-collect; do
-  row "$s" "$(systemctl is-active $s), restarts $(systemctl show -p NRestarts --value $s), since $(systemctl show -p ActiveEnterTimestamp --value $s)"
-  row "  scheduling" "$(systemctl show -p CPUSchedulingPolicy -p CPUSchedulingPriority -p CPUAffinity --value $s | tr '\n' ' ')"
+for s in piquant piquant-collect cloudflared-tunnel; do
+  row "$s" "$(systemctl is-active $s 2>/dev/null || echo inactive), restarts $(systemctl show -p NRestarts --value $s 2>/dev/null || echo '?'), since $(systemctl show -p ActiveEnterTimestamp --value $s 2>/dev/null || echo 'n/a')"
+  row "  scheduling" "$(systemctl show -p CPUSchedulingPolicy -p CPUSchedulingPriority -p CPUAffinity --value $s 2>/dev/null | tr '\n' ' ')"
 done
+TIMER_ACTIVE=$(systemctl is-active piquant-discover.timer 2>/dev/null || echo inactive)
+TIMER_NEXT=$(systemctl show -p NextElapseUSecRealtime --value piquant-discover.timer 2>/dev/null || echo n/a)
+DISC_STATUS=$(systemctl show -p ExecMainStatus --value piquant-discover.service 2>/dev/null || echo n/a)
+DISC_EXIT=$(systemctl show -p ExecMainExitTimestamp --value piquant-discover.service 2>/dev/null || echo never)
+row "piquant-discover.timer" "$TIMER_ACTIVE (next: ${TIMER_NEXT:-n/a})"
+row "  last discovery run" "exit=${DISC_STATUS:-n/a}, at=${DISC_EXIT:-never}"
+
 B=/usr/local/bin/piquant
-row "binary" "$(stat -c '%s bytes' $B 2>/dev/null) $($B version 2>/dev/null | head -1)"
+BIN_VER=$($B version 2>/dev/null | head -1)
+SYNCED=$(cat ~/PiQuant/piquant-live/.synced_commit 2>/dev/null || echo none)
+LOCKSTEP="UNKNOWN"
+if [ "$SYNCED" != "none" ] && printf '%s' "$BIN_VER" | grep -q "$SYNCED"; then
+  LOCKSTEP="MATCH ($SYNCED)"
+else
+  LOCKSTEP="MISMATCH (bin='$BIN_VER' synced='$SYNCED')"
+fi
+row "binary" "$(stat -c '%s bytes' $B 2>/dev/null) $BIN_VER"
+row "commit lockstep" "$LOCKSTEP"
 row "rollback binary" "$(stat -c '%s bytes' $B.rollback 2>/dev/null || echo none)"
 echo "Data"
 python3 - <<'PY'
@@ -63,5 +79,46 @@ for p in [os.path.expanduser("~/piquant-data/trend/trend_state.json")] + glob.gl
         row(os.path.basename(p), f"{os.path.getsize(p)} bytes, {extra}")
     except Exception as e:
         row(os.path.basename(p), f"BROKEN ({e.__class__.__name__}); backup {'present' if os.path.exists(p + '.bak') else 'none'}")
+
+res_dir = os.path.expanduser("~/PiQuant/piquant-live/research/quant_lab/results")
+ad_p = os.path.join(res_dir, "auto_discover_state.json")
+if os.path.exists(ad_p):
+    try:
+        ad = json.load(open(ad_p))
+        row("auto_discover_state", f"trials={ad.get('n_trials')}, runs={ad.get('runs')}, acc={ad.get('accepted')}, last={str(ad.get('last_run_utc',''))[:19]}")
+    except Exception as e:
+        row("auto_discover_state", f"UNREADABLE ({e.__class__.__name__})")
+else:
+    row("auto_discover_state", "absent")
+
+sq_p = os.path.join(res_dir, "shadow_candidates.json")
+if os.path.exists(sq_p):
+    try:
+        sq = json.load(open(sq_p))
+        row("shadow_candidates", f"{len(sq) if isinstance(sq, list) else '?'} queued")
+    except Exception as e:
+        row("shadow_candidates", f"UNREADABLE ({e.__class__.__name__})")
+else:
+    row("shadow_candidates", "absent")
+
+sp_p = os.path.join(res_dir, "shadow_paper_state.json")
+if os.path.exists(sp_p):
+    try:
+        sp = json.load(open(sp_p))
+        row("shadow_paper_state", f"count={sp.get('count')}, health={sp.get('health_counts')}")
+    except Exception as e:
+        row("shadow_paper_state", f"UNREADABLE ({e.__class__.__name__})")
+else:
+    row("shadow_paper_state", "absent")
+
+hwm_p = os.path.expanduser("~/piquant-data/paper/exec_hwm.json")
+if os.path.exists(hwm_p):
+    try:
+        hwm = json.load(open(hwm_p))
+        row("exec_hwm", f"peak=${hwm.get('peak_nav_usd')}, last=${hwm.get('last_nav_usd')}, date={hwm.get('daily_date_utc')}")
+    except Exception as e:
+        row("exec_hwm", f"UNREADABLE ({e.__class__.__name__})")
+else:
+    row("exec_hwm", "absent")
 PY
 REMOTE

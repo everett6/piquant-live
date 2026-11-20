@@ -356,6 +356,30 @@ const indexHTML = `<!doctype html>
       </section>
 
       <section class="card span12">
+        <h2>Autonomous Alpha Discovery (LFM3 v2) <span class="meta" id="lvShadowMeta"></span></h2>
+        <div class="lv-kpis" id="lvShadowKpis"></div>
+        <div class="lv-scroll" style="margin-top:10px">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Expression</th>
+                <th>Venue</th>
+                <th class="lv-num">Backtest Geo/mo</th>
+                <th class="lv-num">DSR</th>
+                <th class="lv-num">Live Days</th>
+                <th class="lv-num">Live Return</th>
+                <th>Health</th>
+              </tr>
+            </thead>
+            <tbody id="lvShadowBody">
+              <tr><td colspan="7" class="lv-dim">Loading&hellip;</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="lv-note" id="lvShadowNote">Shadow candidates only advance to forward paper tracking after clearing AST safety, causality future-shock, Purged CV, net-of-fee, and DSR &ge; 0.80 gates.</div>
+      </section>
+
+      <section class="card span12">
         <h2>This computer <span class="meta" id="lvHostMeta"></span></h2>
         <div class="lv-kpis" id="lvHostKpis"></div>
       </section>
@@ -2037,11 +2061,83 @@ const indexHTML = `<!doctype html>
       lvStat("Disk used", d ? d.used_percent.toFixed(0) + "%" : "&ndash;", d ? (d.free_bytes/1073741824).toFixed(0) + " GB free" : "") +
       lvStat("Up for", h.uptime_seconds != null ? lvAge(h.uptime_seconds).replace(" ago", "") : "&ndash;", "since last boot");
   }
+  function lvRenderShadow(sq, ad){
+    var st = (sq && sq.state) || null;
+    var cands = (sq && Array.isArray(sq.shadow_candidates)) ? sq.shadow_candidates : [];
+    var sp = (sq && sq.shadow_paper) || null;
+    var spList = (sp && Array.isArray(sp.candidates)) ? sp.candidates : [];
+    var loop = (ad && ad.self_improving_loop) || null;
+
+    var lastRunTxt = "none yet";
+    if (st && st.last_run_utc) {
+      var lr = Date.parse(st.last_run_utc);
+      lastRunTxt = !isNaN(lr) ? lvAge((Date.now() - lr) / 1000) : String(st.last_run_utc).slice(0, 19);
+    }
+    $("lvShadowMeta").textContent = st ? ("last run " + lastRunTxt + " \u00b7 queue " + cands.length) : "not yet initialized on this host";
+
+    var decayVal = "&ndash;";
+    var decaySub = "alpha-decay monitor unavailable";
+    var decayCls = "";
+    if (loop && Array.isArray(loop.sleeves) && loop.sleeves.length) {
+      var minMult = 1.0;
+      var statusList = [];
+      loop.sleeves.forEach(function(sl){
+        if (sl.throttle_mult != null && sl.throttle_mult < minMult) minMult = sl.throttle_mult;
+        if (sl.name && sl.status) statusList.push(sl.name + ":" + sl.status);
+      });
+      decayVal = minMult.toFixed(2) + "x";
+      decaySub = "T-bill share " + ((loop.tbill_safe_share || 0) * 100).toFixed(0) + "% \u00b7 " + (statusList.slice(0, 2).join(", ") || "active");
+      decayCls = minMult < 0.99 ? "lv-neg" : "lv-pos";
+    }
+
+    $("lvShadowKpis").innerHTML =
+      lvStat("Charged trials", st && st.n_trials != null ? String(st.n_trials) : "&ndash;", "cumulative anti-overfit budget") +
+      lvStat("Discovery runs", st && st.runs != null ? String(st.runs) : "&ndash;", (st && st.rejected != null ? st.rejected + " rejected" : "awaiting first run")) +
+      lvStat("Shadow queue", String(cands.length), cands.length > 0 ? "active paper overlays" : "quarantined until Gate 4 pass", cands.length > 0 ? "lv-pos" : "") +
+      lvStat("Decay throttle", decayVal, decaySub, decayCls) +
+      lvStat("Last run", lastRunTxt, st && st.last_run_utc ? String(st.last_run_utc).slice(0, 19).replace("T", " ") + " UTC" : "run auto_discover or timer");
+
+    if (!cands.length) {
+      $("lvShadowBody").innerHTML = "<tr><td colspan='7' class='lv-dim'>No candidates promoted yet \u2014 Gate 4 (DSR &ge; 0.80 &amp; net-of-fee hurdle) active.</td></tr>";
+      return;
+    }
+
+    var paperByKey = {};
+    spList.forEach(function(item){
+      var key = String(item.expr || "") + "|" + String(item.venue || "");
+      paperByKey[key] = item;
+    });
+
+    $("lvShadowBody").innerHTML = cands.map(function(c){
+      var venue = String(c.venue || "futures");
+      var m = (venue === "spot" && c.spot_metrics) ? c.spot_metrics : (c.base_metrics || c.spot_metrics || {});
+      var key = String(c.expr || "") + "|" + venue;
+      var p = paperByKey[key] || paperByKey[String(c.expr || "") + "|"] || null;
+      var geoMo = m.geo_monthly_pct != null ? Number(m.geo_monthly_pct).toFixed(2) + "%/mo" : "&ndash;";
+      var dsr = m.deflated_sharpe != null ? Number(m.deflated_sharpe).toFixed(3) : "&ndash;";
+      var liveDays = p && p.live_days != null ? String(p.live_days) + "d" : "0d";
+      var liveRet = p && p.live_return_pct != null ? ((Number(p.live_return_pct) >= 0 ? "+" : "") + Number(p.live_return_pct).toFixed(2) + "%") : "&ndash;";
+      var liveCls = p && p.live_return_pct != null ? lvCls(Number(p.live_return_pct)) : "lv-dim";
+      var health = p && p.health ? String(p.health) : "WARMUP";
+      var hCls = health === "HEALTHY" ? "ok" : (health === "KILLED" ? "bad" : (health === "DECAYING" ? "warn" : "info"));
+      return "<tr><td style='font-family:ui-monospace,monospace;font-size:11px;max-width:340px;word-break:break-word'>" + lvEsc(c.expr || "") + "</td>" +
+        "<td>" + lvEsc(venue + (c.role ? " / " + c.role : "")) + "</td>" +
+        "<td class='lv-num'>" + geoMo + "</td>" +
+        "<td class='lv-num'>" + dsr + "</td>" +
+        "<td class='lv-num'>" + liveDays + "</td>" +
+        "<td class='lv-num " + liveCls + "'>" + liveRet + "</td>" +
+        "<td><span class='pill " + hCls + "'>" + lvEsc(health) + "</span></td></tr>";
+    }).join("");
+  }
   function lvLoad(){
     lvGet("/api/paper/trend-blend").then(lvRenderTrend).catch(function(e){
       $("lvHeadline").textContent = "Could not load the paper ledger"; $("lvSub").textContent = e.message; });
     lvGet("/api/recorder").then(lvRenderRecorder).catch(function(){ lvRenderRecorder(null); });
     lvGet("/api/status").then(lvRenderHost).catch(function(){});
+    Promise.all([
+      lvGet("/api/paper/shadow-queue").catch(function(){ return null; }),
+      lvGet("/api/paper/alpha-decay").catch(function(){ return null; })
+    ]).then(function(res){ lvRenderShadow(res[0], res[1]); });
   }
   if ($("tab-live")) {
     $("lvRefresh").addEventListener("click", lvLoad);

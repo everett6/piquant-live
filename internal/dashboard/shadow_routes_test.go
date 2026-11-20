@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -240,6 +241,23 @@ func TestHandlePaperShadowQueue_HomeFallbackResolution(t *testing.T) {
 		t.Fatalf("state = %v", body.State)
 	}
 	if !reflect.DeepEqual(body.MissingFiles, []string{shadowCandidatesFile, shadowPaperStateFile}) {
-		t.Fatalf("missing_files = %v", body.MissingFiles)
+		t.Fatalf("missing_files = %v, want [%s %s]", body.MissingFiles, shadowCandidatesFile, shadowPaperStateFile)
+	}
+}
+
+func TestDashboardIndexIncludesShadowQueueCard(t *testing.T) {
+	srv := newTestServer(t, func(o *Options) {
+		o.DisableLivePing = true
+	})
+	auth := map[string]string{"Authorization": "Bearer " + peerToken}
+	rec := get(t, srv.Handler(), http.MethodGet, "/", auth, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / = %d, want 200", rec.Code)
+	}
+	html := rec.Body.String()
+	for _, needle := range []string{"lvShadowKpis", "lvShadowBody", "/api/paper/shadow-queue", "/api/paper/alpha-decay"} {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("dashboard HTML missing %q", needle)
+		}
 	}
 }
