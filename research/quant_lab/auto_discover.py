@@ -121,6 +121,14 @@ BENCHMARK_MAX_DD_PCT = -23.0
 BENCHMARK_MEAN_DD_PCT = 10.0
 BENCHMARK_DSR = 0.80
 
+# Spot venue benchmark hurdles (Q42_dualspeed_60_40_carry_spot)
+SPOT_BENCHMARK_GEO_MO_PCT = 2.15
+SPOT_BENCHMARK_SHARPE = 1.483
+SPOT_BENCHMARK_CALMAR = 1.460
+SPOT_BENCHMARK_MAX_DD_PCT = -20.0
+SPOT_BENCHMARK_MEAN_DD_PCT = 9.0
+SPOT_BENCHMARK_DSR = 0.80
+
 
 class UnsafeExpressionError(ValueError):
     """Raised when a candidate expression violates the AST safety allowlist."""
@@ -438,6 +446,18 @@ def evaluate_purged_cv(
     }
 
 
+def _sanitize_expr(expr: str) -> str:
+    """Strip trailing feedback annotations (' -> ...', '(reason: ...)') and surrounding quotes/backticks."""
+    if not isinstance(expr, str):
+        return ""
+    s = expr.strip().strip("`\"'")
+    if s.startswith("expr="):
+        s = s[len("expr="):].strip().strip("`\"'")
+    s = re.sub(r"\s*->.*$", "", s)
+    s = re.sub(r"\s*\(reason:.*$", "", s)
+    return s.strip().strip("`\"'").strip()
+
+
 def parse_llm_expressions(text: str) -> list[str]:
     """Extract candidate expression strings from LLM JSON or line-based output.
 
@@ -513,8 +533,9 @@ def parse_llm_expressions(text: str) -> list[str]:
 
     seen: set[str] = set()
     out: list[str] = []
-    for expr in candidates:
-        if expr not in seen:
+    for raw_expr in candidates:
+        expr = _sanitize_expr(raw_expr)
+        if expr and expr not in seen:
             seen.add(expr)
             out.append(expr)
     return out
@@ -538,7 +559,10 @@ def _build_alpha_prompt(n_candidates: int, recent_feedback: list[str] | None = N
         f"- ema(btc_sma50_dist, 10) * 3.0 - max(vol_ratio_5_20 - 1.2, 0.0) * 1.5\n"
         f"- tanh(ema(btc_ret21, 5) * 4.0) - clip(btc_vol20_ann - 0.75, 0.0, 1.0) * 2.0\n"
         f"Goal: low-turnover, fee-efficient daily signal that scales risk up in calm uptrends and down "
-        f"in vol spikes or choppy regimes. Keep expressions concise (<160 chars).{fb_block}\n"
+        f"in vol spikes or choppy regimes. Keep expressions concise (<160 chars).\n"
+        f"At least half of the returned expressions should incorporate orthogonal multi-modal features "
+        f"(btc_vrp, dvol_z20, btc_fund_z20, fund_spread_be, stable_flow_21d, alt_breadth_20d, "
+        f"btc_rv_1m_ann, btc_jump_ratio, btc_vpin_1m, qqq_ret21, uup_ret21) alongside trend/spread features.{fb_block}\n"
         f"Return ONLY a JSON array of {n_candidates} expression strings, nothing else."
     )
 
@@ -751,7 +775,7 @@ def _append_jsonl(path: str, record: dict[str, Any]) -> None:
 
 
 def _load_recent_feedback(log_path: str, limit: int = 5) -> list[str]:
-    if not os.path.exists(log_path):
+    if limit <= 0 or not os.path.exists(log_path):
         return []
     lines: list[str] = []
     with open(log_path, "r", encoding="utf-8") as fh:
@@ -761,8 +785,18 @@ def _load_recent_feedback(log_path: str, limit: int = 5) -> list[str]:
                 continue
             try:
                 rec = json.loads(line)
-                if not rec.get("accepted"):
-                    lines.append(f"{rec.get('expr', '')} -> {rec.get('reject_reason', 'failed')}")
+                if rec.get("accepted"):
+                    continue
+                reason = str(rec.get("reject_reason") or "failed").strip()
+                if reason.startswith("AST_GATE"):
+                    continue
+                expr_clean = _sanitize_expr(str(rec.get("expr", "")))
+                if not expr_clean:
+                    continue
+                short_reason = reason.replace("->", ":").strip()
+                if len(short_reason) > 160:
+                    short_reason = short_reason[:157].rstrip() + "..."
+                lines.append(f'expr="{expr_clean}" (reason: {short_reason})')
             except json.JSONDecodeError:
                 continue
     return lines[-limit:]
@@ -776,6 +810,7 @@ class CandidateResult:
     n_trials_at_eval: int
     accepted: bool
     reject_reason: str
+    venue: str = "futures"
     cv_summary: dict[str, Any] | None = None
     base_metrics: dict[str, Any] | None = None
     stress_metrics: dict[str, Any] | None = None
@@ -832,21 +867,45 @@ def _evaluate_synthetic_full(
     return _sim(5.0, 10.0), _sim(10.0, 20.0), _sim(2.0, 5.0)
 
 
-def _check_full_gates(base: dict[str, Any], stress: dict[str, Any]) -> tuple[bool, str]:
+def _check_full_gates(
+    base: dict[str, Any],
+    stress: dict[str, Any],
+    spot: dict[str, Any] | None = None,
+    venue: str = "futures",
+) -> tuple[bool, str]:
+    if venue == "futures":
+        target = base
+        min_dsr = BENCHMARK_DSR
+        min_max_dd = BENCHMARK_MAX_DD_PCT
+        max_mean_dd = BENCHMARK_MEAN_DD_PCT
+        min_geo_mo = BENCHMARK_GEO_MO_PCT
+        min_sharpe = BENCHMARK_SHARPE
+        min_calmar = BENCHMARK_CALMAR
+    elif venue == "spot":
+        target = spot if spot is not None else base
+        min_dsr = SPOT_BENCHMARK_DSR
+        min_max_dd = SPOT_BENCHMARK_MAX_DD_PCT
+        max_mean_dd = SPOT_BENCHMARK_MEAN_DD_PCT
+        min_geo_mo = SPOT_BENCHMARK_GEO_MO_PCT
+        min_sharpe = SPOT_BENCHMARK_SHARPE
+        min_calmar = SPOT_BENCHMARK_CALMAR
+    else:
+        raise ValueError(f"unknown venue: {venue}")
+
     reasons: list[str] = []
-    if float(base.get("deflated_sharpe", 0.0)) < BENCHMARK_DSR:
-        reasons.append(f"DSR {base.get('deflated_sharpe')} < {BENCHMARK_DSR}")
-    if float(base.get("max_dd_pct", -100.0)) < BENCHMARK_MAX_DD_PCT:
-        reasons.append(f"MaxDD {base.get('max_dd_pct')}% < {BENCHMARK_MAX_DD_PCT}%")
-    if float(base.get("mean_dd_pct", 100.0)) > BENCHMARK_MEAN_DD_PCT:
-        reasons.append(f"MeanDD {base.get('mean_dd_pct')}% > {BENCHMARK_MEAN_DD_PCT}%")
-    if float(base.get("geo_monthly_pct", -100.0)) < BENCHMARK_GEO_MO_PCT:
-        reasons.append(f"Geo/mo {base.get('geo_monthly_pct')}% < {BENCHMARK_GEO_MO_PCT}%")
-    if float(base.get("sharpe", 0.0)) <= BENCHMARK_SHARPE:
-        reasons.append(f"Sharpe {base.get('sharpe')} <= {BENCHMARK_SHARPE}")
-    if float(base.get("calmar", 0.0)) <= BENCHMARK_CALMAR:
-        reasons.append(f"Calmar {base.get('calmar')} <= {BENCHMARK_CALMAR}")
-    a_rec = base.get("A_geo_monthly_pct", base.get("A_2025_26"))
+    if float(target.get("deflated_sharpe", 0.0)) < min_dsr:
+        reasons.append(f"DSR {target.get('deflated_sharpe')} < {min_dsr}")
+    if float(target.get("max_dd_pct", -100.0)) < min_max_dd:
+        reasons.append(f"MaxDD {target.get('max_dd_pct')}% < {min_max_dd}%")
+    if float(target.get("mean_dd_pct", 100.0)) > max_mean_dd:
+        reasons.append(f"MeanDD {target.get('mean_dd_pct')}% > {max_mean_dd}%")
+    if float(target.get("geo_monthly_pct", -100.0)) < min_geo_mo:
+        reasons.append(f"Geo/mo {target.get('geo_monthly_pct')}% < {min_geo_mo}%")
+    if float(target.get("sharpe", 0.0)) <= min_sharpe:
+        reasons.append(f"Sharpe {target.get('sharpe')} <= {min_sharpe}")
+    if float(target.get("calmar", 0.0)) <= min_calmar:
+        reasons.append(f"Calmar {target.get('calmar')} <= {min_calmar}")
+    a_rec = target.get("A_geo_monthly_pct", target.get("A_2025_26"))
     if a_rec is None or float(a_rec) <= 0.0:
         reasons.append(f"A_geo_monthly_pct {a_rec} <= 0")
     if float(stress.get("geo_monthly_pct", -100.0)) <= 0.0:
@@ -1000,8 +1059,11 @@ def run_discovery(
     state_path: str = DEFAULT_STATE_PATH,
     shadow_path: str = DEFAULT_SHADOW_PATH,
     log_path: str = DEFAULT_LOG_PATH,
+    venue: str = "futures",
 ) -> dict[str, Any]:
     """Execute one bounded autonomous alpha-discovery round."""
+    if venue not in ("futures", "spot"):
+        raise ValueError(f"unknown venue: {venue}")
     state = _load_state(state_path)
     recent_fb = _load_recent_feedback(log_path, limit=5)
 
@@ -1058,7 +1120,7 @@ def run_discovery(
         ctx = _load_real_market_context(daily_csv_dir=daily_csv_dir)
         btc_syn = eth_syn = features_syn = None
 
-    # Load existing shadow queue
+    # Load existing shadow queue and deduplicate by (expr, venue, role)
     shadow_queue: list[dict[str, Any]] = []
     if os.path.exists(shadow_path):
         try:
@@ -1069,17 +1131,28 @@ def run_discovery(
         except json.JSONDecodeError:
             shadow_queue = []
 
+    existing_shadow_keys: set[tuple[str, str, str]] = {
+        (
+            _sanitize_expr(str(item.get("expr", ""))),
+            str(item.get("venue", "futures")),
+            str(item.get("role", "overlay")),
+        )
+        for item in shadow_queue
+        if isinstance(item, dict) and item.get("expr")
+    }
+
     results: list[CandidateResult] = []
     now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
 
-    for expr, src in expr_pairs:
+    for raw_expr, src in expr_pairs:
+        expr = _sanitize_expr(raw_expr) or raw_expr
         # Gate 1: AST safety
         try:
             SafeAlphaEvaluator.validate(expr)
         except UnsafeExpressionError as exc:
             res = CandidateResult(
                 expr=expr, source=src, role=role, n_trials_at_eval=state["n_trials"],
-                accepted=False, reject_reason=f"AST_GATE: {exc}", timestamp_utc=now_iso,
+                accepted=False, reject_reason=f"AST_GATE: {exc}", venue=venue, timestamp_utc=now_iso,
             )
             results.append(res)
             _append_jsonl(log_path, asdict(res))
@@ -1091,7 +1164,7 @@ def run_discovery(
         if not ok_causal:
             res = CandidateResult(
                 expr=expr, source=src, role=role, n_trials_at_eval=state["n_trials"],
-                accepted=False, reject_reason=f"CAUSALITY_GATE: {causal_msg}", timestamp_utc=now_iso,
+                accepted=False, reject_reason=f"CAUSALITY_GATE: {causal_msg}", venue=venue, timestamp_utc=now_iso,
             )
             results.append(res)
             _append_jsonl(log_path, asdict(res))
@@ -1102,17 +1175,24 @@ def run_discovery(
         if dry_run_synth:
             assert btc_syn is not None and eth_syn is not None and features_syn is not None
             sig = SafeAlphaEvaluator.evaluate(expr, features_syn, role=role)
-            cv_res = evaluate_purged_cv(btc_syn, eth_syn, sig, None, None, role=role)
+            if venue == "spot":
+                cv_res = evaluate_purged_cv(
+                    btc_syn, eth_syn, sig, None, None, role=role,
+                    taker_bps=2.0, slip_bps=1.0, funding_bps_h=0.0,
+                )
+            else:
+                cv_res = evaluate_purged_cv(btc_syn, eth_syn, sig, None, None, role=role)
         else:
             assert ctx is not None
             sig = SafeAlphaEvaluator.evaluate(expr, ctx["features"], role=role)
+            cv_costs = ctx["lab"].US_SPOT if venue == "spot" else ctx["lab"].US_FUTURES
             cv_res = evaluate_purged_cv(
                 ctx["btc"], ctx["eth"], sig,
                 ctx["dual_1x"]["BTC"], ctx["dual_1x"]["ETH"],
                 role=role,
-                taker_bps=ctx["lab"].US_FUTURES.taker_bps,
-                slip_bps=ctx["lab"].US_FUTURES.slip_bps,
-                funding_bps_h=ctx["lab"].US_FUTURES.funding_bps_h,
+                taker_bps=cv_costs.taker_bps,
+                slip_bps=cv_costs.slip_bps,
+                funding_bps_h=cv_costs.funding_bps_h,
             )
 
         # Charge multiple-testing trial counter for every real/CV evaluation
@@ -1127,6 +1207,7 @@ def run_discovery(
                     f"PURGED_CV_GATE: median_sharpe={cv_res['median_fold_sharpe']}, "
                     f"pos_folds={cv_res['positive_folds']}/5"
                 ),
+                venue=venue,
                 cv_summary=cv_res,
                 timestamp_utc=now_iso,
             )
@@ -1143,11 +1224,12 @@ def run_discovery(
             assert ctx is not None
             base_m, stress_m, spot_m = _evaluate_real_full(ctx, sig, role, cur_trials)
 
-        ok_full, full_reason = _check_full_gates(base_m, stress_m)
+        ok_full, full_reason = _check_full_gates(base_m, stress_m, spot=spot_m, venue=venue)
         res = CandidateResult(
             expr=expr, source=src, role=role, n_trials_at_eval=cur_trials,
             accepted=ok_full,
             reject_reason="" if ok_full else f"FULL_GATE: {full_reason}",
+            venue=venue,
             cv_summary=cv_res,
             base_metrics=base_m,
             stress_metrics=stress_m,
@@ -1159,9 +1241,12 @@ def run_discovery(
 
         if ok_full:
             state["accepted"] += 1
-            entry = asdict(res)
-            entry["status"] = "SHADOW_PAPER_ONLY"
-            shadow_queue.append(entry)
+            shadow_key = (expr, venue, role)
+            if shadow_key not in existing_shadow_keys:
+                existing_shadow_keys.add(shadow_key)
+                entry = asdict(res)
+                entry["status"] = "SHADOW_PAPER_ONLY"
+                shadow_queue.append(entry)
         else:
             state["rejected"] += 1
 
@@ -1172,6 +1257,7 @@ def run_discovery(
 
     return {
         "mode": mode,
+        "venue": venue,
         "llamacpp_note": llamacpp_note,
         "ollama_note": ollama_note,
         "dry_run_synth": dry_run_synth,
@@ -1195,6 +1281,7 @@ def main() -> None:
     p.add_argument("--ollama-url", default="http://127.0.0.1:11434")
     p.add_argument("--model", default="lfm2.5")
     p.add_argument("--role", choices=("overlay", "standalone"), default="overlay")
+    p.add_argument("--venue", choices=("futures", "spot"), default="futures")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--dry-run-synth", action="store_true")
     p.add_argument("--daily-csv-dir", default=None)
@@ -1219,9 +1306,10 @@ def main() -> None:
         state_path=args.state_path,
         shadow_path=args.shadow_path,
         log_path=args.log_path,
+        venue=args.venue,
     )
     print(
-        f"auto_discover done | mode={summary['mode']} synth={summary['dry_run_synth']} "
+        f"auto_discover done | mode={summary['mode']} venue={summary['venue']} synth={summary['dry_run_synth']} "
         f"evaluated={summary['evaluated']} accepted={summary['accepted']} rejected={summary['rejected']} "
         f"n_trials={summary['n_trials_total']} shadow_queue={summary['shadow_queue_len']}"
     )

@@ -88,6 +88,8 @@ func main() {
 		err = runPing(ctx, args)
 	case "schwab":
 		err = runSchwab(ctx, args)
+	case "execute":
+		err = runExecute(ctx, args)
 	case "version", "-v", "--version":
 		printVersion()
 	case "help", "-h", "--help":
@@ -131,6 +133,7 @@ func usage() {
   piquant news        macro & micro news intelligence oracle with exploit defense
   piquant ping        measure venue TCP/HTTP ping and compute latency-safe execution plan
   piquant schwab      Charles Schwab v1 OAuth2 + read-only ETF rebalance preview (IBIT/ETHA/SGOV)
+  piquant execute     safe live-ready spot execution router (dry-run default; live requires dual arm)
   piquant version     print build information
 
 Run "piquant <command> -h" for the options of one command.

@@ -207,3 +207,130 @@ def test_resolve_default_llama_model_prefers_finetuned(tmp_path):
     # Fine-tuned exists -> prefers fine-tuned over base
     ft.write_bytes(b"GGUF")
     assert AD._resolve_default_llama_model(cands) == str(ft)
+
+
+def test_sanitize_expr_and_parse_strips_feedback_arrows():
+    assert (
+        AD._sanitize_expr("ema(btc_sma50_dist, 10) * 3.0 -> FULL_GATE: Geo/mo 1.2% < 2.15%")
+        == "ema(btc_sma50_dist, 10) * 3.0"
+    )
+    assert (
+        AD._sanitize_expr("`tanh(btc_vrp * 2.0)` -> AST_GATE: syntax error")
+        == "tanh(btc_vrp * 2.0)"
+    )
+    assert (
+        AD._sanitize_expr("clip(dvol_z20, -1.0, 1.0)->PURGED_CV_GATE: median_sharpe=0.1")
+        == "clip(dvol_z20, -1.0, 1.0)"
+    )
+
+    leaked_json = json.dumps([
+        "ema(btc_ret21, 5) -> FULL_GATE: DSR 0.1 < 0.8",
+        "ema(btc_ret21, 5)",
+        "tanh(btc_vrp * 2.0) -> PURGED_CV_GATE: median_sharpe=0.2",
+        "`clip(btc_fund_z20, -1.0, 1.0)` -> AST_GATE: syntax error",
+    ])
+    parsed = AD.parse_llm_expressions(leaked_json)
+    assert parsed == [
+        "ema(btc_ret21, 5)",
+        "tanh(btc_vrp * 2.0)",
+        "clip(btc_fund_z20, -1.0, 1.0)",
+    ]
+
+
+def test_load_recent_feedback_excludes_ast_gate_and_arrows(tmp_path):
+    log_p = tmp_path / "log.jsonl"
+    records = [
+        {"expr": "bad -> syntax", "accepted": False, "reject_reason": "AST_GATE: syntax error: invalid syntax"},
+        {"expr": "ema(btc_ret5, 10)", "accepted": False, "reject_reason": "PURGED_CV_GATE: median_sharpe=0.10, pos_folds=1/5"},
+        {"expr": "unknown_feat + 1", "accepted": False, "reject_reason": "AST_GATE: unknown identifier: unknown_feat"},
+        {"expr": "tanh(btc_vrp * 2.0)", "accepted": False, "reject_reason": "FULL_GATE: DSR 0.4 < 0.8; Geo/mo 1.1% < 2.15%"},
+        {"expr": "ema(btc_sma50_dist, 10)", "accepted": True, "reject_reason": ""},
+    ]
+    log_p.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+
+    fb = AD._load_recent_feedback(str(log_p), limit=5)
+    assert len(fb) == 2
+    assert all("->" not in item for item in fb)
+    assert all("AST_GATE" not in item for item in fb)
+    assert fb[0] == 'expr="ema(btc_ret5, 10)" (reason: PURGED_CV_GATE: median_sharpe=0.10, pos_folds=1/5)'
+    assert fb[1] == 'expr="tanh(btc_vrp * 2.0)" (reason: FULL_GATE: DSR 0.4 < 0.8; Geo/mo 1.1% < 2.15%)'
+
+    prompt = AD._build_alpha_prompt(4, recent_feedback=fb)
+    assert "btc_vrp" in prompt and "stable_flow_21d" in prompt and "qqq_ret21" in prompt
+    assert "->" not in prompt
+
+
+def test_venue_spot_gate_and_shadow_dedup(tmp_path, monkeypatch):
+    base_metrics = {
+        "deflated_sharpe": 0.90,
+        "max_dd_pct": -22.0,
+        "mean_dd_pct": 9.5,
+        "geo_monthly_pct": 2.30,
+        "sharpe": 1.40,
+        "calmar": 1.35,
+        "A_geo_monthly_pct": 0.50,
+    }
+    stress_metrics = {"geo_monthly_pct": 0.60}
+    spot_pass = {
+        "deflated_sharpe": 0.85,
+        "max_dd_pct": -18.5,
+        "mean_dd_pct": 8.4,
+        "geo_monthly_pct": 2.40,
+        "sharpe": 1.52,
+        "calmar": 1.50,
+        "A_geo_monthly_pct": 0.80,
+    }
+    spot_fail = dict(spot_pass, sharpe=1.42, calmar=1.35)
+
+    # Futures passes on base_metrics, spot checks spot_metrics against SPOT_BENCHMARK_*
+    ok_fut, _ = AD._check_full_gates(base_metrics, stress_metrics)
+    assert ok_fut
+    ok_spot_fail, reason_fail = AD._check_full_gates(base_metrics, stress_metrics, spot=spot_fail, venue="spot")
+    assert not ok_spot_fail
+    assert "1.483" in reason_fail and "1.46" in reason_fail
+    ok_spot_pass, _ = AD._check_full_gates(base_metrics, stress_metrics, spot=spot_pass, venue="spot")
+    assert ok_spot_pass
+
+    # End-to-end shadow dedup keyed by (expr, venue, role)
+    monkeypatch.setattr(AD, "generate_symbolic_candidates", lambda n_candidates, seed=42: ["ema(btc_sma50_dist, 10) * 3.0"])
+    monkeypatch.setattr(
+        AD,
+        "evaluate_purged_cv",
+        lambda *args, **kwargs: {"fold_sharpes": [1.5] * 5, "median_fold_sharpe": 1.5, "positive_folds": 5, "passed": True},
+    )
+    monkeypatch.setattr(
+        AD,
+        "_evaluate_synthetic_full",
+        lambda *args, **kwargs: (base_metrics, stress_metrics, spot_pass),
+    )
+
+    state_p = str(tmp_path / "state.json")
+    shadow_p = str(tmp_path / "shadow.json")
+    log_p = str(tmp_path / "log.jsonl")
+
+    # Run twice for spot -> only 1 entry in shadow queue, with venue="spot"
+    for _ in range(2):
+        s1 = AD.run_discovery(
+            n_candidates=1, mode="symbolic", role="overlay", venue="spot",
+            dry_run_synth=True, state_path=state_p, shadow_path=shadow_p, log_path=log_p,
+        )
+        assert s1["accepted"] == 1
+        assert s1["shadow_queue_len"] == 1
+
+    # Same expr on futures -> distinct (expr, venue, role) key -> appended (len=2)
+    s2 = AD.run_discovery(
+        n_candidates=1, mode="symbolic", role="overlay", venue="futures",
+        dry_run_synth=True, state_path=state_p, shadow_path=shadow_p, log_path=log_p,
+    )
+    assert s2["accepted"] == 1
+    assert s2["shadow_queue_len"] == 2
+
+    with open(shadow_p, "r", encoding="utf-8") as fh:
+        q = json.load(fh)
+    assert [(item["expr"], item["venue"], item["role"]) for item in q] == [
+        ("ema(btc_sma50_dist, 10) * 3.0", "spot", "overlay"),
+        ("ema(btc_sma50_dist, 10) * 3.0", "futures", "overlay"),
+    ]
+    with open(log_p, "r", encoding="utf-8") as fh:
+        logged = [json.loads(line) for line in fh if line.strip()]
+    assert [r["venue"] for r in logged] == ["spot", "spot", "futures"]

@@ -92,3 +92,15 @@ if [ -s "$PREV" ]; then
 fi
 exit 1
 REMOTE
+
+# Sync Python alpha-discovery scripts and .synced_commit only after the Go binary health check passes.
+$SSH "mkdir -p ~/PiQuant/piquant-live/research/quant_lab/results"
+scp -q \
+  "$WORK/research/quant_lab/auto_discover.py" \
+  "$WORK/research/quant_lab/feature_store.py" \
+  "$WORK/research/quant_lab/multimodal_features.py" \
+  "$WORK/research/quant_lab/refresh_daily_csv.py" \
+  "$WORK/research/quant_lab/shadow_paper_eval.py" \
+  "$PI:PiQuant/piquant-live/research/quant_lab/"
+$SSH "printf '%s\n' '$V' > ~/PiQuant/piquant-live/.synced_commit && sync"
+echo "synced research/quant_lab scripts and .synced_commit ($V) to $PI"

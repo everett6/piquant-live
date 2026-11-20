@@ -64,6 +64,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/paper/trend-blend", s.handlePaperTrendBlend)
 	s.mux.HandleFunc("/api/recorder", s.handleRecorder)
 	s.mux.HandleFunc("/api/paper/alpha-decay", s.handlePaperAlphaDecay)
+	s.mux.HandleFunc("/api/paper/shadow-queue", s.handlePaperShadowQueue)
 	s.mux.HandleFunc("/api/paper/schwab-plan", s.handlePaperSchwabPlan)
 	s.mux.HandleFunc("/api/paper/reports", s.handlePaperReports)
 	s.mux.HandleFunc("/api/paper/reports/latest", s.handlePaperReportsLatest)
