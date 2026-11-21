@@ -1,0 +1,605 @@
+{
+  "venue": "long_short_perp",
+  "goal_ann_pct": 50.0,
+  "goal_reached": false,
+  "iters_run": 60,
+  "best_config": {
+    "venue": "long_short_perp",
+    "top_k": 4,
+    "mom_fast": 7,
+    "mom_slow": 21,
+    "trend_weight": 0.3,
+    "xs_weight": 0.45,
+    "mr_weight": 0.0,
+    "short_scale": 1.0,
+    "tox_cut": 1.0,
+    "news_boost": 0.4,
+    "target_vol": 0.45,
+    "max_lev": 2.5,
+    "dd_start": 0.1,
+    "dd_full": 0.3,
+    "dd_floor": 0.6,
+    "carry_share": 0.35
+  },
+  "best_stats": {
+    "years": {
+      "2020": {
+        "days": 366,
+        "raw_pct": 88.93,
+        "ann_pct": 88.6,
+        "max_dd_pct": 10.75,
+        "sharpe": 2.695
+      },
+      "2021": {
+        "days": 365,
+        "raw_pct": 56.76,
+        "ann_pct": 56.76,
+        "max_dd_pct": 14.88,
+        "sharpe": 1.701
+      },
+      "2022": {
+        "days": 365,
+        "raw_pct": 15.12,
+        "ann_pct": 15.12,
+        "max_dd_pct": 16.72,
+        "sharpe": 0.68
+      },
+      "2023": {
+        "days": 365,
+        "raw_pct": 15.59,
+        "ann_pct": 15.59,
+        "max_dd_pct": 19.27,
+        "sharpe": 0.84
+      },
+      "2024": {
+        "days": 366,
+        "raw_pct": 31.99,
+        "ann_pct": 31.89,
+        "max_dd_pct": 21.08,
+        "sharpe": 1.259
+      },
+      "2025": {
+        "days": 365,
+        "raw_pct": 14.63,
+        "ann_pct": 14.63,
+        "max_dd_pct": 14.77,
+        "sharpe": 0.681
+      },
+      "2026": {
+        "days": 304,
+        "raw_pct": 4.51,
+        "ann_pct": 5.44,
+        "max_dd_pct": 19.28,
+        "sharpe": 0.366
+      }
+    },
+    "worst_year": 2026,
+    "min_ann_pct": 5.44,
+    "years_ge_50": 2,
+    "total_years": 7,
+    "cagr_pct": 30.68,
+    "max_dd_pct": 21.31,
+    "sharpe": 1.228
+  },
+  "oos_2024_2026": {
+    "years": {
+      "2024": {
+        "days": 366,
+        "raw_pct": 31.99,
+        "ann_pct": 31.89,
+        "max_dd_pct": 21.08,
+        "sharpe": 1.259
+      },
+      "2025": {
+        "days": 365,
+        "raw_pct": 14.63,
+        "ann_pct": 14.63,
+        "max_dd_pct": 14.77,
+        "sharpe": 0.681
+      },
+      "2026": {
+        "days": 304,
+        "raw_pct": 4.51,
+        "ann_pct": 5.44,
+        "max_dd_pct": 19.28,
+        "sharpe": 0.366
+      }
+    },
+    "worst_year": 2026,
+    "min_ann_pct": 5.44,
+    "years_ge_50": 0,
+    "total_years": 3,
+    "cagr_pct": 17.54,
+    "max_dd_pct": 21.08,
+    "sharpe": 0.814
+  },
+  "history": [
+    {
+      "iter": 0,
+      "reason": "initial_baseline",
+      "min_ann_pct": -24.36,
+      "cagr_pct": 17.01,
+      "sharpe": 0.707
+    },
+    {
+      "iter": 1,
+      "reason": "step=1 bottleneck=2026 (-24.36%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": -28.46,
+      "best_min_ann_pct": -24.36,
+      "best_sharpe": 0.707
+    },
+    {
+      "iter": 2,
+      "reason": "step=2 bottleneck=2026 (-24.36%) -> tune causal vol-target & lev cap",
+      "improved": true,
+      "cand_min_ann_pct": -22.82,
+      "best_min_ann_pct": -22.82,
+      "best_sharpe": 0.732
+    },
+    {
+      "iter": 3,
+      "reason": "step=3 bottleneck=2026 (-22.82%) -> tune micro/news + MR",
+      "improved": true,
+      "cand_min_ann_pct": -22.1,
+      "best_min_ann_pct": -22.1,
+      "best_sharpe": 0.512
+    },
+    {
+      "iter": 4,
+      "reason": "step=4 bottleneck=2026 (-22.1%) -> tune L/S top-K & momentum",
+      "improved": true,
+      "cand_min_ann_pct": -16.9,
+      "best_min_ann_pct": -16.9,
+      "best_sharpe": 0.483
+    },
+    {
+      "iter": 5,
+      "reason": "step=5 bottleneck=2022 (-16.9%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": -16.98,
+      "best_min_ann_pct": -16.9,
+      "best_sharpe": 0.483
+    },
+    {
+      "iter": 6,
+      "reason": "step=6 bottleneck=2022 (-16.9%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_min_ann_pct": -21.29,
+      "best_min_ann_pct": -16.9,
+      "best_sharpe": 0.483
+    },
+    {
+      "iter": 7,
+      "reason": "step=7 bottleneck=2022 (-16.9%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_min_ann_pct": -24.44,
+      "best_min_ann_pct": -16.9,
+      "best_sharpe": 0.483
+    },
+    {
+      "iter": 8,
+      "reason": "step=8 bottleneck=2022 (-16.9%) -> tune L/S top-K & momentum",
+      "improved": false,
+      "cand_min_ann_pct": -17.32,
+      "best_min_ann_pct": -16.9,
+      "best_sharpe": 0.483
+    },
+    {
+      "iter": 9,
+      "reason": "step=9 bottleneck=2022 (-16.9%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": -18.34,
+      "best_min_ann_pct": -16.9,
+      "best_sharpe": 0.483
+    },
+    {
+      "iter": 10,
+      "reason": "step=10 bottleneck=2022 (-16.9%) -> tune causal vol-target & lev cap",
+      "improved": true,
+      "cand_min_ann_pct": -16.02,
+      "best_min_ann_pct": -16.02,
+      "best_sharpe": 0.496
+    },
+    {
+      "iter": 11,
+      "reason": "step=11 bottleneck=2022 (-16.02%) -> tune micro/news + MR",
+      "improved": true,
+      "cand_min_ann_pct": -3.09,
+      "best_min_ann_pct": -3.09,
+      "best_sharpe": 0.976
+    },
+    {
+      "iter": 12,
+      "reason": "step=12 bottleneck=2025 (-3.09%) -> tune L/S top-K & momentum",
+      "improved": true,
+      "cand_min_ann_pct": -0.55,
+      "best_min_ann_pct": -0.55,
+      "best_sharpe": 0.927
+    },
+    {
+      "iter": 13,
+      "reason": "step=13 bottleneck=2022 (-0.55%) -> tune short sleeve & carry_share",
+      "improved": true,
+      "cand_min_ann_pct": 1.57,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 14,
+      "reason": "step=14 bottleneck=2026 (1.57%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_min_ann_pct": 1.35,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 15,
+      "reason": "step=15 bottleneck=2026 (1.57%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_min_ann_pct": -16.16,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 16,
+      "reason": "step=16 bottleneck=2026 (1.57%) -> tune L/S top-K & momentum",
+      "improved": false,
+      "cand_min_ann_pct": -5.78,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 17,
+      "reason": "step=17 bottleneck=2026 (1.57%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": -1.24,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 18,
+      "reason": "step=18 bottleneck=2026 (1.57%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_min_ann_pct": -5.1,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 19,
+      "reason": "step=19 bottleneck=2026 (1.57%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_min_ann_pct": -20.15,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 20,
+      "reason": "step=20 bottleneck=2026 (1.57%) -> tune L/S top-K & momentum",
+      "improved": false,
+      "cand_min_ann_pct": -0.34,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 21,
+      "reason": "step=21 bottleneck=2026 (1.57%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": -3.78,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 22,
+      "reason": "step=22 bottleneck=2026 (1.57%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_min_ann_pct": -7.44,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 23,
+      "reason": "step=23 bottleneck=2026 (1.57%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_min_ann_pct": -20.61,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 24,
+      "reason": "step=24 bottleneck=2026 (1.57%) -> tune L/S top-K & momentum",
+      "improved": false,
+      "cand_min_ann_pct": 1.57,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 25,
+      "reason": "step=25 bottleneck=2026 (1.57%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": -1.3,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 26,
+      "reason": "step=26 bottleneck=2026 (1.57%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_min_ann_pct": -3.56,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 27,
+      "reason": "step=27 bottleneck=2026 (1.57%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_min_ann_pct": -21.6,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 28,
+      "reason": "step=28 bottleneck=2026 (1.57%) -> tune L/S top-K & momentum",
+      "improved": false,
+      "cand_min_ann_pct": -1.35,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 29,
+      "reason": "step=29 bottleneck=2026 (1.57%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": -4.14,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 30,
+      "reason": "step=30 bottleneck=2026 (1.57%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_min_ann_pct": -4.7,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 31,
+      "reason": "step=31 bottleneck=2026 (1.57%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_min_ann_pct": -15.99,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 32,
+      "reason": "step=32 bottleneck=2026 (1.57%) -> tune L/S top-K & momentum",
+      "improved": false,
+      "cand_min_ann_pct": -1.83,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 33,
+      "reason": "step=33 bottleneck=2026 (1.57%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": 0.11,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 34,
+      "reason": "step=34 bottleneck=2026 (1.57%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_min_ann_pct": -1.83,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 35,
+      "reason": "step=35 bottleneck=2026 (1.57%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_min_ann_pct": -17.56,
+      "best_min_ann_pct": 1.57,
+      "best_sharpe": 0.96
+    },
+    {
+      "iter": 36,
+      "reason": "step=36 bottleneck=2026 (1.57%) -> tune L/S top-K & momentum",
+      "improved": true,
+      "cand_min_ann_pct": 1.6,
+      "best_min_ann_pct": 1.6,
+      "best_sharpe": 0.907
+    },
+    {
+      "iter": 37,
+      "reason": "step=37 bottleneck=2026 (1.6%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": -3.6,
+      "best_min_ann_pct": 1.6,
+      "best_sharpe": 0.907
+    },
+    {
+      "iter": 38,
+      "reason": "step=38 bottleneck=2026 (1.6%) -> tune causal vol-target & lev cap",
+      "improved": true,
+      "cand_min_ann_pct": 3.48,
+      "best_min_ann_pct": 3.48,
+      "best_sharpe": 0.864
+    },
+    {
+      "iter": 39,
+      "reason": "step=39 bottleneck=2025 (3.48%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_min_ann_pct": -10.78,
+      "best_min_ann_pct": 3.48,
+      "best_sharpe": 0.864
+    },
+    {
+      "iter": 40,
+      "reason": "step=40 bottleneck=2025 (3.48%) -> tune L/S top-K & momentum",
+      "improved": false,
+      "cand_min_ann_pct": -9.28,
+      "best_min_ann_pct": 3.48,
+      "best_sharpe": 0.864
+    },
+    {
+      "iter": 41,
+      "reason": "step=41 bottleneck=2025 (3.48%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": 0.14,
+      "best_min_ann_pct": 3.48,
+      "best_sharpe": 0.864
+    },
+    {
+      "iter": 42,
+      "reason": "step=42 bottleneck=2025 (3.48%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_min_ann_pct": -2.18,
+      "best_min_ann_pct": 3.48,
+      "best_sharpe": 0.864
+    },
+    {
+      "iter": 43,
+      "reason": "step=43 bottleneck=2025 (3.48%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_min_ann_pct": -16.58,
+      "best_min_ann_pct": 3.48,
+      "best_sharpe": 0.864
+    },
+    {
+      "iter": 44,
+      "reason": "step=44 bottleneck=2025 (3.48%) -> tune L/S top-K & momentum",
+      "improved": false,
+      "cand_min_ann_pct": -8.63,
+      "best_min_ann_pct": 3.48,
+      "best_sharpe": 0.864
+    },
+    {
+      "iter": 45,
+      "reason": "step=45 bottleneck=2025 (3.48%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": 1.94,
+      "best_min_ann_pct": 3.48,
+      "best_sharpe": 0.864
+    },
+    {
+      "iter": 46,
+      "reason": "step=46 bottleneck=2025 (3.48%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_min_ann_pct": 1.52,
+      "best_min_ann_pct": 3.48,
+      "best_sharpe": 0.864
+    },
+    {
+      "iter": 47,
+      "reason": "step=47 bottleneck=2025 (3.48%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_min_ann_pct": -14.41,
+      "best_min_ann_pct": 3.48,
+      "best_sharpe": 0.864
+    },
+    {
+      "iter": 48,
+      "reason": "step=48 bottleneck=2025 (3.48%) -> tune L/S top-K & momentum",
+      "improved": true,
+      "cand_min_ann_pct": 5.44,
+      "best_min_ann_pct": 5.44,
+      "best_sharpe": 1.228
+    },
+    {
+      "iter": 49,
+      "reason": "step=49 bottleneck=2026 (5.44%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": 4.21,
+      "best_min_ann_pct": 5.44,
+      "best_sharpe": 1.228
+    },
+    {
+      "iter": 50,
+      "reason": "step=50 bottleneck=2026 (5.44%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_min_ann_pct": 5.13,
+      "best_min_ann_pct": 5.44,
+      "best_sharpe": 1.228
+    },
+    {
+      "iter": 51,
+      "reason": "step=51 bottleneck=2026 (5.44%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_min_ann_pct": -23.71,
+      "best_min_ann_pct": 5.44,
+      "best_sharpe": 1.228
+    },
+    {
+      "iter": 52,
+      "reason": "step=52 bottleneck=2026 (5.44%) -> tune L/S top-K & momentum",
+      "improved": false,
+      "cand_min_ann_pct": 0.87,
+      "best_min_ann_pct": 5.44,
+      "best_sharpe": 1.228
+    },
+    {
+      "iter": 53,
+      "reason": "step=53 bottleneck=2026 (5.44%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": 1.53,
+      "best_min_ann_pct": 5.44,
+      "best_sharpe": 1.228
+    },
+    {
+      "iter": 54,
+      "reason": "step=54 bottleneck=2026 (5.44%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_min_ann_pct": 4.59,
+      "best_min_ann_pct": 5.44,
+      "best_sharpe": 1.228
+    },
+    {
+      "iter": 55,
+      "reason": "step=55 bottleneck=2026 (5.44%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_min_ann_pct": -18.74,
+      "best_min_ann_pct": 5.44,
+      "best_sharpe": 1.228
+    },
+    {
+      "iter": 56,
+      "reason": "step=56 bottleneck=2026 (5.44%) -> tune L/S top-K & momentum",
+      "improved": false,
+      "cand_min_ann_pct": 0.87,
+      "best_min_ann_pct": 5.44,
+      "best_sharpe": 1.228
+    },
+    {
+      "iter": 57,
+      "reason": "step=57 bottleneck=2026 (5.44%) -> tune short sleeve & carry_share",
+      "improved": false,
+      "cand_min_ann_pct": 4.83,
+      "best_min_ann_pct": 5.44,
+      "best_sharpe": 1.228
+    },
+    {
+      "iter": 58,
+      "reason": "step=58 bottleneck=2026 (5.44%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_min_ann_pct": 3.09,
+      "best_min_ann_pct": 5.44,
+      "best_sharpe": 1.228
+    },
+    {
+      "iter": 59,
+      "reason": "step=59 bottleneck=2026 (5.44%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_min_ann_pct": -25.29,
+      "best_min_ann_pct": 5.44,
+      "best_sharpe": 1.228
+    },
+    {
+      "iter": 60,
+      "reason": "step=60 bottleneck=2026 (5.44%) -> tune L/S top-K & momentum",
+      "improved": false,
+      "cand_min_ann_pct": -1.02,
+      "best_min_ann_pct": 5.44,
+      "best_sharpe": 1.228
+    }
+  ]
+}
