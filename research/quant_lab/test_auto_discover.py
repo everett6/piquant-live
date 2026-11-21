@@ -334,3 +334,43 @@ def test_venue_spot_gate_and_shadow_dedup(tmp_path, monkeypatch):
     with open(log_p, "r", encoding="utf-8") as fh:
         logged = [json.loads(line) for line in fh if line.strip()]
     assert [r["venue"] for r in logged] == ["spot", "spot", "futures"]
+
+
+def test_latency_profile_prompt_and_turnover_gate():
+    home_lp = AD.build_latency_profile(169.3, venue="spot")
+    assert home_lp["regime"] == "high_rtt_daily_swing"
+    assert home_lp["max_daily_turnover"] == 0.35
+    assert "Q42_dualspeed_60_40_carry_spot" in home_lp["compete_against"]
+    assert "NEVER sub-second HFT" in home_lp["compete_against"]
+
+    colo_lp = AD.build_latency_profile(3.5, venue="spot")
+    assert colo_lp["regime"] == "low_rtt_intraday_or_daily"
+    assert colo_lp["max_daily_turnover"] == 0.65
+
+    prompt = AD._build_alpha_prompt(4, latency_profile=home_lp)
+    assert "169.3ms" in prompt
+    assert "daily turnover <= 0.35" in prompt
+
+    spot_pass = {
+        "deflated_sharpe": 0.85,
+        "max_dd_pct": -18.5,
+        "mean_dd_pct": 8.4,
+        "geo_monthly_pct": 2.40,
+        "sharpe": 1.52,
+        "calmar": 1.50,
+        "A_geo_monthly_pct": 0.80,
+    }
+    stress = {"geo_monthly_pct": 0.60}
+
+    ok_low_turn, _ = AD._check_full_gates(
+        spot_pass, stress, spot=spot_pass, venue="spot",
+        cv_summary={"mean_daily_turnover": 0.12}, latency_profile=home_lp,
+    )
+    assert ok_low_turn
+
+    ok_high_turn, reason = AD._check_full_gates(
+        spot_pass, stress, spot=spot_pass, venue="spot",
+        cv_summary={"mean_daily_turnover": 0.50}, latency_profile=home_lp,
+    )
+    assert not ok_high_turn
+    assert "turnover" in reason and "0.35" in reason

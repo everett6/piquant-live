@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -437,12 +438,51 @@ def evaluate_purged_cv(
 
     median_sh = float(np.median(fold_sharpes)) if fold_sharpes else 0.0
     pos_folds = int(sum(1 for s in fold_sharpes if s > 0.0))
+    mean_turnover = float(np.mean(turn)) if len(turn) > 0 else 0.0
     passed = (median_sh >= 0.50) and (pos_folds >= 3)
     return {
         "fold_sharpes": fold_sharpes,
         "median_fold_sharpe": round(median_sh, 4),
         "positive_folds": pos_folds,
+        "mean_daily_turnover": round(mean_turnover, 5),
         "passed": passed,
+    }
+
+
+def probe_venue_latency_ms(url: str = "https://api.exchange.coinbase.com/time", timeout_s: float = 3.0) -> float | None:
+    """Measure median HTTP RTT (ms) to Coinbase Exchange so discovery knows its latency regime."""
+    samples: list[float] = []
+    for _ in range(2):
+        req = urllib.request.Request(url, headers={"User-Agent": "PiQuant-AutoDiscover/1.0"}, method="GET")
+        t0 = time.perf_counter()
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                resp.read(64)
+            samples.append((time.perf_counter() - t0) * 1000.0)
+        except (urllib.error.URLError, TimeoutError, OSError):
+            continue
+    if not samples:
+        return None
+    return round(float(np.median(samples)), 2)
+
+
+def build_latency_profile(latency_ms: float | None, venue: str = "spot") -> dict[str, Any]:
+    """Translate measured venue RTT into competitive horizon & turnover constraints."""
+    bench_name = "Q42_dualspeed_60_40_carry_spot" if venue == "spot" else "Q42_dualspeed_60_40_carry"
+    if latency_ms is None or latency_ms > 25.0:
+        return {
+            "measured_rtt_ms": latency_ms,
+            "regime": "high_rtt_daily_swing",
+            "compete_against": f"{bench_name} (daily/6h patient post-only Spot+Carry; NEVER sub-second HFT)",
+            "max_daily_turnover": 0.35,
+            "min_hold_days": 3.0,
+        }
+    return {
+        "measured_rtt_ms": latency_ms,
+        "regime": "low_rtt_intraday_or_daily",
+        "compete_against": f"{bench_name} + 6h/hourly post-only maker",
+        "max_daily_turnover": 0.65,
+        "min_hold_days": 1.5,
     }
 
 
@@ -541,11 +581,25 @@ def parse_llm_expressions(text: str) -> list[str]:
     return out
 
 
-def _build_alpha_prompt(n_candidates: int, recent_feedback: list[str] | None = None) -> str:
+def _build_alpha_prompt(
+    n_candidates: int,
+    recent_feedback: list[str] | None = None,
+    latency_profile: dict[str, Any] | None = None,
+) -> str:
     fb_block = ""
     if recent_feedback:
         fb_block = "\nRecent rejected attempts (avoid repeating these failure modes):\n- " + "\n- ".join(
             recent_feedback[-5:]
+        )
+
+    lat_block = ""
+    if latency_profile:
+        rtt = latency_profile.get("measured_rtt_ms")
+        rtt_txt = f"{rtt:.1f}ms" if isinstance(rtt, (int, float)) else "home-broadband (>25ms)"
+        lat_block = (
+            f"\nExecution latency context: measured venue RTT={rtt_txt}; compete strictly against "
+            f"{latency_profile.get('compete_against')} with daily turnover <= {latency_profile.get('max_daily_turnover')} "
+            f"(avg hold >= {latency_profile.get('min_hold_days')} days)."
         )
 
     return (
@@ -562,7 +616,8 @@ def _build_alpha_prompt(n_candidates: int, recent_feedback: list[str] | None = N
         f"in vol spikes or choppy regimes. Keep expressions concise (<160 chars).\n"
         f"At least half of the returned expressions should incorporate orthogonal multi-modal features "
         f"(btc_vrp, dvol_z20, btc_fund_z20, fund_spread_be, stable_flow_21d, alt_breadth_20d, "
-        f"btc_rv_1m_ann, btc_jump_ratio, btc_vpin_1m, qqq_ret21, uup_ret21) alongside trend/spread features.{fb_block}\n"
+        f"btc_rv_1m_ann, btc_jump_ratio, btc_vpin_1m, qqq_ret21, uup_ret21) alongside trend/spread features."
+        f"{lat_block}{fb_block}\n"
         f"Return ONLY a JSON array of {n_candidates} expression strings, nothing else."
     )
 
@@ -574,6 +629,7 @@ def generate_llamacpp_candidates(
     llama_threads: int = DEFAULT_LLAMA_THREADS,
     llama_url: str = DEFAULT_LLAMA_URL,
     recent_feedback: list[str] | None = None,
+    latency_profile: dict[str, Any] | None = None,
     timeout_s: float = 180.0,
     max_tokens: int = 512,
     temperature: float = 0.2,
@@ -586,7 +642,7 @@ def generate_llamacpp_candidates(
 
     Returns `(expressions, error_note, source_tag)`.
     """
-    prompt = _build_alpha_prompt(n_candidates, recent_feedback=recent_feedback)
+    prompt = _build_alpha_prompt(n_candidates, recent_feedback=recent_feedback, latency_profile=latency_profile)
     sys_prompt = (
         "You are a quantitative crypto researcher. Output ONLY a valid JSON array "
         "of expression strings using ONLY the allowed features and functions."
@@ -678,10 +734,11 @@ def generate_ollama_candidates(
     ollama_url: str = "http://127.0.0.1:11434",
     model: str = "lfm2.5",
     recent_feedback: list[str] | None = None,
+    latency_profile: dict[str, Any] | None = None,
     timeout_s: float = 25.0,
 ) -> tuple[list[str], str | None]:
     """Query local Ollama `/api/generate` for novel causal alpha expressions."""
-    prompt = _build_alpha_prompt(n_candidates, recent_feedback=recent_feedback)
+    prompt = _build_alpha_prompt(n_candidates, recent_feedback=recent_feedback, latency_profile=latency_profile)
 
     payload = json.dumps({
         "model": model,
@@ -872,6 +929,8 @@ def _check_full_gates(
     stress: dict[str, Any],
     spot: dict[str, Any] | None = None,
     venue: str = "futures",
+    cv_summary: dict[str, Any] | None = None,
+    latency_profile: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
     if venue == "futures":
         target = base
@@ -910,6 +969,11 @@ def _check_full_gates(
         reasons.append(f"A_geo_monthly_pct {a_rec} <= 0")
     if float(stress.get("geo_monthly_pct", -100.0)) <= 0.0:
         reasons.append(f"stress geo/mo {stress.get('geo_monthly_pct')} <= 0")
+    if cv_summary and latency_profile:
+        turn = float(cv_summary.get("mean_daily_turnover", 0.0))
+        max_turn = float(latency_profile.get("max_daily_turnover", 0.35))
+        if turn > max_turn:
+            reasons.append(f"turnover {turn:.4f} > latency cap {max_turn:.2f}")
     if reasons:
         return False, "; ".join(reasons)
     return True, "PASS"
@@ -1060,12 +1124,19 @@ def run_discovery(
     shadow_path: str = DEFAULT_SHADOW_PATH,
     log_path: str = DEFAULT_LOG_PATH,
     venue: str = "futures",
+    latency_ms: float | None = None,
+    probe_latency: bool = True,
 ) -> dict[str, Any]:
     """Execute one bounded autonomous alpha-discovery round."""
     if venue not in ("futures", "spot"):
         raise ValueError(f"unknown venue: {venue}")
     state = _load_state(state_path)
     recent_fb = _load_recent_feedback(log_path, limit=5)
+
+    measured_ms = latency_ms
+    if measured_ms is None and probe_latency and not dry_run_synth:
+        measured_ms = probe_venue_latency_ms()
+    latency_profile = build_latency_profile(measured_ms, venue=venue)
 
     # 1. Generate candidate expressions: C++ llama.cpp -> Ollama -> deterministic symbolic
     expr_pairs: list[tuple[str, str]] = []
@@ -1080,6 +1151,7 @@ def run_discovery(
             llama_threads=llama_threads,
             llama_url=llama_url,
             recent_feedback=recent_fb,
+            latency_profile=latency_profile,
         )
         seen_llama: set[str] = set()
         for e in llama_exprs:
@@ -1094,6 +1166,7 @@ def run_discovery(
             ollama_url=ollama_url,
             model=model,
             recent_feedback=recent_fb,
+            latency_profile=latency_profile,
         )
         seen = {e for e, _ in expr_pairs}
         for e in ollama_exprs:
@@ -1224,7 +1297,9 @@ def run_discovery(
             assert ctx is not None
             base_m, stress_m, spot_m = _evaluate_real_full(ctx, sig, role, cur_trials)
 
-        ok_full, full_reason = _check_full_gates(base_m, stress_m, spot=spot_m, venue=venue)
+        ok_full, full_reason = _check_full_gates(
+            base_m, stress_m, spot=spot_m, venue=venue, cv_summary=cv_res, latency_profile=latency_profile
+        )
         res = CandidateResult(
             expr=expr, source=src, role=role, n_trials_at_eval=cur_trials,
             accepted=ok_full,
@@ -1252,12 +1327,14 @@ def run_discovery(
 
     state["runs"] += 1
     state["last_run_utc"] = now_iso
+    state["latency_profile"] = latency_profile
     _save_json(state_path, state)
     _save_json(shadow_path, shadow_queue)
 
     return {
         "mode": mode,
         "venue": venue,
+        "latency_profile": latency_profile,
         "llamacpp_note": llamacpp_note,
         "ollama_note": ollama_note,
         "dry_run_synth": dry_run_synth,
@@ -1282,6 +1359,8 @@ def main() -> None:
     p.add_argument("--model", default="lfm2.5")
     p.add_argument("--role", choices=("overlay", "standalone"), default="overlay")
     p.add_argument("--venue", choices=("futures", "spot"), default="futures")
+    p.add_argument("--latency-ms", type=float, default=None, help="Override venue RTT in ms (auto-probed if unset)")
+    p.add_argument("--no-latency-probe", action="store_true", help="Skip live HTTP latency probe")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--dry-run-synth", action="store_true")
     p.add_argument("--daily-csv-dir", default=None)
@@ -1307,9 +1386,13 @@ def main() -> None:
         shadow_path=args.shadow_path,
         log_path=args.log_path,
         venue=args.venue,
+        latency_ms=args.latency_ms,
+        probe_latency=not args.no_latency_probe,
     )
+    lp = summary.get("latency_profile") or {}
     print(
         f"auto_discover done | mode={summary['mode']} venue={summary['venue']} synth={summary['dry_run_synth']} "
+        f"rtt={lp.get('measured_rtt_ms')}ms regime={lp.get('regime')} "
         f"evaluated={summary['evaluated']} accepted={summary['accepted']} rejected={summary['rejected']} "
         f"n_trials={summary['n_trials_total']} shadow_queue={summary['shadow_queue_len']}"
     )
