@@ -657,7 +657,11 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 	if baseLev <= 0 {
 		baseLev = 2.50
 	}
-	targetLev := math.Max(0.5, math.Min(s.cfg.MaxLeverage, baseLev*(1.20/localVolBps)*s.cfg.KellyFraction)) * macroLevMult
+	vpinVal := s.vpin.VPIN()
+	targetLev := math.Max(0.5, math.Min(s.cfg.MaxLeverage, baseLev*(0.90/math.Max(0.65, localVolBps))*s.cfg.KellyFraction*1.5)) * macroLevMult
+	if vpinVal > 0.60 || s.hawkes.IsCascadeRisk() || s.volVarBps > 1.5 {
+		targetLev = math.Min(targetLev, 1.25)
+	}
 	s.sumDynamicLeverage += targetLev
 	s.leverageSamples++
 
@@ -689,14 +693,13 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 	}
 	inventorySkewBps := qNorm * 3.5 * math.Sqrt(gammaScale)
 
-	// Flow toxicity widening (VPIN + Hawkes)
-	vpinVal := s.vpin.VPIN()
+	// Flow toxicity widening (VPIN + Hawkes + realized tick vol floor)
 	toxicityWidenBps := 0.0
-	if vpinVal > 0.65 {
-		toxicityWidenBps = (vpinVal - 0.65) * 6.0
+	if vpinVal > 0.55 {
+		toxicityWidenBps = (vpinVal - 0.55) * 10.0
 	}
 	if s.hawkes.IsCascadeRisk() {
-		toxicityWidenBps += 5.0
+		toxicityWidenBps += 6.0
 	}
 
 	// 4. Directional Microstructure Alpha (Hawkes Flow Imbalance + Kyle's Lambda)
@@ -704,13 +707,17 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 	alphaBps := flowImbalance * 2.0
 	blendedSkewBps := alphaBps - inventorySkewBps
 
-	halfSpreadBps := (s.cfg.BaseSpreadBps + toxicityWidenBps) * macroSpreadMult
+	volSpreadFloor := math.Max(s.cfg.BaseSpreadBps, s.volVarBps*3.0)
+	halfSpreadBps := (volSpreadFloor + toxicityWidenBps) * macroSpreadMult
 	bidOffsetBps := halfSpreadBps - blendedSkewBps
 	askOffsetBps := halfSpreadBps + blendedSkewBps
 
 	minFloor := s.cfg.MinHalfSpreadBps
 	if minFloor <= 0 {
 		minFloor = 0.25
+	}
+	if s.volVarBps > 0.60 || vpinVal > 0.55 {
+		minFloor = math.Max(minFloor, s.cfg.BaseSpreadBps)
 	}
 	if bidOffsetBps < minFloor {
 		bidOffsetBps = minFloor
@@ -758,13 +765,17 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 		canQuoteAsk = false
 	}
 
-	// Toxic cascade defense: do not stack quotes into severe adverse momentum
-	if s.hawkes.IsCascadeRisk() || vpinVal > 0.70 {
-		if flowImbalance < -0.40 {
-			canQuoteBid = false // Severe selling avalanche: pull bids
-		} else if flowImbalance > 0.40 {
-			canQuoteAsk = false // Severe buying avalanche: pull asks
+	// Toxic cascade defense: pull exposed side earlier before toxic fills accumulate
+	if s.hawkes.IsCascadeRisk() || vpinVal > 0.60 {
+		if flowImbalance < -0.25 {
+			canQuoteBid = false // Selling pressure: pull bids
+		} else if flowImbalance > 0.25 {
+			canQuoteAsk = false // Buying pressure: pull asks
 		}
+	} else if flowImbalance < -0.35 {
+		canQuoteBid = false
+	} else if flowImbalance > 0.35 {
+		canQuoteAsk = false
 	}
 
 	if s.inventoryBase > 1e-6 {
@@ -1028,16 +1039,17 @@ func (s *TickSimulator) FinalizeResult(monthlyMetrics []MonthlyTickMetric) TickS
 	}
 	cagr := (math.Pow(endEqForCAGR/s.cfg.InitialCapital, 1.0/years) - 1.0) * 100.0
 
-	// Compute monthly returns if dailyReturns has < 5 samples (e.g. compressed monthly partition windows)
+	// Compute monthly returns when dailyReturns has < 5 samples or capital resets occurred
+	useMonthlySharpe := (len(s.dailyReturns) < 5 || s.hasCapitalResets) && len(monthlyMetrics) >= 2
 	evalRets := s.dailyReturns
-	if len(evalRets) < 5 && len(monthlyMetrics) >= 2 {
+	if useMonthlySharpe {
 		evalRets = make([]float64, 0, len(monthlyMetrics))
 		for _, m := range monthlyMetrics {
 			evalRets = append(evalRets, m.NetReturnPct/100.0)
 		}
 	}
 	sharpe := computeSharpeRatio(evalRets)
-	if len(s.dailyReturns) < 5 && len(monthlyMetrics) >= 2 && len(evalRets) >= 2 {
+	if useMonthlySharpe {
 		// Scale monthly Sharpe to annualized (sqrt(12) instead of sqrt(365))
 		var sum, sumSq float64
 		for _, r := range evalRets {
