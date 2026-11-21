@@ -221,6 +221,11 @@ type TickSimulator struct {
 	dailyReturns []float64
 	lastDayMs    int64
 	dayStartEq   float64
+
+	// Capital reset tracking (for monthly / yearly reset backtests)
+	cbCfg               paper.CircuitBreakerConfig
+	resetAccumProfitUSD float64
+	hasCapitalResets    bool
 }
 
 // NewTickSimulator creates and pre-allocates an institutional tick simulator.
@@ -294,6 +299,7 @@ func NewTickSimulator(cfg TickSimConfig) *TickSimulator {
 		tca:            paper.NewTCAMarkoutTracker(),
 		queueModel:     common.NewQueueReactiveModel(),
 		circuitBreaker: paper.NewCircuitBreaker(cbCfg),
+		cbCfg:          cbCfg,
 		macroGuardian:  guardian,
 		currentEquity:  cfg.InitialCapital,
 		cashUSD:        cfg.InitialCapital,
@@ -901,6 +907,24 @@ func (s *TickSimulator) FlattenToCash(markPrice float64) {
 	s.currentEquity = s.cashUSD
 }
 
+// ResetCapitalTo banks realized P&L since the prior reset and resets trading capital,
+// peak equity, and circuit-breaker state back to capUSD for independent period testing.
+func (s *TickSimulator) ResetCapitalTo(capUSD float64) {
+	if capUSD <= 0 {
+		capUSD = s.cfg.InitialCapital
+	}
+	s.hasCapitalResets = true
+	s.resetAccumProfitUSD += s.currentEquity - capUSD
+	s.cashUSD = capUSD
+	s.currentEquity = capUSD
+	s.peakEquity = capUSD
+	s.dayStartEq = capUSD
+	s.inventoryBase = 0
+	s.avgEntryPrice = 0
+	s.entryTimeNs = 0
+	s.circuitBreaker = paper.NewCircuitBreaker(s.cbCfg)
+}
+
 // MonthlySnapshot takes a snapshot of performance metrics for the current calendar month.
 func (s *TickSimulator) MonthlySnapshot(month string, startEq float64) MonthlyTickMetric {
 	endEq := s.currentEquity
@@ -990,12 +1014,19 @@ func (s *TickSimulator) FinalizeResult(monthlyMetrics []MonthlyTickMetric) TickS
 	tcaSnap := s.tca.Snapshot()
 
 	profit := s.currentEquity - s.cfg.InitialCapital
+	if s.hasCapitalResets {
+		profit = s.resetAccumProfitUSD + (s.currentEquity - s.cfg.InitialCapital)
+	}
 	totalRetPct := (profit / s.cfg.InitialCapital) * 100.0
 	years := float64(len(monthlyMetrics)) / 12.0
 	if years <= 0 {
 		years = 2.0
 	}
-	cagr := (math.Pow(s.currentEquity/s.cfg.InitialCapital, 1.0/years) - 1.0) * 100.0
+	endEqForCAGR := s.cfg.InitialCapital + profit
+	if endEqForCAGR <= 0 {
+		endEqForCAGR = 1e-6
+	}
+	cagr := (math.Pow(endEqForCAGR/s.cfg.InitialCapital, 1.0/years) - 1.0) * 100.0
 
 	// Compute monthly returns if dailyReturns has < 5 samples (e.g. compressed monthly partition windows)
 	evalRets := s.dailyReturns
@@ -1048,7 +1079,7 @@ func (s *TickSimulator) FinalizeResult(monthlyMetrics []MonthlyTickMetric) TickS
 		Symbol:                s.cfg.Symbol,
 		Timeframe:             timeframe,
 		InitialCapital:        s.cfg.InitialCapital,
-		FinalEquity:           s.currentEquity,
+		FinalEquity:           s.cfg.InitialCapital + profit,
 		TotalNetProfit:        profit,
 		TotalReturnPct:        totalRetPct,
 		CAGR:                  cagr,

@@ -370,7 +370,7 @@ func TestLiveRouterDryRunJournalDoesNotBlockLive(t *testing.T) {
 func TestLiveRouterStaleAndInvalidQuotes(t *testing.T) {
 	ctx := context.Background()
 	venue := newMockVenue()
-	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(24 * time.Hour).Add(12 * time.Hour)
 
 	cfg := DefaultRouterConfig()
 	cfg.MaxQuoteAge = 30 * time.Second
@@ -407,7 +407,7 @@ func TestLiveRouterMinOrderAndDailyTurnoverCap(t *testing.T) {
 	ctx := context.Background()
 	venue := newMockVenue()
 	journal := filepath.Join(t.TempDir(), "cap_journal.jsonl")
-	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(24 * time.Hour).Add(12 * time.Hour)
 	venue.quotes["ETH-USD"] = Quote{Symbol: "ETH-USD", Bid: 3000, Ask: 3002, Mid: 3001, Timestamp: now}
 
 	cfg := DefaultRouterConfig()

@@ -259,3 +259,30 @@ func TestPQBinStreamRoundTrip(t *testing.T) {
 		t.Errorf("expected 100 ticks streamed, got %d", count)
 	}
 }
+
+func TestTickSimulatorResetCapitalTo(t *testing.T) {
+	cfg := DefaultTickSimConfig()
+	cfg.InitialCapital = 1000.0
+	cfg.EnableMacroShield = false
+	sim := NewTickSimulator(cfg)
+
+	// Simulate +$50 profit in period 1, then reset to $1000
+	sim.cashUSD = 1050.0
+	sim.currentEquity = 1050.0
+	sim.ResetCapitalTo(1000.0)
+
+	if sim.cashUSD != 1000.0 || sim.currentEquity != 1000.0 || sim.peakEquity != 1000.0 {
+		t.Fatalf("capital did not reset cleanly: cash=%.2f eq=%.2f peak=%.2f", sim.cashUSD, sim.currentEquity, sim.peakEquity)
+	}
+
+	// Simulate -$10 in period 2 -> total net profit should be +$40, FinalEquity $1040
+	sim.cashUSD = 990.0
+	sim.currentEquity = 990.0
+	res := sim.FinalizeResult([]MonthlyTickMetric{
+		{Month: "2024-01", StartEquity: 1000.0, EndEquity: 1050.0, NetReturnPct: 5.0},
+		{Month: "2024-02", StartEquity: 1000.0, EndEquity: 990.0, NetReturnPct: -1.0},
+	})
+	if res.TotalNetProfit != 40.0 || res.FinalEquity != 1040.0 {
+		t.Fatalf("unexpected FinalizeResult after reset: profit=%.2f finalEq=%.2f", res.TotalNetProfit, res.FinalEquity)
+	}
+}

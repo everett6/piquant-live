@@ -34,6 +34,7 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	l1Depth := fs.Float64("l1-depth", 1.5, "Average top-of-book depth ahead in base asset (default: 1.5 BTC)")
 	stopLoss := fs.Float64("stop-loss", 60.0, "Structural stop-loss threshold in bps (default: 60.0 bps)")
 	enableMacro := fs.Bool("enable-macro", true, "Enable Macro News Shield during tick replay (default true)")
+	resetMode := fs.String("reset-mode", "none", "Capital reset schedule: none | monthly | yearly")
 	gridSearch := fs.Bool("grid-search", false, "Run parallel multi-core parameter grid search across 16 configurations")
 	optimalOut := fs.String("optimal-out", "data/reports/optimal_params.json", "Output path for winning optimal_params.json")
 
@@ -150,14 +151,29 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 		}
 	} else {
 		var monthlyMetrics []backtest.MonthlyTickMetric
+		mode := strings.ToLower(strings.TrimSpace(*resetMode))
+		if mode != "none" && mode != "monthly" && mode != "yearly" {
+			return fmt.Errorf("invalid --reset-mode %q (want none|monthly|yearly)", *resetMode)
+		}
 
-		fmt.Printf("\n[PiQuant] Streaming %d monthly high-resolution tick partitions through quantitative stack...\n", len(files))
+		fmt.Printf("\n[PiQuant] Streaming %d monthly high-resolution tick partitions through quantitative stack (reset-mode=%s)...\n", len(files), mode)
+		prevYear := ""
 		for idx, fpath := range files {
 			monthStr := extractMonthFromPath(fpath)
-			monthStartEquity := sim.MonthlySnapshot(monthStr, 0).EndEquity
+			curYear := ""
+			if len(monthStr) >= 4 {
+				curYear = monthStr[:4]
+			}
+			var monthStartEquity float64
 			if idx == 0 {
 				monthStartEquity = *capital
+			} else if mode == "monthly" || (mode == "yearly" && curYear != "" && curYear != prevYear) {
+				sim.ResetCapitalTo(*capital)
+				monthStartEquity = *capital
+			} else {
+				monthStartEquity = monthlyMetrics[idx-1].EndEquity
 			}
+			prevYear = curYear
 
 			fmt.Printf("  [%2d/%2d] Replaying %s (%s)...", idx+1, len(files), monthStr, filepath.Base(fpath))
 
