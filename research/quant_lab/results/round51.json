@@ -1,0 +1,81 @@
+{
+  "prereg": "PREREG51",
+  "n_trials": 812,
+  "window": [
+    "2020-01-01",
+    "2026-11-01"
+  ],
+  "venue": "US_SPOT",
+  "sol_active_days": 1953,
+  "mean_weights_when_sol_active": {
+    "BTC": 0.4318,
+    "ETH": 0.3249,
+    "SOL": 0.2432
+  },
+  "variants": {
+    "Q42_dualspeed_60_40_carry_spot": {
+      "geo_monthly_pct": 2.3513590717599646,
+      "max_dd_pct": -19.366993677189726,
+      "sharpe": 1.4828808211517843,
+      "A_geo_monthly_pct": 0.7635661382953055,
+      "by_regime": {
+        "bear": -1.1249006651726272,
+        "flat": -0.2389236444770172,
+        "bull": 6.348229869927991
+      },
+      "calmar": 1.4569276642224804,
+      "months": 82,
+      "losing_months": 0.3780487804878049,
+      "worst_month_pct": -6.426487819017132,
+      "worst_day_pct": -7.728817724599324,
+      "worst_day": "2021-01-21",
+      "y2022_geo_monthly_pct": -0.8868268843035038,
+      "deflated_sharpe": 0.7604145005739236,
+      "deflated_sharpe_812": 0.7552,
+      "mean_taper_mult": 0.8562,
+      "mean_dd_pct": 8.2763,
+      "ulcer_index_pct": 9.5083,
+      "dd_p95_pct": 15.2235,
+      "cdar_95_pct": 17.7253,
+      "pct_days_underwater": 94.31,
+      "max_underwater_days": 755,
+      "mean_recovery_days": 35.13
+    },
+    "Q51_btc_eth_sol_volparity_spot": {
+      "geo_monthly_pct": 2.6408067679056924,
+      "max_dd_pct": -19.26684496796526,
+      "sharpe": 1.6702305327876197,
+      "A_geo_monthly_pct": 0.30471628105621745,
+      "by_regime": {
+        "bear": -1.1561711641912074,
+        "flat": -0.4126200731882205,
+        "bull": 7.130641775313347
+      },
+      "calmar": 1.6447779212195013,
+      "months": 82,
+      "losing_months": 0.4024390243902439,
+      "worst_month_pct": -6.198590201948886,
+      "worst_day_pct": -6.963985524815019,
+      "worst_day": "2021-01-21",
+      "y2022_geo_monthly_pct": -0.8647151286607954,
+      "deflated_sharpe": 0.8875031158506093,
+      "deflated_sharpe_812": 0.8843,
+      "mean_taper_mult": 0.8714,
+      "mean_dd_pct": 7.8318,
+      "ulcer_index_pct": 9.1326,
+      "dd_p95_pct": 15.5797,
+      "cdar_95_pct": 17.7791,
+      "pct_days_underwater": 93.51,
+      "max_underwater_days": 730,
+      "mean_recovery_days": 30.31
+    }
+  },
+  "checks": {
+    "1_geo_lift_ge_0p10": true,
+    "2_sharpe_gt_q42": true,
+    "3_max_dd_ge_q42_minus_1pct": true,
+    "4_A_geo_monthly_pos": true,
+    "5_dsr_ge_0p80": true
+  },
+  "overall_pass": true
+}

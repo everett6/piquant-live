@@ -96,6 +96,11 @@ ALLOWED_FEATURES: tuple[str, ...] = (
     "alt_breadth_20d",
     "qqq_ret21",
     "uup_ret21",
+    "micro_tox_score",
+    "micro_imbalance_score",
+    "news_sent_3d",
+    "news_shock_1d",
+    "news_vol_7d",
 )
 ALLOWED_FEATURE_SET = frozenset(ALLOWED_FEATURES)
 
@@ -361,10 +366,11 @@ def check_causality_sandbox(expr: str, role: str = "overlay", shock_bar: int = 1
 
     # Generate synthetic multimodal features alongside synthetic BTC/ETH and shock t >= shock_bar
     import multimodal_features as MF
-    mm1 = pd.DataFrame(0.0, index=btc1.index, columns=MF.MULTIMODAL_COLS)
+    mm_cols = list(MF.MULTIMODAL_COLS) + list(FS.EXTRA_MULTIMODAL_COLS)
+    mm1 = pd.DataFrame(0.0, index=btc1.index, columns=mm_cols)
     # Add some random variation so multimodal features are non-constant and testable
     rng_mm = np.random.default_rng(42)
-    for col in MF.MULTIMODAL_COLS:
+    for col in mm_cols:
         mm1[col] = rng_mm.normal(0.0, 1.0, size=len(btc1))
     mm2 = mm1.copy()
     mm2.iloc[shock_bar:] = mm2.iloc[shock_bar:] * 4.0

@@ -1,6 +1,29 @@
 import numpy as np
 import pandas as pd
-from multimodal_features import MULTIMODAL_COLS
+# Defined locally so feature_store.py never requires pyarrow (via multimodal_features) at import time (Pi 5 friendly).
+MULTIMODAL_COLS: tuple[str, ...] = (
+    "btc_rv_1m_ann",
+    "btc_jump_ratio",
+    "btc_vpin_1m",
+    "eth_vpin_1m",
+    "btc_vrp",
+    "dvol_z20",
+    "btc_fund_z20",
+    "fund_spread_be",
+    "stable_flow_21d",
+    "alt_breadth_20d",
+    "qqq_ret21",
+    "uup_ret21",
+)
+
+EXTRA_MULTIMODAL_COLS: tuple[str, ...] = (
+    "micro_tox_score",
+    "micro_imbalance_score",
+    "news_sent_3d",
+    "news_shock_1d",
+    "news_vol_7d",
+)
+ALL_MULTIMODAL_COLS: tuple[str, ...] = MULTIMODAL_COLS + EXTRA_MULTIMODAL_COLS
 
 def pick_col(df: pd.DataFrame, short: str, long: str) -> pd.Series:
     return df[short] if short in df.columns else df[long]
@@ -63,16 +86,16 @@ def build_unified_features(btc: pd.DataFrame, eth: pd.DataFrame, multimodal: pd.
     df['btc_minus_eth_1d'] = df['btc_ret1'] - eth_ret1
     df['btc_minus_eth_5d'] = df['btc_ret5'] - eth_c.pct_change(5)
 
-    # Multimodal features integration
+    # Multimodal features integration (12 base + 5 micro_tox/news_sentiment)
     if multimodal is not None and not multimodal.empty:
         mm_reindexed = multimodal.reindex(btc.index).ffill().fillna(0.0)
-        for col in MULTIMODAL_COLS:
+        for col in ALL_MULTIMODAL_COLS:
             if col in mm_reindexed.columns:
                 df[col] = mm_reindexed[col]
             else:
                 df[col] = 0.0
     else:
-        for col in MULTIMODAL_COLS:
+        for col in ALL_MULTIMODAL_COLS:
             df[col] = 0.0
     
     return df

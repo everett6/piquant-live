@@ -36,8 +36,8 @@ def test_build_unified_features_multimodal():
     mm = pd.DataFrame(1.23, index=btc.index, columns=MF.MULTIMODAL_COLS)
     
     feats = FS.build_unified_features(btc, eth, multimodal=mm)
-    assert len(feats.columns) == 27
-    for col in MF.MULTIMODAL_COLS:
+    assert len(feats.columns) == 32
+    for col in MF.MULTIMODAL_COLS + FS.EXTRA_MULTIMODAL_COLS:
         assert col in feats.columns
         assert np.all(np.isfinite(feats[col].to_numpy()))
 

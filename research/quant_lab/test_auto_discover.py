@@ -374,3 +374,11 @@ def test_latency_profile_prompt_and_turnover_gate():
     )
     assert not ok_high_turn
     assert "turnover" in reason and "0.35" in reason
+
+
+def test_allowed_features_32_and_micro_news_causality():
+    assert len(AD.ALLOWED_FEATURES) == 32
+    for col in FS.EXTRA_MULTIMODAL_COLS:
+        assert col in AD.ALLOWED_FEATURES
+        ok, msg = AD.check_causality_sandbox(f"ema({col}, 5) * 1.5", role="overlay")
+        assert ok, f"Causality sandbox failed for {col}: {msg}"

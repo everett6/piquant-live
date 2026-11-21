@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -587,7 +588,34 @@ func StreamPQBin(r io.Reader, onTick func(tick *AggTradeTick) error) (*PQBinHead
 }
 
 // LoadPQBinFile streams a file on disk into onTick.
+// Supports both raw .pqbin files and zstd-compressed .pqbin.zst files.
 func LoadPQBinFile(path string, onTick func(tick *AggTradeTick) error) (*PQBinHeader, error) {
+	if strings.HasSuffix(strings.ToLower(path), ".zst") {
+		cmd := exec.Command("zstd", "-dc", path)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		pipe, err := cmd.StdoutPipe()
+		if err != nil {
+			return nil, fmt.Errorf("zstd stdout pipe for %s: %w", path, err)
+		}
+		if err := cmd.Start(); err != nil {
+			return nil, fmt.Errorf("start zstd for %s: %w", path, err)
+		}
+		br := bufio.NewReaderSize(pipe, 1<<20)
+		hdr, streamErr := StreamPQBin(br, onTick)
+		waitErr := cmd.Wait()
+		if streamErr != nil {
+			if waitErr != nil {
+				return hdr, fmt.Errorf("stream zst %s: %w (zstd: %v: %s)", path, streamErr, waitErr, strings.TrimSpace(stderr.String()))
+			}
+			return hdr, streamErr
+		}
+		if waitErr != nil {
+			return hdr, fmt.Errorf("zstd -dc %s failed: %w (%s)", path, waitErr, strings.TrimSpace(stderr.String()))
+		}
+		return hdr, nil
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open pqbin file %s: %w", path, err)

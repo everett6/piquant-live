@@ -2,6 +2,7 @@ package backtest
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -284,5 +285,68 @@ func TestTickSimulatorResetCapitalTo(t *testing.T) {
 	})
 	if res.TotalNetProfit != 40.0 || res.FinalEquity != 1040.0 {
 		t.Fatalf("unexpected FinalizeResult after reset: profit=%.2f finalEq=%.2f", res.TotalNetProfit, res.FinalEquity)
+	}
+}
+
+func TestLoadPQBinFileZst(t *testing.T) {
+	if _, err := exec.LookPath("zstd"); err != nil {
+		t.Skip("zstd not on PATH; skipping .pqbin.zst test")
+	}
+
+	tmpDir := t.TempDir()
+	pqPath := filepath.Join(tmpDir, "BTCUSDT-2024-01.pqbin")
+	zstPath := pqPath + ".zst"
+
+	ticks := make([]AggTradeTick, 120)
+	for i := range ticks {
+		ticks[i] = AggTradeTick{
+			TradeID:      uint64(30000 + i),
+			Price:        64000.0 + float64(i)*0.25,
+			Quantity:     0.02 + float64(i)*0.0005,
+			FirstTradeID: uint64(30000 + i),
+			LastTradeID:  uint64(30000 + i),
+			TimestampNs:  1704067200000000000 + int64(i*4_000_000),
+			IsBuyerMaker: (i%2 == 1),
+			IsBestMatch:  (i%4 != 0),
+		}
+	}
+
+	if err := SavePQBin(pqPath, "BTCUSDT", 2024, 1, ticks); err != nil {
+		t.Fatalf("SavePQBin error: %v", err)
+	}
+
+	// Compress with zstd to produce .pqbin.zst
+	if out, err := exec.Command("zstd", "-q", "-f", pqPath, "-o", zstPath).CombinedOutput(); err != nil {
+		t.Fatalf("zstd compress failed: %v (%s)", err, string(out))
+	}
+
+	var rawTicks []AggTradeTick
+	rawHdr, err := LoadPQBinFile(pqPath, func(tick *AggTradeTick) error {
+		rawTicks = append(rawTicks, *tick)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("LoadPQBinFile raw error: %v", err)
+	}
+
+	var zstTicks []AggTradeTick
+	zstHdr, err := LoadPQBinFile(zstPath, func(tick *AggTradeTick) error {
+		zstTicks = append(zstTicks, *tick)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("LoadPQBinFile zst error: %v", err)
+	}
+
+	if rawHdr.TickCount != zstHdr.TickCount || rawHdr.Year != zstHdr.Year || rawHdr.Month != zstHdr.Month {
+		t.Fatalf("header mismatch: raw=%+v zst=%+v", rawHdr, zstHdr)
+	}
+	if len(rawTicks) != len(zstTicks) || len(zstTicks) != len(ticks) {
+		t.Fatalf("tick count mismatch: raw=%d zst=%d want=%d", len(rawTicks), len(zstTicks), len(ticks))
+	}
+	for i := range rawTicks {
+		if rawTicks[i] != zstTicks[i] {
+			t.Fatalf("tick %d mismatch: raw=%+v zst=%+v", i, rawTicks[i], zstTicks[i])
+		}
 	}
 }

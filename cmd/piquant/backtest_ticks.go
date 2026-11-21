@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -62,9 +63,12 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 		*makerRebate, *latencyMs, *cancelLatencyMs)
 	fmt.Printf("[PiQuant] Verifying local binary tick partitions in %s...\n", tDataDir)
 
-	// Ensure 24 monthly partitions exist (or build from Binance Vision / verified intraday archives)
-	if err := ensureMonthlyPartitions(tDataDir, sym, *months, *forceDownload); err != nil {
-		return fmt.Errorf("ensuring tick partitions: %w", err)
+	// Ensure monthly partitions exist unless sufficient local .pqbin / .pqbin.zst partitions are already present
+	existing, _ := findTickPartitions(tDataDir, sym)
+	if *forceDownload || len(existing) < *months {
+		if err := ensureMonthlyPartitions(tDataDir, sym, *months, *forceDownload); err != nil {
+			return fmt.Errorf("ensuring tick partitions: %w", err)
+		}
 	}
 
 	cfg := backtest.DefaultTickSimConfig()
@@ -86,8 +90,8 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 
 	sim := backtest.NewTickSimulator(cfg)
 
-	// List partition files for the requested months
-	files, err := filepath.Glob(filepath.Join(tDataDir, fmt.Sprintf("%s-*.pqbin", sym)))
+	// List partition files for the requested months (supporting .pqbin and .pqbin.zst)
+	files, err := findTickPartitions(tDataDir, sym)
 	if err != nil || len(files) == 0 {
 		return fmt.Errorf("no tick partition files found in %s for %s", tDataDir, sym)
 	}
@@ -239,10 +243,46 @@ func runBacktestTicks(ctx context.Context, args []string) error {
 	return nil
 }
 
+func findTickPartitions(dataDir, sym string) ([]string, error) {
+	rawFiles, err := filepath.Glob(filepath.Join(dataDir, fmt.Sprintf("%s-*.pqbin", sym)))
+	if err != nil {
+		return nil, err
+	}
+	zstFiles, err := filepath.Glob(filepath.Join(dataDir, fmt.Sprintf("%s-*.pqbin.zst", sym)))
+	if err != nil {
+		return nil, err
+	}
+
+	byStem := make(map[string]string)
+	for _, f := range rawFiles {
+		stem := strings.TrimSuffix(filepath.Base(f), ".pqbin")
+		byStem[stem] = f
+	}
+	// Prefer .pqbin.zst if both exist
+	for _, f := range zstFiles {
+		stem := strings.TrimSuffix(filepath.Base(f), ".pqbin.zst")
+		byStem[stem] = f
+	}
+
+	stems := make([]string, 0, len(byStem))
+	for s := range byStem {
+		stems = append(stems, s)
+	}
+	sort.Strings(stems)
+
+	out := make([]string, 0, len(stems))
+	for _, s := range stems {
+		out = append(out, byStem[s])
+	}
+	return out, nil
+}
+
 func extractMonthFromPath(p string) string {
 	base := filepath.Base(p)
-	// Example: BTCUSDT-2024-01.pqbin
-	parts := strings.Split(strings.TrimSuffix(base, ".pqbin"), "-")
+	// Example: BTCUSDT-2024-01.pqbin or BTCUSDT-2024-01.pqbin.zst
+	base = strings.TrimSuffix(base, ".zst")
+	base = strings.TrimSuffix(base, ".pqbin")
+	parts := strings.Split(base, "-")
 	if len(parts) >= 3 {
 		return fmt.Sprintf("%s-%s", parts[1], parts[2])
 	}
