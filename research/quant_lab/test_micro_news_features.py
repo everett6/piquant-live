@@ -114,6 +114,7 @@ def test_infer_micro_tox_pure_numpy_and_npz_constraints(monkeypatch):
 
 def test_train_micro_tox_strict_pre2025_cutoff(tmp_path, monkeypatch):
     """Verify anti-leakage: corrupting 2025-2026 targets must produce identical weights."""
+    pytest.importorskip("torch")
     dates = pd.date_range("2020-01-01", "2025-06-30", freq="D", tz="UTC")
     rng = np.random.default_rng(99)
     mm = pd.DataFrame(
