@@ -1,5 +1,5 @@
 {
-  "venue": "us_spot",
+  "venue": "long_short_perp",
   "goal_ann_pct": 50.0,
   "train_cutoff": "2024-01-01",
   "train_coins": [
@@ -24,754 +24,754 @@
   ],
   "iters_run": 60,
   "best_config": {
-    "venue": "us_spot",
-    "top_k": 3,
+    "venue": "long_short_perp",
+    "top_k": 4,
     "mom_fast": 7,
-    "mom_slow": 28,
-    "trend_weight": 0.6,
+    "mom_slow": 21,
+    "trend_weight": 0.45,
     "xs_weight": 0.3,
-    "mr_weight": 0.1,
-    "short_scale": 0.0,
-    "tox_cut": 0.45,
-    "news_boost": 0.15,
-    "target_vol": 0.0,
-    "max_lev": 1.0,
-    "dd_start": 0.08,
-    "dd_full": 0.35,
-    "dd_floor": 0.35,
-    "carry_share": 0.4
+    "mr_weight": 0.0,
+    "short_scale": 0.75,
+    "tox_cut": 1.0,
+    "news_boost": 0.4,
+    "target_vol": 0.28,
+    "max_lev": 2.0,
+    "dd_start": 0.1,
+    "dd_full": 0.3,
+    "dd_floor": 0.4,
+    "carry_share": 0.35
   },
   "train_2020_2023": {
     "years": {
       "2020": {
         "days": 366,
-        "raw_pct": 52.27,
-        "ann_pct": 52.09,
-        "max_dd_pct": 12.11,
-        "sharpe": 2.2
+        "raw_pct": 96.16,
+        "ann_pct": 95.8,
+        "max_dd_pct": 13.53,
+        "sharpe": 2.363
       },
       "2021": {
         "days": 365,
-        "raw_pct": 43.61,
-        "ann_pct": 43.61,
-        "max_dd_pct": 12.23,
-        "sharpe": 1.916
+        "raw_pct": 59.4,
+        "ann_pct": 59.4,
+        "max_dd_pct": 17.86,
+        "sharpe": 1.615
       },
       "2022": {
         "days": 365,
-        "raw_pct": -19.02,
-        "ann_pct": -19.02,
-        "max_dd_pct": 20.83,
-        "sharpe": -1.855
+        "raw_pct": -11.52,
+        "ann_pct": -11.52,
+        "max_dd_pct": 26.16,
+        "sharpe": -0.374
       },
       "2023": {
         "days": 365,
-        "raw_pct": 27.32,
-        "ann_pct": 27.32,
-        "max_dd_pct": 8.82,
-        "sharpe": 1.885
+        "raw_pct": 49.13,
+        "ann_pct": 49.13,
+        "max_dd_pct": 11.33,
+        "sharpe": 2.092
       }
     },
     "worst_year": 2022,
-    "min_ann_pct": -19.02,
-    "years_ge_50": 1,
+    "min_ann_pct": -11.52,
+    "years_ge_50": 2,
     "total_years": 4,
-    "cagr_pct": 22.52,
-    "max_dd_pct": 26.49,
-    "sharpe": 1.308
+    "cagr_pct": 42.49,
+    "max_dd_pct": 28.27,
+    "sharpe": 1.437
   },
   "oos_2024_2026": {
     "years": {
       "2024": {
         "days": 366,
-        "raw_pct": 16.63,
-        "ann_pct": 16.58,
-        "max_dd_pct": 15.78,
-        "sharpe": 0.972
+        "raw_pct": 3.4,
+        "ann_pct": 3.39,
+        "max_dd_pct": 24.1,
+        "sharpe": 0.259
       },
       "2025": {
         "days": 365,
-        "raw_pct": 2.34,
-        "ann_pct": 2.34,
-        "max_dd_pct": 12.52,
-        "sharpe": 0.223
+        "raw_pct": -7.28,
+        "ann_pct": -7.28,
+        "max_dd_pct": 15.95,
+        "sharpe": -0.255
       },
       "2026": {
         "days": 304,
-        "raw_pct": 2.08,
-        "ann_pct": 2.51,
-        "max_dd_pct": 11.62,
-        "sharpe": 0.265
+        "raw_pct": 1.16,
+        "ann_pct": 1.4,
+        "max_dd_pct": 17.31,
+        "sharpe": 0.166
       }
     },
     "worst_year": 2025,
-    "min_ann_pct": 2.34,
+    "min_ann_pct": -7.28,
     "years_ge_50": 0,
     "total_years": 3,
-    "cagr_pct": 7.22,
-    "max_dd_pct": 19.28,
-    "sharpe": 0.525
+    "cagr_pct": -1.07,
+    "max_dd_pct": 30.14,
+    "sharpe": 0.056
   },
   "holdout_untested_coins_2020_2026": {
     "years": {
       "2021": {
         "days": 289,
-        "raw_pct": -3.58,
-        "ann_pct": -4.5,
-        "max_dd_pct": 21.14,
-        "sharpe": 0.028
+        "raw_pct": 44.68,
+        "ann_pct": 59.44,
+        "max_dd_pct": 20.08,
+        "sharpe": 1.336
       },
       "2022": {
         "days": 365,
-        "raw_pct": -14.58,
-        "ann_pct": -14.58,
-        "max_dd_pct": 16.27,
-        "sharpe": -1.033
+        "raw_pct": 2.04,
+        "ann_pct": 2.04,
+        "max_dd_pct": 27.03,
+        "sharpe": 0.225
       },
       "2023": {
         "days": 365,
-        "raw_pct": 19.44,
-        "ann_pct": 19.44,
-        "max_dd_pct": 9.07,
-        "sharpe": 1.086
+        "raw_pct": 44.55,
+        "ann_pct": 44.55,
+        "max_dd_pct": 13.63,
+        "sharpe": 1.426
       },
       "2024": {
         "days": 366,
-        "raw_pct": 88.85,
-        "ann_pct": 88.52,
-        "max_dd_pct": 26.22,
-        "sharpe": 1.797
+        "raw_pct": 45.18,
+        "ann_pct": 45.04,
+        "max_dd_pct": 24.25,
+        "sharpe": 1.238
       },
       "2025": {
         "days": 365,
-        "raw_pct": -17.76,
-        "ann_pct": -17.76,
-        "max_dd_pct": 22.45,
-        "sharpe": -1.045
+        "raw_pct": -16.64,
+        "ann_pct": -16.64,
+        "max_dd_pct": 21.59,
+        "sharpe": -0.581
       },
       "2026": {
         "days": 304,
-        "raw_pct": 0.83,
-        "ann_pct": 1.0,
-        "max_dd_pct": 6.62,
-        "sharpe": 0.146
+        "raw_pct": 2.43,
+        "ann_pct": 2.92,
+        "max_dd_pct": 18.3,
+        "sharpe": 0.247
       }
     },
     "worst_year": 2025,
-    "min_ann_pct": -17.76,
+    "min_ann_pct": -16.64,
     "years_ge_50": 1,
     "total_years": 6,
-    "cagr_pct": 7.98,
-    "max_dd_pct": 37.64,
-    "sharpe": 0.437
+    "cagr_pct": 18.87,
+    "max_dd_pct": 39.28,
+    "sharpe": 0.711
   },
   "equities_etfs_2020_2026": {
     "years": {
       "2020": {
         "days": 253,
-        "raw_pct": 18.06,
-        "ann_pct": 17.98,
-        "max_dd_pct": 11.98,
-        "sharpe": 1.295
+        "raw_pct": 10.94,
+        "ann_pct": 10.9,
+        "max_dd_pct": 18.7,
+        "sharpe": 0.635
       },
       "2021": {
         "days": 252,
-        "raw_pct": 9.82,
-        "ann_pct": 9.82,
-        "max_dd_pct": 4.99,
-        "sharpe": 1.062
+        "raw_pct": -5.08,
+        "ann_pct": -5.08,
+        "max_dd_pct": 10.72,
+        "sharpe": -0.393
       },
       "2022": {
         "days": 251,
-        "raw_pct": -10.36,
-        "ann_pct": -10.4,
-        "max_dd_pct": 12.46,
-        "sharpe": -1.003
+        "raw_pct": -12.61,
+        "ann_pct": -12.66,
+        "max_dd_pct": 15.9,
+        "sharpe": -1.029
       },
       "2023": {
         "days": 250,
-        "raw_pct": 35.31,
-        "ann_pct": 35.63,
-        "max_dd_pct": 5.0,
-        "sharpe": 2.557
+        "raw_pct": 22.64,
+        "ann_pct": 22.84,
+        "max_dd_pct": 11.28,
+        "sharpe": 1.687
       },
       "2024": {
         "days": 252,
-        "raw_pct": 21.27,
-        "ann_pct": 21.27,
-        "max_dd_pct": 4.95,
-        "sharpe": 1.764
+        "raw_pct": 7.8,
+        "ann_pct": 7.8,
+        "max_dd_pct": 11.15,
+        "sharpe": 0.56
       },
       "2025": {
         "days": 250,
-        "raw_pct": 21.26,
-        "ann_pct": 21.45,
-        "max_dd_pct": 4.53,
-        "sharpe": 2.196
+        "raw_pct": 9.27,
+        "ann_pct": 9.35,
+        "max_dd_pct": 10.09,
+        "sharpe": 0.678
       },
       "2026": {
         "days": 209,
-        "raw_pct": 2.79,
-        "ann_pct": 3.37,
-        "max_dd_pct": 9.19,
-        "sharpe": 0.406
+        "raw_pct": -9.38,
+        "ann_pct": -11.2,
+        "max_dd_pct": 14.97,
+        "sharpe": -0.85
       }
     },
     "worst_year": 2022,
-    "min_ann_pct": -10.4,
+    "min_ann_pct": -12.66,
     "years_ge_50": 0,
     "total_years": 7,
-    "cagr_pct": 13.55,
-    "max_dd_pct": 13.15,
-    "sharpe": 1.224
+    "cagr_pct": 2.77,
+    "max_dd_pct": 29.53,
+    "sharpe": 0.262
   },
   "history": [
     {
       "iter": 0,
       "reason": "initial_baseline",
-      "train_score": 0.7935,
-      "train_min_ann_pct": -23.29,
-      "train_sharpe": 1.323
+      "train_score": 0.378,
+      "train_min_ann_pct": -25.32,
+      "train_sharpe": 1.141
     },
     {
       "iter": 1,
-      "reason": "step=1 bottleneck=2022 (-23.29%) -> boost oversold MR dip-buying",
-      "improved": false,
-      "cand_train_score": 0.5142,
-      "best_train_score": 0.7935,
-      "best_train_min_ann_pct": -23.29,
-      "best_train_sharpe": 1.323
+      "reason": "step=1 bottleneck=2022 (-25.32%) -> tune short sleeve & carry_share",
+      "improved": true,
+      "cand_train_score": 0.575,
+      "best_train_score": 0.575,
+      "best_train_min_ann_pct": -24.62,
+      "best_train_sharpe": 1.327
     },
     {
       "iter": 2,
-      "reason": "step=2 bottleneck=2022 (-23.29%) -> tune micro_tox & news_sent_3d",
+      "reason": "step=2 bottleneck=2022 (-24.62%) -> tune causal vol-target & lev cap",
       "improved": false,
-      "cand_train_score": 0.7915,
-      "best_train_score": 0.7935,
-      "best_train_min_ann_pct": -23.29,
-      "best_train_sharpe": 1.323
+      "cand_train_score": 0.5607,
+      "best_train_score": 0.575,
+      "best_train_min_ann_pct": -24.62,
+      "best_train_sharpe": 1.327
     },
     {
       "iter": 3,
-      "reason": "step=3 bottleneck=2022 (-23.29%) -> tune DD taper & carry_share",
-      "improved": true,
-      "cand_train_score": 0.8204,
-      "best_train_score": 0.8204,
-      "best_train_min_ann_pct": -23.38,
-      "best_train_sharpe": 1.334
+      "reason": "step=3 bottleneck=2022 (-24.62%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_train_score": 0.4679,
+      "best_train_score": 0.575,
+      "best_train_min_ann_pct": -24.62,
+      "best_train_sharpe": 1.327
     },
     {
       "iter": 4,
-      "reason": "step=4 bottleneck=2022 (-23.38%) -> tune top-K & dual momentum",
+      "reason": "step=4 bottleneck=2022 (-24.62%) -> tune L/S top-K & momentum",
       "improved": false,
-      "cand_train_score": 0.6878,
-      "best_train_score": 0.8204,
-      "best_train_min_ann_pct": -23.38,
-      "best_train_sharpe": 1.334
+      "cand_train_score": 0.5184,
+      "best_train_score": 0.575,
+      "best_train_min_ann_pct": -24.62,
+      "best_train_sharpe": 1.327
     },
     {
       "iter": 5,
-      "reason": "step=5 bottleneck=2022 (-23.38%) -> boost oversold MR dip-buying",
+      "reason": "step=5 bottleneck=2022 (-24.62%) -> tune short sleeve & carry_share",
       "improved": false,
-      "cand_train_score": 0.5371,
-      "best_train_score": 0.8204,
-      "best_train_min_ann_pct": -23.38,
-      "best_train_sharpe": 1.334
+      "cand_train_score": 0.1829,
+      "best_train_score": 0.575,
+      "best_train_min_ann_pct": -24.62,
+      "best_train_sharpe": 1.327
     },
     {
       "iter": 6,
-      "reason": "step=6 bottleneck=2022 (-23.38%) -> tune micro_tox & news_sent_3d",
+      "reason": "step=6 bottleneck=2022 (-24.62%) -> tune causal vol-target & lev cap",
       "improved": false,
-      "cand_train_score": 0.8036,
-      "best_train_score": 0.8204,
-      "best_train_min_ann_pct": -23.38,
-      "best_train_sharpe": 1.334
+      "cand_train_score": 0.5054,
+      "best_train_score": 0.575,
+      "best_train_min_ann_pct": -24.62,
+      "best_train_sharpe": 1.327
     },
     {
       "iter": 7,
-      "reason": "step=7 bottleneck=2022 (-23.38%) -> tune DD taper & carry_share",
-      "improved": true,
-      "cand_train_score": 0.903,
-      "best_train_score": 0.903,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.38
+      "reason": "step=7 bottleneck=2022 (-24.62%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_train_score": 0.4234,
+      "best_train_score": 0.575,
+      "best_train_min_ann_pct": -24.62,
+      "best_train_sharpe": 1.327
     },
     {
       "iter": 8,
-      "reason": "step=8 bottleneck=2022 (-23.2%) -> tune top-K & dual momentum",
+      "reason": "step=8 bottleneck=2022 (-24.62%) -> tune L/S top-K & momentum",
       "improved": false,
-      "cand_train_score": 0.8079,
-      "best_train_score": 0.903,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.38
+      "cand_train_score": 0.3467,
+      "best_train_score": 0.575,
+      "best_train_min_ann_pct": -24.62,
+      "best_train_sharpe": 1.327
     },
     {
       "iter": 9,
-      "reason": "step=9 bottleneck=2022 (-23.2%) -> boost oversold MR dip-buying",
+      "reason": "step=9 bottleneck=2022 (-24.62%) -> tune short sleeve & carry_share",
       "improved": false,
-      "cand_train_score": 0.724,
-      "best_train_score": 0.903,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.38
+      "cand_train_score": 0.2641,
+      "best_train_score": 0.575,
+      "best_train_min_ann_pct": -24.62,
+      "best_train_sharpe": 1.327
     },
     {
       "iter": 10,
-      "reason": "step=10 bottleneck=2022 (-23.2%) -> tune micro_tox & news_sent_3d",
-      "improved": false,
-      "cand_train_score": 0.8948,
-      "best_train_score": 0.903,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.38
+      "reason": "step=10 bottleneck=2022 (-24.62%) -> tune causal vol-target & lev cap",
+      "improved": true,
+      "cand_train_score": 0.7162,
+      "best_train_score": 0.7162,
+      "best_train_min_ann_pct": -21.66,
+      "best_train_sharpe": 1.345
     },
     {
       "iter": 11,
-      "reason": "step=11 bottleneck=2022 (-23.2%) -> tune DD taper & carry_share",
-      "improved": false,
-      "cand_train_score": 0.6296,
-      "best_train_score": 0.903,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.38
+      "reason": "step=11 bottleneck=2022 (-21.66%) -> tune micro/news + MR",
+      "improved": true,
+      "cand_train_score": 0.7616,
+      "best_train_score": 0.7616,
+      "best_train_min_ann_pct": -18.14,
+      "best_train_sharpe": 1.322
     },
     {
       "iter": 12,
-      "reason": "step=12 bottleneck=2022 (-23.2%) -> tune top-K & dual momentum",
+      "reason": "step=12 bottleneck=2022 (-18.14%) -> tune L/S top-K & momentum",
       "improved": false,
-      "cand_train_score": 0.7703,
-      "best_train_score": 0.903,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.38
+      "cand_train_score": 0.7089,
+      "best_train_score": 0.7616,
+      "best_train_min_ann_pct": -18.14,
+      "best_train_sharpe": 1.322
     },
     {
       "iter": 13,
-      "reason": "step=13 bottleneck=2022 (-23.2%) -> boost oversold MR dip-buying",
+      "reason": "step=13 bottleneck=2022 (-18.14%) -> tune short sleeve & carry_share",
       "improved": false,
-      "cand_train_score": 0.6773,
-      "best_train_score": 0.903,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.38
+      "cand_train_score": 0.7224,
+      "best_train_score": 0.7616,
+      "best_train_min_ann_pct": -18.14,
+      "best_train_sharpe": 1.322
     },
     {
       "iter": 14,
-      "reason": "step=14 bottleneck=2022 (-23.2%) -> tune micro_tox & news_sent_3d",
-      "improved": true,
-      "cand_train_score": 0.9042,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "reason": "step=14 bottleneck=2022 (-18.14%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_train_score": 0.5715,
+      "best_train_score": 0.7616,
+      "best_train_min_ann_pct": -18.14,
+      "best_train_sharpe": 1.322
     },
     {
       "iter": 15,
-      "reason": "step=15 bottleneck=2022 (-21.1%) -> tune DD taper & carry_share",
+      "reason": "step=15 bottleneck=2022 (-18.14%) -> tune micro/news + MR",
       "improved": false,
-      "cand_train_score": 0.567,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "cand_train_score": 0.6588,
+      "best_train_score": 0.7616,
+      "best_train_min_ann_pct": -18.14,
+      "best_train_sharpe": 1.322
     },
     {
       "iter": 16,
-      "reason": "step=16 bottleneck=2022 (-21.1%) -> tune top-K & dual momentum",
-      "improved": false,
-      "cand_train_score": 0.7104,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "reason": "step=16 bottleneck=2022 (-18.14%) -> tune L/S top-K & momentum",
+      "improved": true,
+      "cand_train_score": 0.7773,
+      "best_train_score": 0.7773,
+      "best_train_min_ann_pct": -21.69,
+      "best_train_sharpe": 1.467
     },
     {
       "iter": 17,
-      "reason": "step=17 bottleneck=2022 (-21.1%) -> boost oversold MR dip-buying",
-      "improved": false,
-      "cand_train_score": 0.6743,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "reason": "step=17 bottleneck=2022 (-21.69%) -> tune short sleeve & carry_share",
+      "improved": true,
+      "cand_train_score": 0.7897,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 18,
-      "reason": "step=18 bottleneck=2022 (-21.1%) -> tune micro_tox & news_sent_3d",
+      "reason": "step=18 bottleneck=2022 (-12.03%) -> tune causal vol-target & lev cap",
       "improved": false,
-      "cand_train_score": 0.8409,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "cand_train_score": 0.5509,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 19,
-      "reason": "step=19 bottleneck=2022 (-21.1%) -> tune DD taper & carry_share",
+      "reason": "step=19 bottleneck=2022 (-12.03%) -> tune micro/news + MR",
       "improved": false,
-      "cand_train_score": 0.3399,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "cand_train_score": 0.6923,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 20,
-      "reason": "step=20 bottleneck=2022 (-21.1%) -> tune top-K & dual momentum",
+      "reason": "step=20 bottleneck=2022 (-12.03%) -> tune L/S top-K & momentum",
       "improved": false,
-      "cand_train_score": 0.9042,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "cand_train_score": 0.5075,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 21,
-      "reason": "step=21 bottleneck=2022 (-21.1%) -> boost oversold MR dip-buying",
+      "reason": "step=21 bottleneck=2022 (-12.03%) -> tune short sleeve & carry_share",
       "improved": false,
-      "cand_train_score": 0.6564,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "cand_train_score": 0.7167,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 22,
-      "reason": "step=22 bottleneck=2022 (-21.1%) -> tune micro_tox & news_sent_3d",
+      "reason": "step=22 bottleneck=2022 (-12.03%) -> tune causal vol-target & lev cap",
       "improved": false,
-      "cand_train_score": 0.9042,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "cand_train_score": 0.5731,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 23,
-      "reason": "step=23 bottleneck=2022 (-21.1%) -> tune DD taper & carry_share",
+      "reason": "step=23 bottleneck=2022 (-12.03%) -> tune micro/news + MR",
       "improved": false,
-      "cand_train_score": 0.55,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "cand_train_score": 0.7288,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 24,
-      "reason": "step=24 bottleneck=2022 (-21.1%) -> tune top-K & dual momentum",
+      "reason": "step=24 bottleneck=2022 (-12.03%) -> tune L/S top-K & momentum",
       "improved": false,
-      "cand_train_score": 0.8277,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "cand_train_score": 0.6187,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 25,
-      "reason": "step=25 bottleneck=2022 (-21.1%) -> boost oversold MR dip-buying",
+      "reason": "step=25 bottleneck=2022 (-12.03%) -> tune short sleeve & carry_share",
       "improved": false,
-      "cand_train_score": 0.6215,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "cand_train_score": 0.5633,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 26,
-      "reason": "step=26 bottleneck=2022 (-21.1%) -> tune micro_tox & news_sent_3d",
+      "reason": "step=26 bottleneck=2022 (-12.03%) -> tune causal vol-target & lev cap",
       "improved": false,
-      "cand_train_score": 0.8992,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "cand_train_score": 0.451,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 27,
-      "reason": "step=27 bottleneck=2022 (-21.1%) -> tune DD taper & carry_share",
+      "reason": "step=27 bottleneck=2022 (-12.03%) -> tune micro/news + MR",
       "improved": false,
-      "cand_train_score": 0.567,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "cand_train_score": 0.5902,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 28,
-      "reason": "step=28 bottleneck=2022 (-21.1%) -> tune top-K & dual momentum",
+      "reason": "step=28 bottleneck=2022 (-12.03%) -> tune L/S top-K & momentum",
       "improved": false,
-      "cand_train_score": 0.869,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "cand_train_score": 0.662,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 29,
-      "reason": "step=29 bottleneck=2022 (-21.1%) -> boost oversold MR dip-buying",
+      "reason": "step=29 bottleneck=2022 (-12.03%) -> tune short sleeve & carry_share",
       "improved": false,
-      "cand_train_score": 0.6564,
-      "best_train_score": 0.9042,
-      "best_train_min_ann_pct": -21.1,
-      "best_train_sharpe": 1.278
+      "cand_train_score": 0.6258,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 30,
-      "reason": "step=30 bottleneck=2022 (-21.1%) -> tune micro_tox & news_sent_3d",
-      "improved": true,
-      "cand_train_score": 0.907,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "reason": "step=30 bottleneck=2022 (-12.03%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_train_score": 0.4092,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 31,
-      "reason": "step=31 bottleneck=2022 (-23.2%) -> tune DD taper & carry_share",
+      "reason": "step=31 bottleneck=2022 (-12.03%) -> tune micro/news + MR",
       "improved": false,
-      "cand_train_score": 0.7727,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.6702,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 32,
-      "reason": "step=32 bottleneck=2022 (-23.2%) -> tune top-K & dual momentum",
+      "reason": "step=32 bottleneck=2022 (-12.03%) -> tune L/S top-K & momentum",
       "improved": false,
-      "cand_train_score": 0.8213,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.4696,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 33,
-      "reason": "step=33 bottleneck=2022 (-23.2%) -> boost oversold MR dip-buying",
+      "reason": "step=33 bottleneck=2022 (-12.03%) -> tune short sleeve & carry_share",
       "improved": false,
-      "cand_train_score": 0.6099,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.7377,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 34,
-      "reason": "step=34 bottleneck=2022 (-23.2%) -> tune micro_tox & news_sent_3d",
+      "reason": "step=34 bottleneck=2022 (-12.03%) -> tune causal vol-target & lev cap",
       "improved": false,
-      "cand_train_score": 0.8409,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.7747,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 35,
-      "reason": "step=35 bottleneck=2022 (-23.2%) -> tune DD taper & carry_share",
+      "reason": "step=35 bottleneck=2022 (-12.03%) -> tune micro/news + MR",
       "improved": false,
-      "cand_train_score": 0.6137,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.741,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 36,
-      "reason": "step=36 bottleneck=2022 (-23.2%) -> tune top-K & dual momentum",
+      "reason": "step=36 bottleneck=2022 (-12.03%) -> tune L/S top-K & momentum",
       "improved": false,
-      "cand_train_score": 0.6435,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.6219,
+      "best_train_score": 0.7897,
+      "best_train_min_ann_pct": -12.03,
+      "best_train_sharpe": 1.258
     },
     {
       "iter": 37,
-      "reason": "step=37 bottleneck=2022 (-23.2%) -> boost oversold MR dip-buying",
-      "improved": false,
-      "cand_train_score": 0.729,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "reason": "step=37 bottleneck=2022 (-12.03%) -> tune short sleeve & carry_share",
+      "improved": true,
+      "cand_train_score": 0.8557,
+      "best_train_score": 0.8557,
+      "best_train_min_ann_pct": -20.61,
+      "best_train_sharpe": 1.493
     },
     {
       "iter": 38,
-      "reason": "step=38 bottleneck=2022 (-23.2%) -> tune micro_tox & news_sent_3d",
+      "reason": "step=38 bottleneck=2022 (-20.61%) -> tune causal vol-target & lev cap",
       "improved": false,
-      "cand_train_score": 0.9042,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.5738,
+      "best_train_score": 0.8557,
+      "best_train_min_ann_pct": -20.61,
+      "best_train_sharpe": 1.493
     },
     {
       "iter": 39,
-      "reason": "step=39 bottleneck=2022 (-23.2%) -> tune DD taper & carry_share",
+      "reason": "step=39 bottleneck=2022 (-20.61%) -> tune micro/news + MR",
       "improved": false,
-      "cand_train_score": 0.8501,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.7424,
+      "best_train_score": 0.8557,
+      "best_train_min_ann_pct": -20.61,
+      "best_train_sharpe": 1.493
     },
     {
       "iter": 40,
-      "reason": "step=40 bottleneck=2022 (-23.2%) -> tune top-K & dual momentum",
+      "reason": "step=40 bottleneck=2022 (-20.61%) -> tune L/S top-K & momentum",
       "improved": false,
-      "cand_train_score": 0.7061,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.8494,
+      "best_train_score": 0.8557,
+      "best_train_min_ann_pct": -20.61,
+      "best_train_sharpe": 1.493
     },
     {
       "iter": 41,
-      "reason": "step=41 bottleneck=2022 (-23.2%) -> boost oversold MR dip-buying",
-      "improved": false,
-      "cand_train_score": 0.729,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "reason": "step=41 bottleneck=2022 (-20.61%) -> tune short sleeve & carry_share",
+      "improved": true,
+      "cand_train_score": 0.8569,
+      "best_train_score": 0.8569,
+      "best_train_min_ann_pct": -12.27,
+      "best_train_sharpe": 1.305
     },
     {
       "iter": 42,
-      "reason": "step=42 bottleneck=2022 (-23.2%) -> tune micro_tox & news_sent_3d",
+      "reason": "step=42 bottleneck=2022 (-12.27%) -> tune causal vol-target & lev cap",
       "improved": false,
-      "cand_train_score": 0.901,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.5448,
+      "best_train_score": 0.8569,
+      "best_train_min_ann_pct": -12.27,
+      "best_train_sharpe": 1.305
     },
     {
       "iter": 43,
-      "reason": "step=43 bottleneck=2022 (-23.2%) -> tune DD taper & carry_share",
+      "reason": "step=43 bottleneck=2022 (-12.27%) -> tune micro/news + MR",
       "improved": false,
-      "cand_train_score": 0.5742,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.5705,
+      "best_train_score": 0.8569,
+      "best_train_min_ann_pct": -12.27,
+      "best_train_sharpe": 1.305
     },
     {
       "iter": 44,
-      "reason": "step=44 bottleneck=2022 (-23.2%) -> tune top-K & dual momentum",
-      "improved": false,
-      "cand_train_score": 0.8645,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "reason": "step=44 bottleneck=2022 (-12.27%) -> tune L/S top-K & momentum",
+      "improved": true,
+      "cand_train_score": 0.862,
+      "best_train_score": 0.862,
+      "best_train_min_ann_pct": -12.64,
+      "best_train_sharpe": 1.292
     },
     {
       "iter": 45,
-      "reason": "step=45 bottleneck=2022 (-23.2%) -> boost oversold MR dip-buying",
-      "improved": false,
-      "cand_train_score": 0.6043,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "reason": "step=45 bottleneck=2022 (-12.64%) -> tune short sleeve & carry_share",
+      "improved": true,
+      "cand_train_score": 0.8788,
+      "best_train_score": 0.8788,
+      "best_train_min_ann_pct": -18.3,
+      "best_train_sharpe": 1.389
     },
     {
       "iter": 46,
-      "reason": "step=46 bottleneck=2022 (-23.2%) -> tune micro_tox & news_sent_3d",
+      "reason": "step=46 bottleneck=2022 (-18.3%) -> tune causal vol-target & lev cap",
       "improved": false,
-      "cand_train_score": 0.8409,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.5759,
+      "best_train_score": 0.8788,
+      "best_train_min_ann_pct": -18.3,
+      "best_train_sharpe": 1.389
     },
     {
       "iter": 47,
-      "reason": "step=47 bottleneck=2022 (-23.2%) -> tune DD taper & carry_share",
+      "reason": "step=47 bottleneck=2022 (-18.3%) -> tune micro/news + MR",
       "improved": false,
-      "cand_train_score": 0.7727,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.7502,
+      "best_train_score": 0.8788,
+      "best_train_min_ann_pct": -18.3,
+      "best_train_sharpe": 1.389
     },
     {
       "iter": 48,
-      "reason": "step=48 bottleneck=2022 (-23.2%) -> tune top-K & dual momentum",
-      "improved": false,
-      "cand_train_score": 0.7004,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "reason": "step=48 bottleneck=2022 (-18.3%) -> tune L/S top-K & momentum",
+      "improved": true,
+      "cand_train_score": 0.9359,
+      "best_train_score": 0.9359,
+      "best_train_min_ann_pct": -14.83,
+      "best_train_sharpe": 1.445
     },
     {
       "iter": 49,
-      "reason": "step=49 bottleneck=2022 (-23.2%) -> boost oversold MR dip-buying",
+      "reason": "step=49 bottleneck=2022 (-14.83%) -> tune short sleeve & carry_share",
       "improved": false,
-      "cand_train_score": 0.7177,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.8826,
+      "best_train_score": 0.9359,
+      "best_train_min_ann_pct": -14.83,
+      "best_train_sharpe": 1.445
     },
     {
       "iter": 50,
-      "reason": "step=50 bottleneck=2022 (-23.2%) -> tune micro_tox & news_sent_3d",
+      "reason": "step=50 bottleneck=2022 (-14.83%) -> tune causal vol-target & lev cap",
       "improved": false,
-      "cand_train_score": 0.8908,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.6261,
+      "best_train_score": 0.9359,
+      "best_train_min_ann_pct": -14.83,
+      "best_train_sharpe": 1.445
     },
     {
       "iter": 51,
-      "reason": "step=51 bottleneck=2022 (-23.2%) -> tune DD taper & carry_share",
+      "reason": "step=51 bottleneck=2022 (-14.83%) -> tune micro/news + MR",
       "improved": false,
-      "cand_train_score": 0.7579,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.7614,
+      "best_train_score": 0.9359,
+      "best_train_min_ann_pct": -14.83,
+      "best_train_sharpe": 1.445
     },
     {
       "iter": 52,
-      "reason": "step=52 bottleneck=2022 (-23.2%) -> tune top-K & dual momentum",
+      "reason": "step=52 bottleneck=2022 (-14.83%) -> tune L/S top-K & momentum",
       "improved": false,
-      "cand_train_score": 0.7793,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.8775,
+      "best_train_score": 0.9359,
+      "best_train_min_ann_pct": -14.83,
+      "best_train_sharpe": 1.445
     },
     {
       "iter": 53,
-      "reason": "step=53 bottleneck=2022 (-23.2%) -> boost oversold MR dip-buying",
+      "reason": "step=53 bottleneck=2022 (-14.83%) -> tune short sleeve & carry_share",
       "improved": false,
-      "cand_train_score": 0.6803,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "cand_train_score": 0.7428,
+      "best_train_score": 0.9359,
+      "best_train_min_ann_pct": -14.83,
+      "best_train_sharpe": 1.445
     },
     {
       "iter": 54,
-      "reason": "step=54 bottleneck=2022 (-23.2%) -> tune micro_tox & news_sent_3d",
-      "improved": false,
-      "cand_train_score": 0.8908,
-      "best_train_score": 0.907,
-      "best_train_min_ann_pct": -23.2,
-      "best_train_sharpe": 1.384
+      "reason": "step=54 bottleneck=2022 (-14.83%) -> tune causal vol-target & lev cap",
+      "improved": true,
+      "cand_train_score": 0.9987,
+      "best_train_score": 0.9987,
+      "best_train_min_ann_pct": -14.97,
+      "best_train_sharpe": 1.429
     },
     {
       "iter": 55,
-      "reason": "step=55 bottleneck=2022 (-23.2%) -> tune DD taper & carry_share",
-      "improved": true,
-      "cand_train_score": 0.9795,
-      "best_train_score": 0.9795,
-      "best_train_min_ann_pct": -21.07,
-      "best_train_sharpe": 1.4
+      "reason": "step=55 bottleneck=2022 (-14.97%) -> tune micro/news + MR",
+      "improved": false,
+      "cand_train_score": 0.9342,
+      "best_train_score": 0.9987,
+      "best_train_min_ann_pct": -14.97,
+      "best_train_sharpe": 1.429
     },
     {
       "iter": 56,
-      "reason": "step=56 bottleneck=2022 (-21.07%) -> tune top-K & dual momentum",
+      "reason": "step=56 bottleneck=2022 (-14.97%) -> tune L/S top-K & momentum",
       "improved": false,
-      "cand_train_score": 0.8441,
-      "best_train_score": 0.9795,
-      "best_train_min_ann_pct": -21.07,
-      "best_train_sharpe": 1.4
+      "cand_train_score": 0.9654,
+      "best_train_score": 0.9987,
+      "best_train_min_ann_pct": -14.97,
+      "best_train_sharpe": 1.429
     },
     {
       "iter": 57,
-      "reason": "step=57 bottleneck=2022 (-21.07%) -> boost oversold MR dip-buying",
-      "improved": false,
-      "cand_train_score": 0.7203,
-      "best_train_score": 0.9795,
-      "best_train_min_ann_pct": -21.07,
-      "best_train_sharpe": 1.4
+      "reason": "step=57 bottleneck=2022 (-14.97%) -> tune short sleeve & carry_share",
+      "improved": true,
+      "cand_train_score": 1.1564,
+      "best_train_score": 1.1564,
+      "best_train_min_ann_pct": -11.52,
+      "best_train_sharpe": 1.437
     },
     {
       "iter": 58,
-      "reason": "step=58 bottleneck=2022 (-21.07%) -> tune micro_tox & news_sent_3d",
-      "improved": true,
-      "cand_train_score": 0.988,
-      "best_train_score": 0.988,
-      "best_train_min_ann_pct": -19.02,
-      "best_train_sharpe": 1.308
+      "reason": "step=58 bottleneck=2022 (-11.52%) -> tune causal vol-target & lev cap",
+      "improved": false,
+      "cand_train_score": 0.9124,
+      "best_train_score": 1.1564,
+      "best_train_min_ann_pct": -11.52,
+      "best_train_sharpe": 1.437
     },
     {
       "iter": 59,
-      "reason": "step=59 bottleneck=2022 (-19.02%) -> tune DD taper & carry_share",
+      "reason": "step=59 bottleneck=2022 (-11.52%) -> tune micro/news + MR",
       "improved": false,
-      "cand_train_score": 0.702,
-      "best_train_score": 0.988,
-      "best_train_min_ann_pct": -19.02,
-      "best_train_sharpe": 1.308
+      "cand_train_score": 0.9184,
+      "best_train_score": 1.1564,
+      "best_train_min_ann_pct": -11.52,
+      "best_train_sharpe": 1.437
     },
     {
       "iter": 60,
-      "reason": "step=60 bottleneck=2022 (-19.02%) -> tune top-K & dual momentum",
+      "reason": "step=60 bottleneck=2022 (-11.52%) -> tune L/S top-K & momentum",
       "improved": false,
-      "cand_train_score": 0.988,
-      "best_train_score": 0.988,
-      "best_train_min_ann_pct": -19.02,
-      "best_train_sharpe": 1.308
+      "cand_train_score": 0.8232,
+      "best_train_score": 1.1564,
+      "best_train_min_ann_pct": -11.52,
+      "best_train_sharpe": 1.437
     }
   ]
 }

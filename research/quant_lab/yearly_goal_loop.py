@@ -339,27 +339,27 @@ def simulate_config(pre: dict[str, Any], cfg: StrategyConfig) -> pd.Series:
         if active_coins:
             inv_v = {c: 1.0 / max(vol_arr[c][t], 0.15) for c in active_coins}
             tot_iv = sum(inv_v.values())
+            breadth = sum(1 for c in active_coins if tr_arr[c][t] > 0.25) / len(active_coins)
+            bear_regime = (cfg.venue == "long_short_perp") and (cfg.short_scale > 0.0) and (breadth < 0.35)
 
             # Sleeve 1: Directional dual-speed coherence trend (inverse-vol weighted)
             w_tr = {c: (inv_v[c] / tot_iv) * tr_arr[c][t] for c in active_coins}
-            if cfg.venue == "long_short_perp" and cfg.short_scale > 0.0:
-                # In downtrend (tr == 0), short coins with negative momentum
+            if bear_regime:
+                # Only short in confirmed broad bear breadth (<35% uptrending) & negative momentum
                 for m, c, _ in scored:
                     if tr_arr[c][t] <= 0.0 and m < 0.0:
                         w_tr[c] = -(inv_v[c] / tot_iv) * cfg.short_scale
             tr_gross = sum(abs(v) for v in w_tr.values())
-            if tr_gross > 1e-9 and tr_gross < 1.0:
-                pass  # keep natural cash scaling when flat
-            elif tr_gross > 1.0:
+            if tr_gross > 1.0:
                 for c in active_coins:
                     w_tr[c] /= tr_gross
 
-            # Sleeve 2: Cross-sectional Top-K / Bottom-K relative-strength spread (always full-gross when active)
+            # Sleeve 2: Cross-sectional Top-K momentum (with Bottom-K short leg ONLY in bear_regime)
             w_xs = {c: 0.0 for c in active_coins}
-            k = min(cfg.top_k, len(scored) // 2) if cfg.venue == "long_short_perp" else min(cfg.top_k, len(scored))
+            k = min(cfg.top_k, len(scored) // 2) if bear_regime else min(cfg.top_k, len(scored))
             if k >= 1:
-                long_c = [c for m, c, _ in scored[:k] if (cfg.venue == "long_short_perp" or m > 0.0)]
-                short_c = [c for _, c, _ in scored[-k:]] if (cfg.venue == "long_short_perp" and cfg.short_scale > 0.0) else []
+                long_c = [c for m, c, _ in scored[:k] if m > 0.0]
+                short_c = [c for m, c, _ in scored[-k:] if m < 0.0] if bear_regime else []
                 if long_c:
                     iv_l = sum(inv_v[c] for c in long_c)
                     long_budget = 0.5 if short_c else 1.0
@@ -367,14 +367,15 @@ def simulate_config(pre: dict[str, Any], cfg: StrategyConfig) -> pd.Series:
                         w_xs[c] += long_budget * (inv_v[c] / iv_l)
                 if short_c:
                     iv_s = sum(inv_v[c] for c in short_c)
+                    short_budget = 0.5 if long_c else min(1.0, cfg.short_scale)
                     for c in short_c:
-                        w_xs[c] -= 0.5 * (inv_v[c] / iv_s)
+                        w_xs[c] -= short_budget * (inv_v[c] / iv_s)
 
-            # Sleeve 3: Short-term 5d mean-reversion (oversold bounce / overbought fade)
+            # Sleeve 3: Short-term 5d mean-reversion (oversold bounce; overbought fade only in bear_regime)
             w_mr = {c: 0.0 for c in active_coins}
             if cfg.mr_weight > 0.0:
                 mr_long = [c for c in active_coins if r5z_arr[c][t] < -1.5]
-                mr_short = [c for c in active_coins if r5z_arr[c][t] > 2.0] if (cfg.venue == "long_short_perp" and cfg.short_scale > 0.0) else []
+                mr_short = [c for c in active_coins if r5z_arr[c][t] > 2.0] if bear_regime else []
                 for c in mr_long:
                     w_mr[c] += 1.0 / max(1, len(mr_long) + len(mr_short))
                 for c in mr_short:
