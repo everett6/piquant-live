@@ -41,8 +41,15 @@ def test_simulate_config_strictly_causal():
 
 def test_run_optimization_loop_writes_state(tmp_path):
     out = tmp_path / "loop_state.json"
-    res = YG.run_optimization_loop(venue="long_short_perp", goal_ann_pct=50.0, max_iters=3, out_path=str(out))
+    res = YG.run_optimization_loop(
+        venue="long_short_perp",
+        goal_ann_pct=50.0,
+        max_iters=3,
+        out_path=str(out),
+        verify_cross_domain=False,
+    )
     assert out.exists()
     assert res["iters_run"] == 3
     assert len(res["history"]) == 4
-    assert "best_stats" in res and "oos_2024_2026" in res
+    assert "train_2020_2023" in res and "oos_2024_2026" in res
+    assert "holdout_untested_coins_2020_2026" in res

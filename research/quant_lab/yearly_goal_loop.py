@@ -36,6 +36,10 @@ ALTS = [
     "SOL", "ETH", "BTC", "AVAX", "LINK", "DOGE", "XRP",
     "ADA", "LTC", "BCH", "DOT", "ETC", "HBAR", "UNI", "XLM",
 ]
+TRAIN_COINS = ["BTC", "ETH", "SOL", "AVAX", "LINK", "LTC", "BCH"]
+HOLDOUT_COINS = ["ADA", "DOGE", "DOT", "ETC", "HBAR", "SHIB", "UNI", "XLM", "XRP"]
+EQUITY_TICKERS = ["SPY", "QQQ", "IWM", "TLT", "GLD", "NVDA", "AAPL", "MSFT", "AMZN", "META"]
+TRAIN_CUTOFF = "2024-01-01"
 
 
 def _load_daily_csv(path: str) -> pd.DataFrame:
@@ -54,13 +58,15 @@ def _load_daily_csv(path: str) -> pd.DataFrame:
     return out.sort_index()
 
 
-def load_universe() -> dict[str, Any]:
-    """Load BTC, ETH, 13 alts, multimodal_1D.csv, DTB3, and funding."""
-    daily: dict[str, pd.DataFrame] = {
-        "BTC": _load_daily_csv("~/piquant-collect/daily_csv/BTC-USD_1D.csv"),
-        "ETH": _load_daily_csv("~/piquant-collect/daily_csv/ETH-USD_1D.csv"),
-    }
-    for coin in ALTS:
+def load_universe(coins: list[str] | None = None) -> dict[str, Any]:
+    """Load requested coins (or all 15), multimodal_1D.csv, DTB3, and funding."""
+    target = list(coins) if coins is not None else list(ALTS)
+    daily: dict[str, pd.DataFrame] = {}
+    if "BTC" in target:
+        daily["BTC"] = _load_daily_csv("~/piquant-collect/daily_csv/BTC-USD_1D.csv")
+    if "ETH" in target:
+        daily["ETH"] = _load_daily_csv("~/piquant-collect/daily_csv/ETH-USD_1D.csv")
+    for coin in target:
         if coin in ("BTC", "ETH"):
             continue
         p = os.path.expanduser(f"~/piquant-data/alts/{coin}.csv")
@@ -81,7 +87,8 @@ def load_universe() -> dict[str, Any]:
     f_btc = load_funding("BTCUSDT")
     f_eth = load_funding("ETHUSDT")
 
-    idx = daily["BTC"].loc[(daily["BTC"].index >= START) & (daily["BTC"].index < END)].index
+    ref_coin = "BTC" if "BTC" in daily else next(iter(daily.keys()))
+    idx = daily[ref_coin].loc[(daily[ref_coin].index >= START) & (daily[ref_coin].index < END)].index
     return {
         "daily": daily,
         "mm": mm.reindex(idx).ffill().fillna(0.0),
@@ -89,10 +96,65 @@ def load_universe() -> dict[str, Any]:
         "f_btc": f_btc,
         "f_eth": f_eth,
         "idx": idx,
+        "annual_days": 365,
+        "has_carry": True,
     }
 
 
-def evaluate_by_year(ret: pd.Series, min_days: int = 120) -> dict[str, Any]:
+def load_equities_universe(
+    tickers: list[str] | None = None,
+    cache_dir: str = "~/piquant-data/equities",
+) -> dict[str, Any]:
+    """Load daily US equity/ETF OHLCV (cached in ~/piquant-data/equities, fetched from Yahoo if missing)."""
+    import requests
+
+    target = list(tickers) if tickers is not None else list(EQUITY_TICKERS)
+    cdir = os.path.expanduser(cache_dir)
+    os.makedirs(cdir, exist_ok=True)
+    daily: dict[str, pd.DataFrame] = {}
+
+    for sym in target:
+        csv_p = os.path.join(cdir, f"{sym}.csv")
+        if not os.path.exists(csv_p):
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=10y"
+            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            resp.raise_for_status()
+            res = resp.json()["chart"]["result"][0]
+            ts = res["timestamp"]
+            q = res["indicators"]["quote"][0]
+            df = pd.DataFrame({
+                "date": pd.to_datetime(ts, unit="s", utc=True).normalize(),
+                "open": q["open"],
+                "high": q["high"],
+                "low": q["low"],
+                "close": q["close"],
+                "volume": q["volume"],
+            }).dropna(subset=["close"]).drop_duplicates(subset=["date"])
+            df.to_csv(csv_p, index=False)
+        daily[sym] = _load_daily_csv(csv_p)
+
+    raw_rate = pd.read_csv(DTB3, parse_dates=["date"])
+    rate = pd.Series(
+        raw_rate["rate"].to_numpy(dtype=float),
+        index=raw_rate["date"].dt.tz_localize("UTC"),
+    ).dropna()
+
+    ref = "SPY" if "SPY" in daily else next(iter(daily.keys()))
+    idx = daily[ref].loc[(daily[ref].index >= START) & (daily[ref].index < END)].index
+    zero_s = pd.Series(0.0, index=idx)
+    return {
+        "daily": daily,
+        "mm": pd.DataFrame({"micro_tox_score": 0.3, "news_sent_3d": 0.0}, index=idx),
+        "rate": rate.reindex(idx, method="ffill").fillna(0.0),
+        "f_btc": zero_s,
+        "f_eth": zero_s,
+        "idx": idx,
+        "annual_days": 252,
+        "has_carry": False,
+    }
+
+
+def evaluate_by_year(ret: pd.Series, min_days: int = 120, annual_days: int = 365) -> dict[str, Any]:
     """Compute per-calendar-year raw & annualized return, Sharpe, and max DD."""
     years: dict[str, dict[str, float]] = {}
     ann_list: list[tuple[int, float]] = []
@@ -101,11 +163,11 @@ def evaluate_by_year(ret: pd.Series, min_days: int = 120) -> dict[str, Any]:
         if n < min_days:
             continue
         raw = float((1.0 + grp).prod() - 1.0)
-        ann = float((1.0 + raw) ** (365.0 / n) - 1.0) if raw > -0.999 else -0.999
+        ann = float((1.0 + raw) ** (float(annual_days) / n) - 1.0) if raw > -0.999 else -0.999
         eq = (1.0 + grp).cumprod()
         dd = float((1.0 - eq / eq.cummax()).max())
         std = float(grp.std(ddof=1))
-        sharpe = float((grp.mean() / std) * math.sqrt(365.0)) if std > 1e-12 else 0.0
+        sharpe = float((grp.mean() / std) * math.sqrt(float(annual_days))) if std > 1e-12 else 0.0
         years[str(int(yr))] = {
             "days": int(n),
             "raw_pct": round(raw * 100.0, 2),
@@ -121,9 +183,9 @@ def evaluate_by_year(ret: pd.Series, min_days: int = 120) -> dict[str, Any]:
     worst_yr, min_ann = min(ann_list, key=lambda x: x[1])
     eq_all = (1.0 + ret).cumprod()
     total_dd = float((1.0 - eq_all / eq_all.cummax()).max()) * 100.0
-    total_ann = float(((eq_all.iloc[-1]) ** (365.0 / max(1, len(ret))) - 1.0) * 100.0)
+    total_ann = float(((eq_all.iloc[-1]) ** (float(annual_days) / max(1, len(ret))) - 1.0) * 100.0)
     std_all = float(ret.std(ddof=1))
-    sharpe_all = float((ret.mean() / std_all) * math.sqrt(365.0)) if std_all > 1e-12 else 0.0
+    sharpe_all = float((ret.mean() / std_all) * math.sqrt(float(annual_days))) if std_all > 1e-12 else 0.0
 
     return {
         "years": years,
@@ -158,14 +220,15 @@ class StrategyConfig:
 
 
 def precompute_signals(universe: dict[str, Any]) -> dict[str, Any]:
-    """Precompute causal per-coin returns, trend positions, and RSI/vol arrays."""
+    """Precompute causal per-coin/asset returns, trend positions, and RSI/vol arrays."""
     daily = universe["daily"]
     idx = universe["idx"]
     coins = list(daily.keys())
+    ann_days = int(universe.get("annual_days", 365))
 
     px_df = pd.DataFrame({c: daily[c]["c"].reindex(idx) for c in coins}, index=idx)
     ret_df = px_df.pct_change().fillna(0.0)
-    vol20_df = ret_df.rolling(20, min_periods=10).std() * math.sqrt(365.0)
+    vol20_df = ret_df.rolling(20, min_periods=10).std() * math.sqrt(float(ann_days))
 
     # Dual-speed coherence trend (strictly causal: computed on full daily, reindexed)
     trend_pos: dict[str, np.ndarray] = {}
@@ -182,11 +245,15 @@ def precompute_signals(universe: dict[str, Any]) -> dict[str, Any]:
         ret5.rolling(60, min_periods=20).std().clip(lower=1e-4)
     )
 
-    # Carry sleeve (BTC + ETH)
-    c1_ret = S19.portfolio([
-        S19.coin_returns(daily["BTC"].reindex(idx).ffill(), universe["f_btc"], "C1", S19.BASE),
-        S19.coin_returns(daily["ETH"].reindex(idx).ffill(), universe["f_eth"], "C1", S19.BASE),
-    ]).reindex(idx).fillna(0.0).to_numpy(dtype=float)
+    # Carry sleeve (BTC + ETH) only when crypto carry is available and BTC/ETH are in universe
+    has_carry = bool(universe.get("has_carry", True)) and ("BTC" in daily) and ("ETH" in daily)
+    if has_carry:
+        c1_ret = S19.portfolio([
+            S19.coin_returns(daily["BTC"].reindex(idx).ffill(), universe["f_btc"], "C1", S19.BASE),
+            S19.coin_returns(daily["ETH"].reindex(idx).ffill(), universe["f_eth"], "C1", S19.BASE),
+        ]).reindex(idx).fillna(0.0).to_numpy(dtype=float)
+    else:
+        c1_ret = np.zeros(len(idx), dtype=float)
 
     return {
         "idx": idx,
@@ -197,8 +264,10 @@ def precompute_signals(universe: dict[str, Any]) -> dict[str, Any]:
         "trend_pos": trend_pos,
         "ret5_z": ret5_z.fillna(0.0),
         "c1_ret": c1_ret,
+        "has_carry": has_carry,
+        "annual_days": ann_days,
         "mm": universe["mm"],
-        "rate": universe["rate"].to_numpy(dtype=float) / 100.0 / 365.0,
+        "rate": universe["rate"].to_numpy(dtype=float) / 100.0 / float(ann_days),
     }
 
 
@@ -207,6 +276,8 @@ def simulate_config(pre: dict[str, Any], cfg: StrategyConfig) -> pd.Series:
     idx = pre["idx"]
     coins = pre["coins"]
     n = len(idx)
+    ann_days = int(pre.get("annual_days", 365))
+    has_carry = bool(pre.get("has_carry", True))
     px_df = pre["px_df"]
     ret_arr = {c: pre["ret_df"][c].to_numpy(dtype=float) for c in coins}
     vol_arr = {c: pre["vol20_df"][c].to_numpy(dtype=float) for c in coins}
@@ -216,15 +287,15 @@ def simulate_config(pre: dict[str, Any], cfg: StrategyConfig) -> pd.Series:
     # Causal blended momentum score at close t (used for t -> t+1)
     mom_f = px_df.pct_change(cfg.mom_fast)
     mom_s = px_df.pct_change(cfg.mom_slow)
-    mom_score = (0.5 * mom_f + 0.5 * mom_s) / (pre["vol20_df"].clip(lower=0.15))
+    mom_score = (0.5 * mom_f + 0.5 * mom_s) / (pre["vol20_df"].clip(lower=0.10))
     mom_np = {c: mom_score[c].to_numpy(dtype=float) for c in coins}
 
     mm = pre["mm"]
     tox = mm["micro_tox_score"].to_numpy(dtype=float) if "micro_tox_score" in mm.columns else np.full(n, 0.3)
     nsent = mm["news_sent_3d"].to_numpy(dtype=float) if "news_sent_3d" in mm.columns else np.zeros(n)
 
-    cost_rate = 3.0 * 1e-4  # 2 bps taker + 1 bps slip
-    fund_rate = 0.0001 if cfg.venue == "long_short_perp" else 0.0  # ~1 bps/day avg perp funding drag
+    cost_rate = 3.0 * 1e-4 if ann_days == 365 else 1.5 * 1e-4  # 3 bps crypto; 1.5 bps US equities/ETFs
+    fund_rate = (0.0001 if ann_days == 365 else 0.00005) if cfg.venue == "long_short_perp" else 0.0
 
     out_ret = np.zeros(n, dtype=float)
     eq = 1.0
@@ -232,7 +303,8 @@ def simulate_config(pre: dict[str, Any], cfg: StrategyConfig) -> pd.Series:
     prev_w = {c: 0.0 for c in coins}
     held_w = {c: 0.0 for c in coins}
     port_vol_buf: list[float] = []
-    trend_share = 1.0 - cfg.carry_share
+    eff_carry = cfg.carry_share if has_carry else 0.0
+    trend_share = 1.0 - eff_carry
 
     for t in range(n):
         # Realize return from t-1 -> t using held_w decided at t-1
@@ -242,7 +314,7 @@ def simulate_config(pre: dict[str, Any], cfg: StrategyConfig) -> pd.Series:
         net_trend = trend_share * (pnl - turn * cost_rate - gross * fund_rate)
         idle = max(0.0, trend_share * (1.0 - gross))
         bills = 0.0 if t == 0 else idle * pre["rate"][t - 1]
-        total_r = net_trend + cfg.carry_share * pre["c1_ret"][t] + bills
+        total_r = net_trend + eff_carry * pre["c1_ret"][t] + bills
         out_ret[t] = total_r
 
         port_vol_buf.append(total_r)
@@ -321,7 +393,7 @@ def simulate_config(pre: dict[str, Any], cfg: StrategyConfig) -> pd.Series:
         # Causal portfolio vol-targeting
         vol_mult = 1.0
         if cfg.target_vol > 0.0 and len(port_vol_buf) >= 20:
-            realized_ann = float(np.std(port_vol_buf[-20:], ddof=1) * math.sqrt(365.0))
+            realized_ann = float(np.std(port_vol_buf[-20:], ddof=1) * math.sqrt(float(ann_days)))
             if realized_ann > 0.05:
                 vol_mult = min(cfg.max_lev, cfg.target_vol / realized_ann)
 
@@ -391,17 +463,30 @@ def mutate_towards_goal(cfg: StrategyConfig, stats: dict[str, Any], step: int, r
     return StrategyConfig(**d), reason
 
 
+def _robust_train_score(train_stats: dict[str, Any], cfg: StrategyConfig) -> float:
+    """Sharpe-regularized score on TRAIN ONLY (2020-2023) to prevent leverage/year overfitting."""
+    lev_pen = 0.15 * max(0.0, cfg.max_lev - 2.0)
+    dd_pen = 0.02 * max(0.0, train_stats.get("max_dd_pct", 0.0) - 20.0)
+    return float(train_stats.get("sharpe", 0.0)) + 0.01 * float(train_stats.get("min_ann_pct", -100.0)) - lev_pen - dd_pen
+
+
 def run_optimization_loop(
     venue: str = "us_spot",
     goal_ann_pct: float = 50.0,
     max_iters: int = 40,
     seed: int = 42,
     out_path: str = DEFAULT_STATE_PATH,
+    verify_cross_domain: bool = True,
 ) -> dict[str, Any]:
-    """Run iterative hypothesis-test-mutate loop until min_ann_pct >= goal_ann_pct or max_iters."""
-    universe = load_universe()
-    pre = precompute_signals(universe)
+    """Optimize strictly on TRAIN_COINS (2020-2023), then evaluate untouched on:
+      1) Locked-box Time OOS (2024-2026 on TRAIN_COINS)
+      2) Untested Holdout Coins (2020-2026 on HOLDOUT_COINS)
+      3) US Equities & ETFs (2020-2026 on EQUITY_TICKERS, if verify_cross_domain=True)
+    """
+    train_univ = load_universe(coins=TRAIN_COINS)
+    pre_train = precompute_signals(train_univ)
     rng = np.random.default_rng(seed)
+    cutoff_ts = pd.Timestamp(TRAIN_CUTOFF, tz="UTC")
 
     if venue == "us_spot":
         best_cfg = StrategyConfig(
@@ -414,48 +499,67 @@ def run_optimization_loop(
             mr_weight=0.10, short_scale=1.0, target_vol=0.40, max_lev=2.5, carry_share=0.20,
         )
 
-    best_ret = simulate_config(pre, best_cfg)
-    best_stats = evaluate_by_year(best_ret)
+    best_ret_full = simulate_config(pre_train, best_cfg)
+    best_train_stats = evaluate_by_year(best_ret_full[best_ret_full.index < cutoff_ts])
+    best_score = _robust_train_score(best_train_stats, best_cfg)
     history: list[dict[str, Any]] = [
-        {"iter": 0, "reason": "initial_baseline", "min_ann_pct": best_stats["min_ann_pct"], "cagr_pct": best_stats["cagr_pct"], "sharpe": best_stats["sharpe"]}
+        {"iter": 0, "reason": "initial_baseline", "train_score": round(best_score, 4), "train_min_ann_pct": best_train_stats["min_ann_pct"], "train_sharpe": best_train_stats["sharpe"]}
     ]
 
     for step in range(1, max_iters + 1):
-        if best_stats["min_ann_pct"] >= goal_ann_pct:
+        if best_train_stats["min_ann_pct"] >= goal_ann_pct:
             break
-        cand_cfg, reason = mutate_towards_goal(best_cfg, best_stats, step, rng)
-        cand_ret = simulate_config(pre, cand_cfg)
-        cand_stats = evaluate_by_year(cand_ret)
+        cand_cfg, reason = mutate_towards_goal(best_cfg, best_train_stats, step, rng)
+        cand_ret_full = simulate_config(pre_train, cand_cfg)
+        cand_train_stats = evaluate_by_year(cand_ret_full[cand_ret_full.index < cutoff_ts])
+        cand_score = _robust_train_score(cand_train_stats, cand_cfg)
 
-        improved = (cand_stats["min_ann_pct"] > best_stats["min_ann_pct"]) or (
-            cand_stats["min_ann_pct"] == best_stats["min_ann_pct"] and cand_stats["sharpe"] > best_stats["sharpe"]
-        )
+        improved = cand_score > best_score + 1e-6
         if improved:
             best_cfg = cand_cfg
-            best_stats = cand_stats
-            best_ret = cand_ret
+            best_train_stats = cand_train_stats
+            best_ret_full = cand_ret_full
+            best_score = cand_score
 
         history.append({
             "iter": step,
             "reason": reason,
             "improved": improved,
-            "cand_min_ann_pct": cand_stats["min_ann_pct"],
-            "best_min_ann_pct": best_stats["min_ann_pct"],
-            "best_sharpe": best_stats["sharpe"],
+            "cand_train_score": round(cand_score, 4),
+            "best_train_score": round(best_score, 4),
+            "best_train_min_ann_pct": best_train_stats["min_ann_pct"],
+            "best_train_sharpe": best_train_stats["sharpe"],
         })
 
-    # Walk-forward check on 2024-2026 (confirming params weren't just fit to 2020-2023)
-    oos_ret = best_ret[best_ret.index >= pd.Timestamp("2024-01-01", tz="UTC")]
-    oos_stats = evaluate_by_year(oos_ret)
+    # 1. Locked-box Time OOS (2024-2026 on TRAIN_COINS)
+    oos_time_stats = evaluate_by_year(best_ret_full[best_ret_full.index >= cutoff_ts])
+
+    # 2. Untested Holdout Coins (2020-2026 on 9 coins never seen during optimization)
+    holdout_univ = load_universe(coins=HOLDOUT_COINS)
+    pre_holdout = precompute_signals(holdout_univ)
+    holdout_ret = simulate_config(pre_holdout, best_cfg)
+    holdout_stats = evaluate_by_year(holdout_ret)
+
+    # 3. Cross-domain US Equities & ETFs (2020-2026, 252 trading days/yr, zero param tuning)
+    equities_stats: dict[str, Any] | None = None
+    if verify_cross_domain:
+        eq_univ = load_equities_universe(tickers=EQUITY_TICKERS)
+        pre_eq = precompute_signals(eq_univ)
+        eq_ret = simulate_config(pre_eq, best_cfg)
+        equities_stats = evaluate_by_year(eq_ret, min_days=80, annual_days=252)
 
     result = {
         "venue": venue,
         "goal_ann_pct": goal_ann_pct,
-        "goal_reached": best_stats["min_ann_pct"] >= goal_ann_pct,
+        "train_cutoff": TRAIN_CUTOFF,
+        "train_coins": TRAIN_COINS,
+        "holdout_coins": HOLDOUT_COINS,
         "iters_run": len(history) - 1,
         "best_config": asdict(best_cfg),
-        "best_stats": best_stats,
-        "oos_2024_2026": oos_stats,
+        "train_2020_2023": best_train_stats,
+        "oos_2024_2026": oos_time_stats,
+        "holdout_untested_coins_2020_2026": holdout_stats,
+        "equities_etfs_2020_2026": equities_stats,
         "history": history,
     }
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -467,11 +571,17 @@ def run_optimization_loop(
 def main() -> None:
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--venue", choices=["us_spot", "long_short_perp"], default="us_spot")
+    ap.add_argument("--venue", choices=["us_spot", "long_short_perp"], default="long_short_perp")
     ap.add_argument("--goal", type=float, default=50.0)
-    ap.add_argument("--iters", type=int, default=40)
+    ap.add_argument("--iters", type=int, default=60)
+    ap.add_argument("--no-equities", action="store_true")
     args = ap.parse_args()
-    res = run_optimization_loop(venue=args.venue, goal_ann_pct=args.goal, max_iters=args.iters)
+    res = run_optimization_loop(
+        venue=args.venue,
+        goal_ann_pct=args.goal,
+        max_iters=args.iters,
+        verify_cross_domain=not args.no_equities,
+    )
     print(json.dumps({k: v for k, v in res.items() if k != "history"}, indent=2))
 
 
