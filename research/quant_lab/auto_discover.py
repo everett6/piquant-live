@@ -765,6 +765,55 @@ def generate_ollama_candidates(
         return [], f"ollama unavailable ({exc})"
 
 
+DEFAULT_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_OPENROUTER_MODEL = "openrouter/free"
+
+
+def generate_openrouter_candidates(
+    n_candidates: int,
+    api_key: str | None = None,
+    model: str = DEFAULT_OPENROUTER_MODEL,
+    openrouter_url: str = DEFAULT_OPENROUTER_URL,
+    recent_feedback: list[str] | None = None,
+    latency_profile: dict[str, Any] | None = None,
+    timeout_s: float = 35.0,
+) -> tuple[list[str], str | None]:
+    """Query OpenRouter chat-completions (supports `:free` models) for MFT/LFT alpha expressions."""
+    key = (api_key or os.environ.get("OPENROUTER_API_KEY", "")).strip()
+    if not key:
+        return [], "OPENROUTER_API_KEY not set"
+
+    prompt = _build_alpha_prompt(n_candidates, recent_feedback=recent_feedback, latency_profile=latency_profile)
+    payload = json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a quantitative researcher outputting only causal alpha formulas."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.4,
+    }).encode("utf-8")
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {key}",
+        "HTTP-Referer": "https://github.com/everett6/piquant-live",
+        "X-Title": "PiQuant Alpha Discovery",
+    }
+    req = urllib.request.Request(openrouter_url, data=payload, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        choices = body.get("choices") or []
+        raw_text = ""
+        if choices and isinstance(choices[0], dict):
+            msg = choices[0].get("message") or {}
+            raw_text = str(msg.get("content") or "")
+        exprs = parse_llm_expressions(raw_text)
+        return exprs[:n_candidates], None
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, ValueError) as exc:
+        return [], f"openrouter unavailable ({exc})"
+
+
 def generate_symbolic_candidates(n_candidates: int, seed: int = 42) -> list[str]:
     """Deterministic symbolic alpha generator over ALLOWED_FEATURES & ALLOWED_FUNCS."""
     rng = np.random.default_rng(seed)
@@ -1121,6 +1170,8 @@ def run_discovery(
     llama_threads: int = DEFAULT_LLAMA_THREADS,
     llama_url: str = DEFAULT_LLAMA_URL,
     ollama_url: str = "http://127.0.0.1:11434",
+    openrouter_model: str = DEFAULT_OPENROUTER_MODEL,
+    openrouter_url: str = DEFAULT_OPENROUTER_URL,
     model: str = "lfm2.5",
     role: str = "overlay",
     seed: int = 42,
@@ -1144,9 +1195,10 @@ def run_discovery(
         measured_ms = probe_venue_latency_ms()
     latency_profile = build_latency_profile(measured_ms, venue=venue)
 
-    # 1. Generate candidate expressions: C++ llama.cpp -> Ollama -> deterministic symbolic
+    # 1. Generate candidate expressions: C++ llama.cpp -> OpenRouter -> Ollama -> deterministic symbolic
     expr_pairs: list[tuple[str, str]] = []
     llamacpp_note: str | None = None
+    openrouter_note: str | None = None
     ollama_note: str | None = None
 
     if mode in ("auto", "llamacpp"):
@@ -1164,6 +1216,21 @@ def run_discovery(
             if e not in seen_llama:
                 expr_pairs.append((e, llama_src))
                 seen_llama.add(e)
+
+    if mode == "openrouter" or (mode == "auto" and len(expr_pairs) < n_candidates and os.environ.get("OPENROUTER_API_KEY", "").strip()):
+        needed = n_candidates - len(expr_pairs)
+        or_exprs, openrouter_note = generate_openrouter_candidates(
+            n_candidates=needed,
+            model=openrouter_model,
+            openrouter_url=openrouter_url,
+            recent_feedback=recent_fb,
+            latency_profile=latency_profile,
+        )
+        seen = {e for e, _ in expr_pairs}
+        for e in or_exprs:
+            if e not in seen:
+                expr_pairs.append((e, f"openrouter:{openrouter_model}"))
+                seen.add(e)
 
     if mode == "ollama" or (mode == "auto" and len(expr_pairs) < n_candidates):
         needed = n_candidates - len(expr_pairs)
@@ -1342,6 +1409,7 @@ def run_discovery(
         "venue": venue,
         "latency_profile": latency_profile,
         "llamacpp_note": llamacpp_note,
+        "openrouter_note": openrouter_note,
         "ollama_note": ollama_note,
         "dry_run_synth": dry_run_synth,
         "evaluated": len(results),
@@ -1356,7 +1424,8 @@ def run_discovery(
 def main() -> None:
     p = argparse.ArgumentParser(description="Autonomous causal alpha-discovery daemon (shadow-paper only).")
     p.add_argument("--n-candidates", type=int, default=8)
-    p.add_argument("--mode", choices=("auto", "llamacpp", "ollama", "symbolic"), default="auto")
+    p.add_argument("--mode", choices=("auto", "llamacpp", "openrouter", "ollama", "symbolic"), default="auto")
+    p.add_argument("--openrouter-model", default=DEFAULT_OPENROUTER_MODEL, help="OpenRouter model slug (supports :free models)")
     p.add_argument("--llama-bin", default=DEFAULT_LLAMA_BIN, help="Path to native llama-cli binary")
     p.add_argument("--llama-model", default=DEFAULT_LLAMA_MODEL, help="Path to GGUF model (e.g. LFM3-1.7B-QAD-Q4_0.gguf)")
     p.add_argument("--llama-threads", type=int, default=DEFAULT_LLAMA_THREADS, help="CPU threads for llama.cpp (default 3)")
@@ -1383,6 +1452,7 @@ def main() -> None:
         llama_threads=args.llama_threads,
         llama_url=args.llama_url,
         ollama_url=args.ollama_url,
+        openrouter_model=args.openrouter_model,
         model=args.model,
         role=args.role,
         seed=args.seed,

@@ -1,0 +1,22 @@
+{
+  "fund_1x_spot": {
+    "cagr_pct": 18.96,
+    "max_dd_pct": 6.92,
+    "calmar": 2.74,
+    "sharpe": 2.123,
+    "y2022_pct": -3.43,
+    "y2026_pct": 5.96,
+    "oos_2024_2026_cagr_pct": 14.75,
+    "oos_2024_2026_sharpe": 1.827
+  },
+  "fund_1p8x_borrow_adj": {
+    "cagr_pct": 25.17,
+    "max_dd_pct": 11.98,
+    "calmar": 2.101,
+    "sharpe": 1.847,
+    "y2022_pct": -6.55,
+    "y2026_pct": 7.14,
+    "oos_2024_2026_cagr_pct": 17.1,
+    "oos_2024_2026_sharpe": 1.353
+  }
+}
