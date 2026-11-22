@@ -42,10 +42,12 @@ type BlendSummary struct {
 	LastDate          string  `json:"last_date,omitempty"`
 	TargetBTCPortPct  float64 `json:"target_btc_port_pct"`
 	TargetETHPortPct  float64 `json:"target_eth_port_pct"`
+	TargetSOLPortPct  float64 `json:"target_sol_port_pct,omitempty"`
 	IdleTrendCashPct  float64 `json:"idle_trend_cash_pct"`
 	CarrySleevePct    float64 `json:"carry_sleeve_pct"`
 	PrevBTCPortPct    float64 `json:"prev_btc_port_pct"`
 	PrevETHPortPct    float64 `json:"prev_eth_port_pct"`
+	PrevSOLPortPct    float64 `json:"prev_sol_port_pct,omitempty"`
 	RebalanceDeltaPct float64 `json:"rebalance_delta_pct"`
 	LatestDTB3Pct     float64 `json:"latest_dtb3_pct"`
 	ExecutionHint     string  `json:"execution_hint,omitempty"`
@@ -148,10 +150,34 @@ func ComputeQ44Blends(st *State, carryState *carry.State, dtb3ByDate map[string]
 	return out
 }
 
-// SelectBlend resolves one named portfolio ("q42_dualspeed", "q42_balanced", "q44_bh_harvester", "q44_barbell", "s36_spot", or "s36_fut")
+// ComputeQ51Blends returns the PREREG51 BTC+ETH+SOL inverse-vol-parity spot blend (60% trend + 40% C1 Carry + DTB3).
+func ComputeQ51Blends(st *State, carryState *carry.State, dtb3ByDate map[string]float64, plan *execution.PingExecutionPlan) []BlendSummary {
+	var out []BlendSummary
+	if q51, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
+		[]BlendLeg{{Variant: "Q51_btc_eth_sol_volparity_spot", Weight: 0.60}},
+		0.40, "Q51_btc_eth_sol_volparity_spot", "Q51_btc_eth_sol_volparity_spot", plan); ok {
+		out = append(out, q51)
+	}
+	return out
+}
+
+// ComputeQ56Blends returns the PREREG56 synthesized Quantum + Garman-Klass Crash Brake + Dual-Mom + 3% Buffer spot blend.
+func ComputeQ56Blends(st *State, carryState *carry.State, dtb3ByDate map[string]float64, plan *execution.PingExecutionPlan) []BlendSummary {
+	var out []BlendSummary
+	if q56, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
+		[]BlendLeg{{Variant: "Q56_quantum_fast_spot_1x", Weight: 0.60}},
+		0.40, "Q56_quantum_fast_spot_1x", "Q56_quantum_fast_carry_spot", plan); ok {
+		out = append(out, q56)
+	}
+	return out
+}
+
+// SelectBlend resolves one named portfolio ("q42_dualspeed", "q42_balanced", "q44_bh_harvester", "q44_barbell", "q51_volparity", "q56_quantum_fast", "s36_spot", or "s36_fut")
 // into a composite BlendSummary, defaulting to Q42_dualspeed_60_40_carry_spot when available.
 func SelectBlend(st *State, carryState *carry.State, dtb3ByDate map[string]float64, selector string, plan *execution.PingExecutionPlan) (BlendSummary, bool) {
 	all := append(ComputeQ42Blends(st, carryState, dtb3ByDate, plan), ComputeQ44Blends(st, carryState, dtb3ByDate, plan)...)
+	all = append(all, ComputeQ51Blends(st, carryState, dtb3ByDate, plan)...)
+	all = append(all, ComputeQ56Blends(st, carryState, dtb3ByDate, plan)...)
 	findBlend := func(name string) (BlendSummary, bool) {
 		for _, b := range all {
 			if b.Name == name {
@@ -175,6 +201,14 @@ func SelectBlend(st *State, carryState *carry.State, dtb3ByDate map[string]float
 		}
 	case "q44_barbell", "q44_barbell_1x_bh_2p5x_dualspeed_spot":
 		if b, ok := findBlend("Q44_barbell_1x_bh_2p5x_dualspeed_spot"); ok {
+			return b, true
+		}
+	case "q51", "q51_volparity", "q51_btc_eth_sol_volparity_spot":
+		if b, ok := findBlend("Q51_btc_eth_sol_volparity_spot"); ok {
+			return b, true
+		}
+	case "q56", "q56_quantum_fast", "q56_quantum_fast_carry_spot":
+		if b, ok := findBlend("Q56_quantum_fast_carry_spot"); ok {
 			return b, true
 		}
 	case "s36", "s36_spot", "s36_qd_carry_blend_spot":
@@ -284,7 +318,7 @@ func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[str
 	matchedCarry := 0
 	prevIdleCash := 0.0
 	prevRate := 0.0
-	var lastB, lastE, prevB, prevE float64
+	var lastB, lastE, lastS, prevB, prevE, prevS float64
 
 	for i, d := range baseDays {
 		curRate := lookupRate(d.Date)
@@ -297,16 +331,31 @@ func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[str
 			bills = prevIdleCash * (prevRate / 100.0 / 365.0)
 		}
 
+		legFactor := func(li int) float64 {
+			if ledgers[li].Variant.TriAsset {
+				return 1.0
+			}
+			return 0.5
+		}
+		f0 := legFactor(0)
 		trendRet := legs[0].Weight * d.Ret
 		weightedPos := legs[0].Weight * d.PosOut
-		posB := 0.5 * legs[0].Weight * d.PosB * 100
-		posE := 0.5 * legs[0].Weight * d.PosE * 100
+		posB := f0 * legs[0].Weight * d.PosB * 100
+		posE := f0 * legs[0].Weight * d.PosE * 100
+		var posS float64
+		if ledgers[0].Variant.TriAsset {
+			posS = legs[0].Weight * d.PosS * 100
+		}
 		for li := 1; li < len(legs); li++ {
 			if rec, ok := extraByDate[li][d.Date]; ok {
+				fi := legFactor(li)
 				trendRet += legs[li].Weight * rec.Ret
 				weightedPos += legs[li].Weight * rec.PosOut
-				posB += 0.5 * legs[li].Weight * rec.PosB * 100
-				posE += 0.5 * legs[li].Weight * rec.PosE * 100
+				posB += fi * legs[li].Weight * rec.PosB * 100
+				posE += fi * legs[li].Weight * rec.PosE * 100
+				if ledgers[li].Variant.TriAsset {
+					posS += legs[li].Weight * rec.PosS * 100
+				}
 			}
 		}
 
@@ -338,10 +387,10 @@ func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[str
 		prevIdleCash = math.Max(0, trendShare-weightedPos)
 		prevRate = curRate
 		if i == len(baseDays)-2 {
-			prevB, prevE = posB, posE
+			prevB, prevE, prevS = posB, posE, posS
 		}
 		if i == len(baseDays)-1 {
-			lastB, lastE = posB, posE
+			lastB, lastE, lastS = posB, posE, posS
 		}
 	}
 
@@ -349,7 +398,7 @@ func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[str
 	meanDD := sumDD / n
 	ulcer := math.Sqrt(sumDD2 / n)
 	cdar95 := computeCDaR95(dds)
-	delta := math.Abs(lastB-prevB) + math.Abs(lastE-prevE)
+	delta := math.Abs(lastB-prevB) + math.Abs(lastE-prevE) + math.Abs(lastS-prevS)
 
 	// Annualized Sharpe across daily blend returns.
 	var sharpe float64
@@ -390,10 +439,12 @@ func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[str
 		LastDate:          lastDate,
 		TargetBTCPortPct:  round2(lastB),
 		TargetETHPortPct:  round2(lastE),
-		IdleTrendCashPct:  round2(math.Max(0, trendShare*100-lastB-lastE)),
+		TargetSOLPortPct:  round2(lastS),
+		IdleTrendCashPct:  round2(math.Max(0, trendShare*100-lastB-lastE-lastS)),
 		CarrySleevePct:    round2(carryShare * 100),
 		PrevBTCPortPct:    round2(prevB),
 		PrevETHPortPct:    round2(prevE),
+		PrevSOLPortPct:    round2(prevS),
 		RebalanceDeltaPct: round2(delta),
 		LatestDTB3Pct:     round2(latestRate),
 		ExecutionHint:     hint,

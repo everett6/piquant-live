@@ -41,7 +41,11 @@ func runEmergencyWatch(ctx context.Context, dir string, al *alert.Alerter) {
 			fmt.Fprintln(os.Stderr, "[GUARD] price fetch:", errB, errE)
 			continue
 		}
-		if fired := emergencyPass(path, pxB, pxE, time.Now()); len(fired) > 0 {
+		pxS, errS := spotPrice(ctx, client, "SOL-USD")
+		if errS != nil {
+			pxS = 0
+		}
+		if fired := emergencyPassAll(path, pxB, pxE, pxS, time.Now()); len(fired) > 0 {
 			msg := strings.Join(fired, "\n")
 			fmt.Println("[GUARD] emergency stop\n" + msg)
 			if al != nil {
@@ -53,13 +57,17 @@ func runEmergencyWatch(ctx context.Context, dir string, al *alert.Alerter) {
 
 // emergencyPass loads the state, runs the check and saves only when a ledger was stopped.
 func emergencyPass(path string, pxB, pxE float64, now time.Time) []string {
+	return emergencyPassAll(path, pxB, pxE, 0, now)
+}
+
+func emergencyPassAll(path string, pxB, pxE, pxS float64, now time.Time) []string {
 	trendMu.Lock()
 	defer trendMu.Unlock()
 	st, err := trend.Load(path)
 	if err != nil || st == nil {
 		return nil
 	}
-	fired := st.EmergencyCheck(pxB, pxE, now)
+	fired := st.EmergencyCheckAll(pxB, pxE, pxS, now)
 	if len(fired) > 0 {
 		if err := st.Save(path); err != nil {
 			fmt.Fprintln(os.Stderr, "[GUARD] save:", err)

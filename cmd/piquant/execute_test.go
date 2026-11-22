@@ -58,6 +58,8 @@ func newMockCoinbaseQuoteServer(t *testing.T, quoteAge time.Duration) *httptest.
 			bid, ask := "59990.00", "60010.00"
 			if sym == "ETH-USD" {
 				bid, ask = "2999.00", "3001.00"
+			} else if sym == "SOL-USD" {
+				bid, ask = "199.90", "200.10"
 			}
 			ts := time.Now().UTC().Add(-quoteAge).Format(time.RFC3339Nano)
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -327,6 +329,8 @@ func TestExecuteLiveOrderTTLCancelAndCoinbaseAccounts(t *testing.T) {
 			bid, ask := "59990.00", "60010.00"
 			if sym == "ETH-USD" {
 				bid, ask = "2999.00", "3001.00"
+			} else if sym == "SOL-USD" {
+				bid, ask = "199.90", "200.10"
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"pricebooks": []map[string]any{
@@ -489,5 +493,80 @@ func TestDefaultTrendDir(t *testing.T) {
 				t.Fatalf("parseExecuteOptions(nil).dir = %q, want %q", opts.dir, want)
 			}
 		})
+	}
+}
+
+func TestExecuteQ56QuantumFastDryRunAndRebalanceBuffer(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	trendDir := filepath.Join(root, "trend")
+	dataDir := filepath.Join(root, "data")
+	envPath := filepath.Join(root, "missing_coinbase.env")
+	alertEnv := filepath.Join(root, "missing_alert.env")
+	t.Setenv("COINBASE_API_KEY", "")
+	t.Setenv("COINBASE_API_SECRET", "")
+	t.Setenv(execution.LiveArmEnvVar, "")
+
+	st := trend.NewState("2026-11-11")
+	t0, _ := time.Parse("2006-01-02", "2026-09-20")
+	seqB := make([]trend.Day, 0, 60)
+	seqE := make([]trend.Day, 0, 60)
+	seqS := make([]trend.Day, 0, 60)
+	for i := 0; i < 60; i++ {
+		d := t0.AddDate(0, 0, i).Format("2006-01-02")
+		seqB = append(seqB, trend.Day{Date: d, Open: 100 + float64(i), High: (100 + float64(i)) * 1.01, Low: (100 + float64(i)) * 0.99, Close: 100 + float64(i)})
+		seqE = append(seqE, trend.Day{Date: d, Open: 50 + 0.5*float64(i), High: (50 + 0.5*float64(i)) * 1.01, Low: (50 + 0.5*float64(i)) * 0.99, Close: 50 + 0.5*float64(i)})
+		seqS = append(seqS, trend.Day{Date: d, Open: 20 + 0.2*float64(i), High: (20 + 0.2*float64(i)) * 1.01, Low: (20 + 0.2*float64(i)) * 0.99, Close: 20 + 0.2*float64(i)})
+	}
+	st.Seed(seqB[:51])
+	st.SeedETH(seqE[:51])
+	st.SeedSOL(seqS[:51])
+	st.Advance(seqB[51:])
+	st.AdvanceETH(seqE[51:])
+	st.AdvanceSOL(seqS[51:])
+	if err := st.Save(filepath.Join(trendDir, "trend_state.json")); err != nil {
+		t.Fatalf("save trend state: %v", err)
+	}
+
+	cbSrv := newMockCoinbaseQuoteServer(t, 0)
+	defer cbSrv.Close()
+	fastPingSrv := newMockPingServer(t, 2*time.Millisecond)
+	defer fastPingSrv.Close()
+
+	opts, err := parseExecuteOptions([]string{
+		"--portfolio", "q56_quantum_fast",
+		"--dir", trendDir,
+		"--carry-dir", t.TempDir(),
+		"--dtb3", filepath.Join(t.TempDir(), "missing.csv"),
+		"--data", dataDir,
+		"--env", envPath,
+		"--alert-env", alertEnv,
+		"--rebalance-buffer-pct", "25.0",
+		"--nav", "1000",
+	})
+	if err != nil {
+		t.Fatalf("parseExecuteOptions: %v", err)
+	}
+	opts.coinbaseBaseURL = cbSrv.URL
+	opts.pingEndpoints = []execution.ExchangeEndpoint{{Venue: "coinbase", URL: fastPingSrv.URL}}
+
+	rep, err := executeWithOptions(ctx, opts)
+	if err != nil {
+		t.Fatalf("executeWithOptions q56_quantum_fast failed: %v", err)
+	}
+	if rep.BlendName != "Q56_quantum_fast_carry_spot" {
+		t.Fatalf("BlendName = %q, want Q56_quantum_fast_carry_spot", rep.BlendName)
+	}
+	if _, ok := rep.Quotes["SOL-USD"]; !ok {
+		t.Fatalf("expected SOL-USD quote attached for tri-asset portfolio")
+	}
+	foundBufferSkip := false
+	for _, p := range rep.Plans {
+		if strings.HasPrefix(p.SkippedReason, "within_rebalance_buffer") {
+			foundBufferSkip = true
+		}
+	}
+	if !foundBufferSkip {
+		t.Fatalf("expected rebalance buffer skip with 25%% buffer from 0%% initial holdings, plans=%+v", rep.Plans)
 	}
 }

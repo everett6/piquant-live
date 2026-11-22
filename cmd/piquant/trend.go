@@ -118,6 +118,16 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 		// PREREG16 D2 needs SMA200: extend both histories backwards (no ledger is touched).
 		st.Backfill(append(pre, post...), append(epre, epost...))
 	}
+	// PREREG51/56 tri-asset sleeve: SOL daily candles fetched and stepped after BTC and ETH.
+	solRows, solErr := collect.FetchCoinbaseDailyCandles(ctx, client, "SOL-USD", now.AddDate(0, 0, -299), now)
+	if solErr == nil {
+		spre, spost := splitDays(solRows, now)
+		st.SeedSOL(spre)
+		st.AdvanceSOL(spost)
+		st.BackfillSOL(append(spre, spost...))
+	} else {
+		fmt.Fprintln(os.Stderr, "[TREND] fetch SOL daily candles:", solErr)
+	}
 	// PREREG30 E4: four clocks on 6-hour bars. A failed fetch is retried on the next pass; bars are never skipped.
 	g0 := now.Add(-299 * 6 * time.Hour)
 	gb, gbErr := collect.FetchCoinbase6hCandles(ctx, client, "BTC-USD", g0, now)
@@ -132,7 +142,7 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 	if err := st.Save(path); err != nil {
 		return st, err
 	}
-	fmt.Printf("[TREND] %s advanced %d day(s), last %s (eth last %s)\n", now.Format(time.RFC3339), n, st.LastDate, st.ETHLast)
+	fmt.Printf("[TREND] %s advanced %d day(s), last %s (eth last %s, sol last %s)\n", now.Format(time.RFC3339), n, st.LastDate, st.ETHLast, st.SOLLast)
 	if ethErr != nil {
 		return st, fmt.Errorf("fetch ETH daily candles: %w", ethErr)
 	}
@@ -156,7 +166,13 @@ func splitDays(rows []collect.CandleRow, now time.Time) (pre, post []trend.Day) 
 		if time.Unix(r.T, 0).Add(24 * time.Hour).After(now) {
 			continue // today's candle is not complete
 		}
-		d := trend.Day{Date: time.Unix(r.T, 0).UTC().Format("2006-01-02"), Close: r.Close}
+		d := trend.Day{
+			Date:  time.Unix(r.T, 0).UTC().Format("2006-01-02"),
+			Close: r.Close,
+			Open:  r.Open,
+			High:  r.High,
+			Low:   r.Low,
+		}
 		if d.Date <= prereg6Date {
 			pre = append(pre, d)
 		} else {
@@ -225,16 +241,22 @@ func printTrendWithBlend(ctx context.Context, st *trend.State, carryDir, dtb3Pat
 	}
 	q42Blends := trend.ComputeQ42Blends(st, cs, rates, planPtr)
 	q44Blends := trend.ComputeQ44Blends(st, cs, rates, planPtr)
+	q51Blends := trend.ComputeQ51Blends(st, cs, rates, planPtr)
+	q56Blends := trend.ComputeQ56Blends(st, cs, rates, planPtr)
 	payload := struct {
 		Scorecard []trend.Summary      `json:"scorecard"`
 		S36Blend  []trend.BlendSummary `json:"s36_qd_carry_blend,omitempty"`
 		Q42Blends []trend.BlendSummary `json:"q42_expected_dd_blends,omitempty"`
 		Q44Blends []trend.BlendSummary `json:"q44_vol_harvester_blends,omitempty"`
+		Q51Blends []trend.BlendSummary `json:"q51_volparity_blends,omitempty"`
+		Q56Blends []trend.BlendSummary `json:"q56_quantum_fast_blends,omitempty"`
 	}{
 		Scorecard: st.Score(time.Now()),
 		S36Blend:  blends,
 		Q42Blends: q42Blends,
 		Q44Blends: q44Blends,
+		Q51Blends: q51Blends,
+		Q56Blends: q56Blends,
 	}
 	b, err := json.MarshalIndent(payload, "", " ")
 	if err != nil {

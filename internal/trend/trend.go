@@ -37,6 +37,11 @@ type Variant struct {
 	TaperFloor   float64 `json:"taper_floor,omitempty"`   // PREREG36: minimum leverage multiplier above TaperFull (e.g. 0.40)
 	VolTarget    float64 `json:"vol_target,omitempty"`    // PREREG44: balance leverage in [1.0x, Lev] via clip(VolTarget/annVol20d, 1/Lev, 1)
 	VolHarvester bool    `json:"vol_harvester,omitempty"` // PREREG44: counter-volatility dip harvesting on SMA=0 Buy-and-Hold
+	TriAsset     bool    `json:"tri_asset,omitempty"`     // PREREG51/56: BTC + ETH + SOL inverse-vol-parity spot
+	DualMomGate  bool    `json:"dual_mom_gate,omitempty"` // PREREG53/54: zero coin if blended 7/28/60d momentum <= 0
+	CrashBrake   bool    `json:"crash_brake,omitempty"`   // Subagent 2: 5d/30d Garman-Klass range-vol crash brake
+	QuantumGate  bool    `json:"quantum_gate,omitempty"`  // Subagent 1: 3x3 Von Neumann spectral entropy crisis gate
+	RebalBuffer  float64 `json:"rebal_buffer,omitempty"`  // Institutional LFT/MFT no-trade rebalance buffer
 }
 
 // Variants are frozen by PREREG6.
@@ -82,12 +87,19 @@ var Variants = []Variant{
 	{Name: "Q44_qd_vol_1x_2p5x_spot", Lev: 2.5, FeeBps: 2, SlipBps: 1, SMA: 50, Pair: true, Coherence: true, VolTarget: 0.80, TaperStart: 0.08, TaperFull: 0.30, TaperFloor: 0.35},
 	{Name: "Q44_dualspeed_r3_1x_2p5x_spot", Lev: 2.5, FeeBps: 2, SlipBps: 1, SMA: 50, ExitSMA: 20, Pair: true, Coherence: true, VolTarget: 0.85, TaperStart: 0.08, TaperFull: 0.28, TaperFloor: 0.35},
 	{Name: "PAPER50_btc_eth_0p2x", Lev: 0.2, FeeBps: 120, SlipBps: 5, SMA: 50, Pair: true, DailyStop: 0.02, KillDD: 0.05, Capital: 50},
+	// PREREG51: BTC + ETH + SOL 20d inverse-vol-parity dual-speed coherence spot (1x US_SPOT, Sharpe 1.67).
+	{Name: "Q51_btc_eth_sol_volparity_spot", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, ExitSMA: 20, Coherence: true, TriAsset: true, TaperStart: 0.06, TaperFull: 0.20, TaperFloor: 0.40},
+	// PREREG56: Synthesized Quantum Spectral Entropy + Garman-Klass Crash Brake + Dual-Mom Gate + 3% Buffer.
+	{Name: "Q56_quantum_fast_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, ExitSMA: 20, Coherence: true, TriAsset: true, DualMomGate: true, CrashBrake: true, QuantumGate: true, RebalBuffer: 0.03, TaperStart: 0.06, TaperFull: 0.18, TaperFloor: 0.35},
 }
 
-// Day is one completed UTC daily candle.
+// Day is one completed UTC daily candle (Open/High/Low optional for range-vol estimation).
 type Day struct {
 	Date  string  `json:"date"` // YYYY-MM-DD (UTC)
 	Close float64 `json:"close"`
+	Open  float64 `json:"o,omitempty"`
+	High  float64 `json:"h,omitempty"`
+	Low   float64 `json:"l,omitempty"`
 }
 
 // DayRec is one ledger entry.
@@ -99,8 +111,10 @@ type DayRec struct {
 	// Per-sleeve detail for the tax export (added 2026-11-11; older records lack it). Single-coin variants use B.
 	PosB   float64 `json:"pos_b,omitempty"`
 	PosE   float64 `json:"pos_e,omitempty"`
+	PosS   float64 `json:"pos_s,omitempty"`
 	CloseB float64 `json:"close_b,omitempty"`
 	CloseE float64 `json:"close_e,omitempty"`
+	CloseS float64 `json:"close_s,omitempty"`
 }
 
 // Ledger tracks one variant.
@@ -110,7 +124,8 @@ type Ledger struct {
 	Peak    float64 `json:"peak"`
 	MaxDD   float64 `json:"max_dd"`
 	Pos     float64 `json:"pos"`
-	PosAlt  float64 `json:"pos_alt,omitempty"`     // ETH sleeve position (pair variants)
+	PosAlt  float64 `json:"pos_alt,omitempty"`     // ETH sleeve position (pair / tri-asset variants)
+	PosSOL  float64 `json:"pos_sol,omitempty"`     // SOL sleeve position (tri-asset variants)
 	Stops   int     `json:"daily_stops,omitempty"` // days the daily loss stop flattened the book
 	HoldB   int     `json:"hold_b,omitempty"`      // pullback variants: closes held so far (BTC, ETH sleeves)
 	HoldE   int     `json:"hold_e,omitempty"`
@@ -130,6 +145,8 @@ type State struct {
 	Ledgers    map[string]*Ledger `json:"ledgers"`
 	ETHHistory []Day              `json:"eth_history,omitempty"` // ETH closes for pair variants (capped)
 	ETHLast    string             `json:"eth_last,omitempty"`
+	SOLHistory []Day              `json:"sol_history,omitempty"` // SOL closes for tri-asset variants (capped)
+	SOLLast    string             `json:"sol_last,omitempty"`
 	GridB      []Bar              `json:"grid_btc,omitempty"` // 6-hour closes for the four-clock variants (capped)
 	GridE      []Bar              `json:"grid_eth,omitempty"`
 	GridLast   int64              `json:"grid_last,omitempty"` // start of the last 6-hour bar applied
@@ -205,13 +222,13 @@ func (st *State) Advance(days []Day) int {
 		bar := d.Close/prev - 1
 		if len(st.Ledgers) == len(Variants) {
 			for i := range Variants {
-				if l := st.Ledgers[Variants[i].Name]; l != nil && !l.Variant.Pair {
+				if l := st.Ledgers[Variants[i].Name]; l != nil && !l.Variant.Pair && !l.Variant.TriAsset {
 					l.step(d.Date, bar, st.History)
 				}
 			}
 		} else {
 			for _, name := range sortedKeys(st.Ledgers) {
-				if l := st.Ledgers[name]; !l.Variant.Pair {
+				if l := st.Ledgers[name]; !l.Variant.Pair && !l.Variant.TriAsset {
 					l.step(d.Date, bar, st.History)
 				}
 			}
@@ -293,14 +310,86 @@ func (st *State) AdvanceETH(days []Day) int {
 		barE := d.Close/prevE - 1
 		if len(st.Ledgers) == len(Variants) {
 			for i := range Variants {
-				if l := st.Ledgers[Variants[i].Name]; l != nil && l.Variant.Pair && !l.Variant.Clocks {
+				if l := st.Ledgers[Variants[i].Name]; l != nil && l.Variant.Pair && !l.Variant.Clocks && !l.Variant.TriAsset {
 					l.stepPair(d.Date, barB, barE, btcHist, st.ETHHistory)
 				}
 			}
 		} else {
 			for _, name := range sortedKeys(st.Ledgers) {
-				if l := st.Ledgers[name]; l.Variant.Pair && !l.Variant.Clocks {
+				if l := st.Ledgers[name]; l.Variant.Pair && !l.Variant.Clocks && !l.Variant.TriAsset {
 					l.stepPair(d.Date, barB, barE, btcHist, st.ETHHistory)
+				}
+			}
+		}
+		n++
+	}
+	return n
+}
+
+// SeedSOL loads pre-registration SOL closes without touching any ledger.
+func (st *State) SeedSOL(days []Day) {
+	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
+	for _, d := range days {
+		if d.Close > 0 && d.Date > st.SOLLast {
+			st.SOLHistory = append(st.SOLHistory, d)
+			st.SOLLast = d.Date
+		}
+	}
+	st.SOLHistory = capDays(st.SOLHistory)
+}
+
+// BackfillSOL prepends SOL closes older than stored SOL history without touching any ledger.
+func (st *State) BackfillSOL(sol []Day) {
+	st.SOLHistory = prependOlder(st.SOLHistory, sol)
+}
+
+// AdvanceSOL steps tri-asset (BTC+ETH+SOL) variants for SOL days newer than SOLLast
+// whose BTC and ETH days have already been applied. Idempotent like AdvanceETH.
+func (st *State) AdvanceSOL(days []Day) int {
+	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
+	n := 0
+	for _, d := range days {
+		if d.Close <= 0 || d.Date <= st.SOLLast || d.Date > st.LastDate || d.Date > st.ETHLast {
+			continue
+		}
+		bi := -1
+		for i := len(st.History) - 1; i > 0; i-- {
+			if st.History[i].Date == d.Date {
+				bi = i
+				break
+			}
+		}
+		ei := -1
+		for i := len(st.ETHHistory) - 1; i > 0; i-- {
+			if st.ETHHistory[i].Date == d.Date {
+				ei = i
+				break
+			}
+		}
+		var prevS float64
+		if len(st.SOLHistory) > 0 {
+			prevS = st.SOLHistory[len(st.SOLHistory)-1].Close
+		}
+		st.SOLHistory = capDays(append(st.SOLHistory, d))
+		st.SOLLast = d.Date
+		if prevS <= 0 || bi < 1 || ei < 1 {
+			continue
+		}
+		btcHist := st.History[:bi+1]
+		ethHist := st.ETHHistory[:ei+1]
+		barB := btcHist[bi].Close/btcHist[bi-1].Close - 1
+		barE := ethHist[ei].Close/ethHist[ei-1].Close - 1
+		barS := d.Close/prevS - 1
+		if len(st.Ledgers) == len(Variants) {
+			for i := range Variants {
+				if l := st.Ledgers[Variants[i].Name]; l != nil && l.Variant.TriAsset && !l.Variant.Clocks {
+					l.stepTri(d.Date, barB, barE, barS, btcHist, ethHist, st.SOLHistory)
+				}
+			}
+		} else {
+			for _, name := range sortedKeys(st.Ledgers) {
+				if l := st.Ledgers[name]; l.Variant.TriAsset && !l.Variant.Clocks {
+					l.stepTri(d.Date, barB, barE, barS, btcHist, ethHist, st.SOLHistory)
 				}
 			}
 		}
@@ -554,6 +643,123 @@ func (l *Ledger) stepPair(date string, barB, barE float64, histB, histE []Day) {
 	l.Pos, l.PosAlt = tb, te
 	l.Days = append(l.Days, DayRec{Date: date, Ret: ret, PosOut: 0.5*tb + 0.5*te, Equity: l.Equity,
 		PosB: tb, PosE: te, CloseB: histB[len(histB)-1].Close, CloseE: histE[len(histE)-1].Close})
+}
+
+func (v Variant) triRawTarget(hist []Day) float64 {
+	if len(hist) == 0 {
+		return 0
+	}
+	if v.DualMomGate && !blendedMomentumPositive(hist) {
+		return 0
+	}
+	return 0.5 * (coherenceShare(hist, v.SMA) + r3CoherenceShare(hist, v.SMA, v.ExitSMA))
+}
+
+func triInvVolWeights(histB, histE, histS []Day) (wB, wE, wS float64) {
+	invVol := func(h []Day) float64 {
+		if sd, ok := sampleStdLastN(h, 20); ok {
+			if sd < 1e-4 {
+				sd = 1e-4
+			}
+			return 1.0 / sd
+		}
+		return 0
+	}
+	ivB, ivE, ivS := invVol(histB), invVol(histE), invVol(histS)
+	totIV := ivB + ivE + ivS
+	if totIV <= 0 {
+		return 1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0
+	}
+	return ivB / totIV, ivE / totIV, ivS / totIV
+}
+
+func applyRebalBuffer(target, prev, buf float64) float64 {
+	if buf > 0 && target > 0 && math.Abs(target-prev) < buf {
+		return prev
+	}
+	return target
+}
+
+func (l *Ledger) stepTri(date string, barB, barE, barS float64, histB, histE, histS []Day) {
+	v := l.Variant
+	c := (v.FeeBps + v.SlipBps) * 1e-4
+	f := v.FundingBpsH * 24 * 1e-4
+	held := l.Pos*barB + l.PosAlt*barE + l.PosSOL*barS -
+		(math.Abs(l.Pos)+math.Abs(l.PosAlt)+math.Abs(l.PosSOL))*f
+
+	wB, wE, wS := triInvVolWeights(histB, histE, histS)
+	tb := wB * v.triRawTarget(histB) * v.Lev
+	te := wE * v.triRawTarget(histE) * v.Lev
+	ts := wS * v.triRawTarget(histS) * v.Lev
+
+	if v.CrashBrake {
+		brake := 0.70 + 0.30*rangeVolCrashBrake(histB, 5, 30, 2.20, 0.55)
+		tb *= brake
+		te *= brake
+		ts *= brake
+	}
+	if v.QuantumGate {
+		qScale := quantumRegimeScale(histB, histE, histS, 30, 60, 0.40)
+		tb *= qScale
+		te *= qScale
+		ts *= qScale
+	}
+
+	if l.Killed {
+		tb, te, ts = 0, 0, 0
+	} else if v.DailyStop > 0 && held <= -v.DailyStop {
+		tb, te, ts = 0, 0, 0
+		l.Stops++
+	} else if v.TaperFull > v.TaperStart {
+		eqPre := l.Equity * (1 + held)
+		peakPre := math.Max(l.Peak, eqPre)
+		ddPre := 0.0
+		if peakPre > 0 {
+			ddPre = 1 - eqPre/peakPre
+		}
+		m := softTaper(ddPre, v.TaperStart, v.TaperFull, v.TaperFloor)
+		tb *= m
+		te *= m
+		ts *= m
+	}
+
+	tb, te, ts = l.capMargin(tb), l.capMargin(te), l.capMargin(ts)
+	if !l.Killed && v.RebalBuffer > 0 {
+		tb = applyRebalBuffer(tb, l.Pos, v.RebalBuffer)
+		te = applyRebalBuffer(te, l.PosAlt, v.RebalBuffer)
+		ts = applyRebalBuffer(ts, l.PosSOL, v.RebalBuffer)
+	}
+
+	turn := math.Abs(tb-l.Pos) + math.Abs(te-l.PosAlt) + math.Abs(ts-l.PosSOL)
+	ret := held - turn*c
+	l.Equity *= 1 + ret
+	if l.Equity > l.Peak {
+		l.Peak = l.Equity
+	}
+	dd := 1 - l.Equity/l.Peak
+	if dd > l.MaxDD {
+		l.MaxDD = dd
+	}
+	if v.KillDD > 0 && dd >= v.KillDD && !l.Killed {
+		l.Killed = true
+		exit := (math.Abs(tb) + math.Abs(te) + math.Abs(ts)) * c
+		ret -= exit
+		l.Equity *= 1 - exit
+		tb, te, ts = 0, 0, 0
+	}
+	l.Pos, l.PosAlt, l.PosSOL = tb, te, ts
+	l.Days = append(l.Days, DayRec{
+		Date:   date,
+		Ret:    ret,
+		PosOut: tb + te + ts,
+		Equity: l.Equity,
+		PosB:   tb,
+		PosE:   te,
+		PosS:   ts,
+		CloseB: histB[len(histB)-1].Close,
+		CloseE: histE[len(histE)-1].Close,
+		CloseS: histS[len(histS)-1].Close,
+	})
 }
 
 func softTaper(dd, start, full, floor float64) float64 {

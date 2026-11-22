@@ -99,8 +99,14 @@ scp -q \
   "$WORK/research/quant_lab/auto_discover.py" \
   "$WORK/research/quant_lab/feature_store.py" \
   "$WORK/research/quant_lab/multimodal_features.py" \
+  "$WORK/research/quant_lab/micro_news_features.py" \
   "$WORK/research/quant_lab/refresh_daily_csv.py" \
   "$WORK/research/quant_lab/shadow_paper_eval.py" \
+  "$WORK/research/quant_lab/mft_lft_fund.py" \
+  "$WORK/research/quant_lab/quantum_meta_alpha.py" \
+  "$WORK/research/quant_lab/fast_universal_alpha.py" \
+  "$WORK/research/quant_lab/run_round56.py" \
   "$PI:PiQuant/piquant-live/research/quant_lab/"
+[ -f "$WORK/research/quant_lab/results/micro_tox_mlp.npz" ] && scp -q "$WORK/research/quant_lab/results/micro_tox_mlp.npz" "$PI:PiQuant/piquant-live/research/quant_lab/results/"
 $SSH "printf '%s\n' '$V' > ~/PiQuant/piquant-live/.synced_commit && sync"
 echo "synced research/quant_lab scripts and .synced_commit ($V) to $PI"

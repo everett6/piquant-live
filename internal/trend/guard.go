@@ -39,14 +39,18 @@ func (l *Ledger) capMargin(target float64) float64 {
 }
 
 // EmergencyCheck marks every ledger with a position to the given prices (BTC, ETH) against the closes of its last
-// record. A ledger at or beyond its emergency level is flattened at those prices, paying its exit cost, and gets a
-// record dated "<UTC time>-emergency". It returns one line per ledger stopped. Ledgers whose last record has no
-// closes (older state) are skipped.
+// record. It delegates to EmergencyCheckAll with pxS=0 (tri-asset SOL ledgers are skipped when pxS<=0).
 func (st *State) EmergencyCheck(pxB, pxE float64, now time.Time) []string {
+	return st.EmergencyCheckAll(pxB, pxE, 0, now)
+}
+
+// EmergencyCheckAll marks every ledger (single-coin, BTC+ETH pair, or BTC+ETH+SOL tri-asset) to live prices
+// against its last recorded close and flattens any ledger at or beyond its emergency drawdown level.
+func (st *State) EmergencyCheckAll(pxB, pxE, pxS float64, now time.Time) []string {
 	var fired []string
 	for _, name := range sortedKeys(st.Ledgers) {
 		l := st.Ledgers[name]
-		if len(l.Days) == 0 || (l.Pos == 0 && l.PosAlt == 0) || l.Killed || pxB <= 0 {
+		if len(l.Days) == 0 || (l.Pos == 0 && l.PosAlt == 0 && l.PosSOL == 0) || l.Killed || pxB <= 0 {
 			continue
 		}
 		last := l.Days[len(l.Days)-1]
@@ -54,8 +58,14 @@ func (st *State) EmergencyCheck(pxB, pxE float64, now time.Time) []string {
 			continue
 		}
 		pair := l.Variant.Pair
+		tri := l.Variant.TriAsset
 		move := l.Pos * (pxB/last.CloseB - 1)
-		if pair {
+		if tri {
+			if last.CloseE <= 0 || pxE <= 0 || last.CloseS <= 0 || pxS <= 0 {
+				continue
+			}
+			move = l.Pos*(pxB/last.CloseB-1) + l.PosAlt*(pxE/last.CloseE-1) + l.PosSOL*(pxS/last.CloseS-1)
+		} else if pair {
 			if last.CloseE <= 0 || pxE <= 0 {
 				continue
 			}
@@ -73,7 +83,9 @@ func (st *State) EmergencyCheck(pxB, pxE float64, now time.Time) []string {
 		}
 		c := (l.Variant.FeeBps + l.Variant.SlipBps) * 1e-4
 		exit := math.Abs(l.Pos) * c
-		if pair {
+		if tri {
+			exit = (math.Abs(l.Pos) + math.Abs(l.PosAlt) + math.Abs(l.PosSOL)) * c
+		} else if pair {
 			exit = 0.5*math.Abs(l.Pos)*c + 0.5*math.Abs(l.PosAlt)*c
 		}
 		ret := (1+move)*(1-exit) - 1
@@ -81,16 +93,24 @@ func (st *State) EmergencyCheck(pxB, pxE float64, now time.Time) []string {
 		if d := 1 - l.Equity/l.Peak; d > l.MaxDD {
 			l.MaxDD = d
 		}
-		l.Pos, l.PosAlt = 0, 0
+		l.Pos, l.PosAlt, l.PosSOL = 0, 0, 0
 		l.EmergencyArm = dd + EmergencyStep
 		l.EmergencyStops++
 		rec := DayRec{Date: now.UTC().Format("2006-01-02T15:04") + "-emergency", Ret: ret, Equity: l.Equity, CloseB: pxB}
-		if pair {
+		if tri {
 			rec.CloseE = pxE
+			rec.CloseS = pxS
+			l.Days = append(l.Days, rec)
+			fired = append(fired, fmt.Sprintf("%s: drawdown %.1f%% >= %.0f%%, flattened at BTC %.2f ETH %.2f SOL %.2f (equity %.4f)",
+				name, dd*100, level*100, pxB, pxE, pxS, l.Equity))
+		} else {
+			if pair {
+				rec.CloseE = pxE
+			}
+			l.Days = append(l.Days, rec)
+			fired = append(fired, fmt.Sprintf("%s: drawdown %.1f%% >= %.0f%%, flattened at BTC %.2f ETH %.2f (equity %.4f)",
+				name, dd*100, level*100, pxB, pxE, l.Equity))
 		}
-		l.Days = append(l.Days, rec)
-		fired = append(fired, fmt.Sprintf("%s: drawdown %.1f%% >= %.0f%%, flattened at BTC %.2f ETH %.2f (equity %.4f)",
-			name, dd*100, level*100, pxB, pxE, l.Equity))
 	}
 	return fired
 }

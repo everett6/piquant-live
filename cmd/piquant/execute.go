@@ -87,9 +87,10 @@ type executeOptions struct {
 	maxDrawdownPct    float64
 	roundTripFeeBps   float64
 	spreadBps         float64
-	safetyMarginBps   float64
-	taxRatePct        float64
-	orderPollInterval time.Duration
+	safetyMarginBps    float64
+	taxRatePct         float64
+	rebalanceBufferPct float64
+	orderPollInterval  time.Duration
 }
 
 func runExecute(ctx context.Context, args []string) error {
@@ -113,7 +114,7 @@ func parseExecuteOptions(args []string) (executeOptions, error) {
 
 	dryRun := fs.Bool("dry-run", true, "simulate orders without submitting to the exchange (requires --dry-run=false + --confirm-live + PIQUANT_LIVE_ARM=YES for live)")
 	venue := fs.String("venue", "coinbase-spot", "execution venue (coinbase-spot)")
-	portfolio := fs.String("portfolio", "q42_dualspeed", "target portfolio: q42_dualspeed | q42_balanced | q44_bh_harvester | q44_barbell | s36_spot | s36_fut")
+	portfolio := fs.String("portfolio", "q42_dualspeed", "target portfolio: q42_dualspeed | q42_balanced | q44_bh_harvester | q44_barbell | q51_volparity | q56_quantum_fast | s36_spot | s36_fut")
 	dir := fs.String("dir", defaultTrendDir(), "trend state directory")
 	carryDir := fs.String("carry-dir", filepath.Join(home, "piquant-collect", "carry"), "carry state directory")
 	dtb3Path := fs.String("dtb3", filepath.Join(home, "piquant-data", "macro", "DTB3.csv"), "FRED DTB3 CSV path")
@@ -131,6 +132,7 @@ func parseExecuteOptions(args []string) (executeOptions, error) {
 	spreadBps := fs.Float64("spread-bps", 2.0, "expected bid-ask spread hurdle in bps")
 	safetyMarginBps := fs.Float64("safety-margin-bps", 5.0, "minimum net alpha safety margin in bps")
 	taxRatePct := fs.Float64("tax-rate-pct", 33.3, "estimated short-term tax rate percentage mapped to TaxDragFraction")
+	rebalanceBufferPct := fs.Float64("rebalance-buffer-pct", 0.0, "skip non-exit rebalances when |target_pct - current_pct| < buffer_pct (e.g. 3.0)")
 	pingProbe := fs.Bool("ping-probe", true, "probe venue ping latency before trading and abort if median RTT exceeds --max-ping-ms")
 	maxPingMs := fs.Float64("max-ping-ms", 1500.0, "maximum allowed venue HTTP median ping latency in ms")
 	orderTTL := fs.Duration("order-ttl", 0, "live post-only order TTL before auto-cancelling unfilled orders (0 = GTC; e.g. 15s)")
@@ -169,9 +171,10 @@ func parseExecuteOptions(args []string) (executeOptions, error) {
 		expectedEdgeBps: *expectedEdgeBps,
 		roundTripFeeBps: *roundTripFeeBps,
 		spreadBps:       *spreadBps,
-		safetyMarginBps: *safetyMarginBps,
-		taxRatePct:      *taxRatePct,
-		pingProbe:       *pingProbe,
+		safetyMarginBps:    *safetyMarginBps,
+		taxRatePct:         *taxRatePct,
+		rebalanceBufferPct: *rebalanceBufferPct,
+		pingProbe:          *pingProbe,
 		maxPingMs:       *maxPingMs,
 		orderTTL:        *orderTTL,
 		confirmLive:     *confirmLive,
@@ -301,6 +304,7 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 				"USD": simNav,
 				"BTC": 0,
 				"ETH": 0,
+				"SOL": 0,
 			},
 		}
 	}
@@ -361,9 +365,32 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 		}, err
 	}
 
+	needSOL := blend.TargetSOLPortPct > 0 || balances["SOL"] > 0
+	var solQuote execution.Quote
+	if needSOL {
+		solQuote, err = venueClient.GetQuote(ctx, "SOL-USD")
+		if err != nil {
+			err = fmt.Errorf("fetch SOL-USD quote: %w", err)
+			return ExecuteReport{
+				TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+				DryRun:       opts.dryRun,
+				LiveArmed:    liveArmed,
+				Venue:        venueClient.Name(),
+				Portfolio:    opts.portfolio,
+				BlendName:    blend.Name,
+				HWMPath:      hwmPath,
+				PingPlan:     pingPlan,
+				Errors:       []string{err.Error()},
+			}, err
+		}
+	}
+
 	nav := opts.navUSD
 	if nav <= 0 {
 		nav = balances["USD"] + balances["BTC"]*btcQuote.Mid + balances["ETH"]*ethQuote.Mid
+		if needSOL {
+			nav += balances["SOL"] * solQuote.Mid
+		}
 		if nav <= 0 && opts.dryRun {
 			nav = 1000.0
 		}
@@ -421,17 +448,23 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 	guardCfg.Exposure.MaxNetUSD = math.Max(15000.0, nav*3.0)
 	guardCfg.MaxOrderQty = math.Max(100.0, opts.maxOrderUSD)
 	guard := guardrails.NewPreTradeGuard(guardCfg)
+	posMap := map[string]float64{
+		"BTC-USD": balances["BTC"],
+		"ETH-USD": balances["ETH"],
+	}
+	pxMap := map[string]float64{
+		"BTC-USD": btcQuote.Mid,
+		"ETH-USD": ethQuote.Mid,
+	}
+	if needSOL {
+		posMap["SOL-USD"] = balances["SOL"]
+		pxMap["SOL-USD"] = solQuote.Mid
+	}
 	guard.UpdatePortfolioState(
 		nav,
 		hwm.PeakNavUSD,
-		map[string]float64{
-			"BTC-USD": balances["BTC"],
-			"ETH-USD": balances["ETH"],
-		},
-		map[string]float64{
-			"BTC-USD": btcQuote.Mid,
-			"ETH-USD": ethQuote.Mid,
-		},
+		posMap,
+		pxMap,
 		now,
 	)
 	if tripped, reason, _, _, _, _ := guard.Status(); tripped {
@@ -491,6 +524,14 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 		}, err
 	}
 
+	quotesMap := map[string]execution.Quote{
+		"BTC-USD": btcQuote,
+		"ETH-USD": ethQuote,
+	}
+	if needSOL {
+		quotesMap["SOL-USD"] = solQuote
+	}
+
 	report := ExecuteReport{
 		TimestampUTC:      now.Format(time.RFC3339),
 		DryRun:            opts.dryRun,
@@ -506,12 +547,9 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 		CredentialsOK:     creds.Ready(),
 		SimulatedBalances: simulatedBalances,
 		Balances:          balances,
-		Quotes: map[string]execution.Quote{
-			"BTC-USD": btcQuote,
-			"ETH-USD": ethQuote,
-		},
-		Plans:   []PlannedOrder{},
-		Results: []execution.ExecutionResult{},
+		Quotes:            quotesMap,
+		Plans:             []PlannedOrder{},
+		Results:           []execution.ExecutionResult{},
 	}
 
 	expectedBalances, expErr := loadExpectedBalancesIfPresent(filepath.Join(opts.dataDir, "paper", "expected_balances.json"))
@@ -524,6 +562,9 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 			"USD": balances["USD"],
 			"BTC": balances["BTC"],
 			"ETH": balances["ETH"],
+		}
+		if needSOL {
+			expectedBalances["SOL"] = balances["SOL"]
 		}
 	}
 
@@ -543,12 +584,24 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 		{asset: "BTC", symbol: "BTC-USD", targetPct: blend.TargetBTCPortPct, quote: btcQuote},
 		{asset: "ETH", symbol: "ETH-USD", targetPct: blend.TargetETHPortPct, quote: ethQuote},
 	}
+	if needSOL {
+		legs = append(legs, struct {
+			asset     string
+			symbol    string
+			targetPct float64
+			quote     execution.Quote
+		}{asset: "SOL", symbol: "SOL-USD", targetPct: blend.TargetSOLPortPct, quote: solQuote})
+	}
 
 	availUSD := balances["USD"]
 	var submitErrs []error
 	for _, leg := range legs {
 		targetUSD := nav * (leg.targetPct / 100.0)
 		currentQty := balances[leg.asset]
+		currentPct := 0.0
+		if nav > 0 && leg.quote.Mid > 0 {
+			currentPct = (currentQty * leg.quote.Mid / nav) * 100.0
+		}
 		targetQty := targetUSD / leg.quote.Mid
 		deltaQty := targetQty - currentQty
 
@@ -564,6 +617,11 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 
 		if math.Abs(deltaQty) <= 1e-9 {
 			plan.SkippedReason = "on_target"
+			report.Plans = append(report.Plans, plan)
+			continue
+		}
+		if opts.rebalanceBufferPct > 0 && leg.targetPct > 0 && math.Abs(leg.targetPct-currentPct) < opts.rebalanceBufferPct {
+			plan.SkippedReason = fmt.Sprintf("within_rebalance_buffer (delta %.2f%% < %.2f%%)", math.Abs(leg.targetPct-currentPct), opts.rebalanceBufferPct)
 			report.Plans = append(report.Plans, plan)
 			continue
 		}

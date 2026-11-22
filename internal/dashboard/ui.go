@@ -2925,12 +2925,13 @@ const indexHTML = `<!doctype html>
       if ($("s36TailDD")) $("s36TailDD").textContent = "CDaR95: " + num((spot.cdar_95||0)*100, 2) + "% \u2022 Max UW: " + (spot.max_underwater_days||0) + "d";
       if ($("s36PingHint") && spot.execution_hint) $("s36PingHint").textContent = spot.execution_hint;
     }
-    var allBlends = [].concat(tb.s36_qd_carry_blend || [], tb.q42_expected_dd_blends || [], tb.q44_vol_harvester_blends || []);
+    var allBlends = [].concat(tb.q56_quantum_fast_blends || [], tb.q51_volparity_blends || [], tb.s36_qd_carry_blend || [], tb.q42_expected_dd_blends || [], tb.q44_vol_harvester_blends || []);
     if ($("q42BlendBody") && allBlends.length) {
       $("q42BlendBody").innerHTML = allBlends.map(function(b){
-        var isHi = b.name && (b.name.indexOf("Q42_") === 0 || b.name.indexOf("Q44_") === 0);
+        var isHi = b.name && (b.name.indexOf("Q56_") === 0 || b.name.indexOf("Q51_") === 0 || b.name.indexOf("Q42_") === 0 || b.name.indexOf("Q44_") === 0);
         var st = isHi ? " style='color:var(--accent);font-weight:700'" : "";
-        var alloc = num(b.target_btc_port_pct, 1) + "% / " + num(b.target_eth_port_pct, 1) + "% / " + num(b.idle_trend_cash_pct, 1) + "% / " + num(b.carry_sleeve_pct, 0) + "%";
+        var solStr = (b.target_sol_port_pct && b.target_sol_port_pct > 0) ? (" / SOL " + num(b.target_sol_port_pct, 1) + "%") : "";
+        var alloc = num(b.target_btc_port_pct, 1) + "% / " + num(b.target_eth_port_pct, 1) + "%" + solStr + " / " + num(b.idle_trend_cash_pct, 1) + "% / " + num(b.carry_sleeve_pct, 0) + "%";
         return "<tr" + st + "><td>" + esc(b.name) + "</td><td>" + num(b.equity, 4) + " <span style='color:var(--muted);font-size:11px'>(" + num(b.after_tax_equity||b.equity, 4) + ")</span></td><td>" +
           num((b.max_dd||0)*100, 2) + "%</td><td>" + num((b.mean_dd||0)*100, 2) + "%</td><td>" +
           num((b.ulcer_index||0)*100, 2) + "%</td><td>" + num((b.cdar_95||0)*100, 2) + "%</td><td>" +
@@ -2939,7 +2940,7 @@ const indexHTML = `<!doctype html>
     }
     if (tb.scorecard && $("s36ScorecardBody")) {
       $("s36ScorecardBody").innerHTML = tb.scorecard.map(function(s){
-        var highlight = (s.name === "Q42_safe_qd_spot_1x" || s.name === "Q42_r3_fastexit_qd_spot_1x" || s.name === "S36_safe_qd_spot_1x" || s.name === "QD_btc_eth_coherence_2x") ? " style='color:var(--accent);font-weight:700'" : "";
+        var highlight = (s.name === "Q56_quantum_fast_spot_1x" || s.name === "Q51_btc_eth_sol_volparity_spot" || s.name === "Q42_safe_qd_spot_1x" || s.name === "Q42_r3_fastexit_qd_spot_1x" || s.name === "S36_safe_qd_spot_1x" || s.name === "QD_btc_eth_coherence_2x") ? " style='color:var(--accent);font-weight:700'" : "";
         return "<tr" + highlight + "><td>" + esc(s.name) + "</td><td>" + num(s.equity, 4) + "</td><td>" + num((s.max_dd||0)*100, 2) + "%</td><td>" +
           num(s.sharpe, 2) + "</td><td>" + num(s.current_pos, 2) + "x</td><td>" + (s.beats||0) + "/" + (s.months||0) + "</td></tr>";
       }).join("");

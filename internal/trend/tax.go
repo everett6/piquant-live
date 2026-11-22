@@ -62,7 +62,9 @@ func (l *Ledger) TaxRows(capital float64) (rows []TaxRow, open []OpenLot, skippe
 		form = Form6781
 	}
 	coins := []string{"BTC"}
-	if v.Pair {
+	if v.TriAsset {
+		coins, w = []string{"BTC", "ETH", "SOL"}, 1.0
+	} else if v.Pair {
 		coins, w = []string{"BTC", "ETH"}, 0.5
 	}
 	cost := (v.FeeBps + v.SlipBps) * 1e-4
@@ -106,9 +108,9 @@ func (l *Ledger) TaxRows(capital float64) (rows []TaxRow, open []OpenLot, skippe
 	}
 
 	for _, d := range l.Days {
-		pos := []float64{d.PosB, d.PosE}
-		px := []float64{d.CloseB, d.CloseE}
-		if px[0] <= 0 || (v.Pair && px[1] <= 0) {
+		pos := []float64{d.PosB, d.PosE, d.PosS}
+		px := []float64{d.CloseB, d.CloseE, d.CloseS}
+		if px[0] <= 0 || ((v.Pair || v.TriAsset) && px[1] <= 0) || (v.TriAsset && px[2] <= 0) {
 			skipped++
 			eqPrev = d.Equity
 			continue
