@@ -1301,6 +1301,9 @@ const indexHTML = `<!doctype html>
             </div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <select id="schwabPortfolioSelect" onchange="refreshSchwabPlan()" class="btn" style="background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:4px 8px;font-size:12px">
+                <option value="q57_full_fund">Q57 Full Multi-Asset Fund (Crypto HRP + Macro/Equities ETFs + SGOV)</option>
+                <option value="q57_hrp_hurst">Q57 Crypto HRP + Conformal 60/40</option>
+                <option value="q56_quantum_fast">Q56 Quantum Fast 60/40</option>
                 <option value="q42_dualspeed">Q42 Dual-Speed 60/40 (Min Tail/Bear)</option>
                 <option value="q42_balanced">Q42 Balanced 50/50 (Min Mean DD)</option>
                 <option value="q44_bh_harvester">Q44 BH Vol-Harvester + 1x..2.5x QD (+49.4%/yr Spot)</option>
@@ -2925,9 +2928,19 @@ const indexHTML = `<!doctype html>
       if ($("s36TailDD")) $("s36TailDD").textContent = "CDaR95: " + num((spot.cdar_95||0)*100, 2) + "% \u2022 Max UW: " + (spot.max_underwater_days||0) + "d";
       if ($("s36PingHint") && spot.execution_hint) $("s36PingHint").textContent = spot.execution_hint;
     }
+    var fullFundRows = "";
+    if (tb.q57_full_fund && tb.q57_full_fund.macro_stats) {
+      var ff = tb.q57_full_fund, ms = ff.macro_stats;
+      var activeMacro = (ff.macro_targets || []).filter(function(t){ return t.target_pct > 0; }).map(function(t){ return esc(t.symbol) + " " + num(t.target_pct, 1) + "%"; }).join(", ");
+      var macroLabel = (activeMacro ? (activeMacro + " / ") : "") + "SGOV " + num(ff.idle_sgov_pct, 1) + "%";
+      fullFundRows = "<tr style='color:var(--accent);font-weight:700'><td>" + esc(ff.name) + " (" + num(ff.macro_sleeve_weight_pct,0) + "% Macro / " + num(ff.crypto_sleeve_weight_pct,0) + "% Crypto)</td><td>" +
+        num(ms.equity, 4) + " <span style='color:var(--muted);font-size:11px'>(Macro CAGR " + num(ms.cagr_pct, 1) + "%)</span></td><td>" +
+        num(ms.max_dd_pct, 2) + "%</td><td>" + num(ms.mean_dd_pct, 2) + "%</td><td>" + num(ms.ulcer_index_pct, 2) + "%</td><td>-</td><td>" +
+        num(ms.sharpe, 2) + "</td><td>" + macroLabel + "</td></tr>";
+    }
     var allBlends = [].concat(tb.q57_hrp_hurst_blends || [], tb.q56_quantum_fast_blends || [], tb.q51_volparity_blends || [], tb.s36_qd_carry_blend || [], tb.q42_expected_dd_blends || [], tb.q44_vol_harvester_blends || []);
-    if ($("q42BlendBody") && allBlends.length) {
-      $("q42BlendBody").innerHTML = allBlends.map(function(b){
+    if ($("q42BlendBody") && (allBlends.length || fullFundRows)) {
+      $("q42BlendBody").innerHTML = fullFundRows + allBlends.map(function(b){
         var isHi = b.name && (b.name.indexOf("Q57_") === 0 || b.name.indexOf("Q56_") === 0 || b.name.indexOf("Q51_") === 0 || b.name.indexOf("Q42_") === 0 || b.name.indexOf("Q44_") === 0);
         var st = isHi ? " style='color:var(--accent);font-weight:700'" : "";
         var solStr = (b.target_sol_port_pct && b.target_sol_port_pct > 0) ? (" / SOL " + num(b.target_sol_port_pct, 1) + "%") : "";

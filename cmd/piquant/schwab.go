@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,12 +22,13 @@ func runSchwab(ctx context.Context, args []string) error {
 	dir := fs.String("dir", defaultTrendDir(), "trend state directory")
 	carryDir := fs.String("carry-dir", filepath.Join(home, "piquant-collect", "carry"), "carry state directory")
 	dtb3Path := fs.String("dtb3", filepath.Join(home, "piquant-data", "macro", "DTB3.csv"), "FRED DTB3 CSV path")
+	equitiesDir := fs.String("equities-dir", trend.DefaultEquitiesDir(), "US equities/macro CSV directory for q57_full_fund")
 	authURL := fs.Bool("auth-url", false, "print the Schwab v1 OAuth2 consent URL and exit")
 	exchangeCode := fs.String("exchange-code", "", "exchange a Schwab OAuth2 authorization code (or full redirect URL?code=...)")
 	save := fs.Bool("save", false, "with --exchange-code, save refresh token to --env with 0600 permissions")
 	clientIDFlag := fs.String("client-id", "", "override SCHWAB_APP_KEY")
 	redirectFlag := fs.String("redirect", "", "override SCHWAB_REDIRECT_URI")
-	portfolio := fs.String("portfolio", "q42_dualspeed", "target portfolio: q42_dualspeed | q42_balanced | s36_spot | s36_fut")
+	portfolio := fs.String("portfolio", "q42_dualspeed", "target portfolio: q57_full_fund | q57_hrp_hurst | q56_quantum_fast | q51_volparity | q42_dualspeed | q42_balanced | s36_spot | s36_fut")
 	navUSD := fs.Float64("nav", 0, "account NAV USD (0 = use Schwab liquidation value when connected, else $1000)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -58,7 +58,7 @@ func runSchwab(ctx context.Context, args []string) error {
 				code = code[:amp]
 			}
 		}
-		client := &http.Client{Timeout: 12 * time.Second}
+		client := execution.NewOptimizedHTTPClient(12 * time.Second)
 		tok, err := execution.ExchangeSchwabAuthCode(ctx, client, "", creds.ClientID, creds.ClientSecret, code, creds.RedirectURI)
 		if err != nil {
 			return err
@@ -92,12 +92,39 @@ func runSchwab(ctx context.Context, args []string) error {
 	}
 	cState, _ := carry.Load(filepath.Join(*carryDir, "carry_state.json"))
 	rates, _ := trend.LoadDTB3Rates(*dtb3Path)
+
+	client := execution.NewOptimizedHTTPClient(10 * time.Second)
+	sel := strings.ToLower(strings.TrimSpace(*portfolio))
+	if sel == "q57_full_fund" || sel == "q57_full" || sel == "q57_macro" {
+		full, ok := trend.ComputeQ57FullFund(st, cState, rates, *equitiesDir, nil)
+		if !ok {
+			return fmt.Errorf("q57_full_fund unavailable (check equities CSVs in %s)", *equitiesDir)
+		}
+		specs := BuildSchwabTargetsFromFullFund(full)
+		plan := execution.BuildSchwabMultiAssetPlan(
+			ctx, client, creds, "", "", "",
+			full.Name, specs, full.CarrySleevePct, *navUSD,
+		)
+		out := struct {
+			FullFund trend.FullFundSummary       `json:"q57_full_fund"`
+			Schwab   execution.SchwabPortfolioPlan `json:"schwab"`
+		}{
+			FullFund: full,
+			Schwab:   plan,
+		}
+		b, merr := json.MarshalIndent(out, "", " ")
+		if merr != nil {
+			return merr
+		}
+		fmt.Println(string(b))
+		return nil
+	}
+
 	blend, ok := trend.SelectBlend(st, cState, rates, *portfolio, nil)
 	if !ok {
 		return fmt.Errorf("portfolio %q unavailable in trend state", *portfolio)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
 	plan := execution.BuildSchwabPlanFromTargets(
 		ctx, client, creds, "", "", "",
 		blend.Name, blend.TargetBTCPortPct, blend.TargetETHPortPct, blend.IdleTrendCashPct, blend.CarrySleevePct, *navUSD,
@@ -108,4 +135,28 @@ func runSchwab(ctx context.Context, args []string) error {
 	}
 	fmt.Println(string(b))
 	return nil
+}
+
+// BuildSchwabTargetsFromFullFund maps Q57_full_multi_asset_fund_1x sleeve percentages into Schwab ETF/equity targets.
+func BuildSchwabTargetsFromFullFund(full trend.FullFundSummary) []execution.SchwabTargetSpec {
+	specs := make([]execution.SchwabTargetSpec, 0, len(full.MacroTargets)+3)
+	specs = append(specs,
+		execution.SchwabTargetSpec{Symbol: "IBIT", Role: "BTC Spot Proxy (Q57 Crypto)", TargetPct: full.CryptoBTCPortPct},
+		execution.SchwabTargetSpec{Symbol: "ETHA", Role: "ETH Spot Proxy (Q57 Crypto)", TargetPct: full.CryptoETHPortPct},
+	)
+	for _, mt := range full.MacroTargets {
+		if mt.TargetPct > 0 {
+			specs = append(specs, execution.SchwabTargetSpec{
+				Symbol:    mt.Symbol,
+				Role:      mt.Role + " (Q57 Macro HRP)",
+				TargetPct: mt.TargetPct,
+			})
+		}
+	}
+	specs = append(specs, execution.SchwabTargetSpec{
+		Symbol:    "SGOV",
+		Role:      "Idle Crypto + Macro T-Bills (0-3m)",
+		TargetPct: full.IdleSGOVPct,
+	})
+	return specs
 }

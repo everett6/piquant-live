@@ -165,6 +165,18 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 	} else {
 		fmt.Fprintln(os.Stderr, "[TREND] fetch 6h candles:", gbErr, geErr)
 	}
+	// Non-fatal daily equities/macro refresh when ~/piquant-data/equities is present.
+	if eqDir := trend.DefaultEquitiesDir(); eqDir != "" {
+		if info, serr := os.Stat(eqDir); serr == nil && info.IsDir() {
+			rctx, rcancel := context.WithTimeout(ctx, 15*time.Second)
+			if added, rerr := collect.RefreshEquitiesCSVs(rctx, client, eqDir, trend.MacroEquityTickers); rerr != nil {
+				fmt.Fprintln(os.Stderr, "[TREND] refresh equities:", rerr)
+			} else if added > 0 {
+				fmt.Printf("[TREND] refreshed %d daily macro/equities bar(s) in %s\n", added, eqDir)
+			}
+			rcancel()
+		}
+	}
 	if err := st.Save(path); err != nil {
 		return st, err
 	}

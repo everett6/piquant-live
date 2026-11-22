@@ -174,3 +174,80 @@ func TestSchwabExchangeRefreshAccountsAndPlanPipeline(t *testing.T) {
 		t.Fatalf("unexpected rebalance orders: %+v", plan.Orders)
 	}
 }
+
+func TestBuildSchwabMultiAssetPlanAndRebalance(t *testing.T) {
+	var seenQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/oauth/token":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token":  "acc-multi-1",
+				"refresh_token": "ref-multi-1",
+				"token_type":    "Bearer",
+				"expires_in":    1800,
+			})
+		case "/trader/v1/accounts":
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"securitiesAccount": map[string]any{
+						"accountNumber": "11223344",
+						"currentBalances": map[string]any{
+							"liquidationValue": 10000.0,
+							"cashBalance":      4000.0,
+						},
+						"positions": []map[string]any{
+							{"longQuantity": 10, "instrument": map[string]any{"symbol": "IBIT"}},
+							{"longQuantity": 10, "instrument": map[string]any{"symbol": "SGOV"}},
+						},
+					},
+				},
+			})
+		case "/marketdata/v1/quotes":
+			seenQuery = r.URL.Query().Get("symbols")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"IBIT": map[string]any{"quote": map[string]any{"bidPrice": 50.0, "askPrice": 50.02, "lastPrice": 50.01}},
+				"DBC":  map[string]any{"quote": map[string]any{"bidPrice": 29.30, "askPrice": 29.32, "lastPrice": 29.31}},
+				"AAPL": map[string]any{"quote": map[string]any{"bidPrice": 220.0, "askPrice": 220.1, "lastPrice": 220.05}},
+				"SGOV": map[string]any{"quote": map[string]any{"bidPrice": 100.40, "askPrice": 100.41, "lastPrice": 100.40}},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	creds := SchwabCredentials{ClientID: "app", ClientSecret: "sec", RefreshToken: "ref-multi-1", RedirectURI: "https://127.0.0.1:8443/cb"}
+	targets := []SchwabTargetSpec{
+		{Symbol: "IBIT", Role: "BTC Proxy", TargetPct: 0.0},
+		{Symbol: "DBC", Role: "Commodities", TargetPct: 20.0},
+		{Symbol: "AAPL", Role: "Mega-Cap", TargetPct: 20.0},
+		{Symbol: "SGOV", Role: "T-Bills", TargetPct: 60.0},
+	}
+	plan := BuildSchwabMultiAssetPlan(
+		context.Background(), srv.Client(), creds,
+		srv.URL+"/v1/oauth/token", srv.URL+"/marketdata/v1", srv.URL+"/trader/v1",
+		"Q57_full_multi_asset_fund_1x", targets, 14.0, 0,
+	)
+	if !plan.Connected || plan.NavUSD != 10000.0 {
+		t.Fatalf("unexpected multi-asset plan: %+v", plan)
+	}
+	if !strings.Contains(seenQuery, "DBC") || !strings.Contains(seenQuery, "AAPL") || !strings.Contains(seenQuery, "SGOV") {
+		t.Fatalf("expected multi-asset quotes query, got %q", seenQuery)
+	}
+	orderMap := map[string]SchwabRebalanceOrder{}
+	for _, o := range plan.Orders {
+		orderMap[o.Symbol] = o
+	}
+	if orderMap["IBIT"].Side != "SELL" || orderMap["IBIT"].QuantityShares != 10 {
+		t.Fatalf("expected SELL 10 IBIT, got %+v", orderMap["IBIT"])
+	}
+	if orderMap["DBC"].Side != "BUY" || orderMap["DBC"].QuantityShares <= 0 {
+		t.Fatalf("expected BUY DBC, got %+v", orderMap["DBC"])
+	}
+	if orderMap["AAPL"].Side != "BUY" || orderMap["AAPL"].QuantityShares <= 0 {
+		t.Fatalf("expected BUY AAPL, got %+v", orderMap["AAPL"])
+	}
+	if orderMap["SGOV"].Side != "BUY" || orderMap["SGOV"].QuantityShares <= 0 {
+		t.Fatalf("expected BUY SGOV, got %+v", orderMap["SGOV"])
+	}
+}

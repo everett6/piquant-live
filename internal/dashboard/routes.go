@@ -1910,6 +1910,19 @@ func (s *Server) resolveDTB3Path() string {
 	return ""
 }
 
+func (s *Server) resolveEquitiesDir() string {
+	if s.opts.EquitiesDir != "" {
+		return s.opts.EquitiesDir
+	}
+	for _, dp := range s.opts.DataDirs {
+		cand := filepath.Join(dp, "equities")
+		if info, err := os.Stat(cand); err == nil && info.IsDir() {
+			return cand
+		}
+	}
+	return trend.DefaultEquitiesDir()
+}
+
 func (s *Server) resolvePingPlan(r *http.Request) *execution.PingExecutionPlan {
 	force := r.URL.Query().Get("probe") == "1"
 	s.pingMu.Lock()
@@ -1971,8 +1984,9 @@ func (s *Server) handlePaperTrendBlend(w http.ResponseWriter, r *http.Request) {
 	q51Blends := trend.ComputeQ51Blends(st, cState, rates, plan)
 	q56Blends := trend.ComputeQ56Blends(st, cState, rates, plan)
 	q57Blends := trend.ComputeQ57Blends(st, cState, rates, plan)
+	fullFund, hasFullFund := trend.ComputeQ57FullFund(st, cState, rates, s.resolveEquitiesDir(), plan)
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"status":                   "ok",
 		"last_date":                st.LastDate,
 		"scorecard":                scorecard,
@@ -1984,10 +1998,14 @@ func (s *Server) handlePaperTrendBlend(w http.ResponseWriter, r *http.Request) {
 		"q57_hrp_hurst_blends":     q57Blends,
 		"venue_leverage_profiles":  paper.SupportedVenueProfiles(),
 		"ping_plan":                plan,
-	})
+	}
+	if hasFullFund {
+		resp["q57_full_fund"] = fullFund
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
-// handlePaperSchwabPlan returns a read-only Charles Schwab v1 ETF proxy preview (IBIT, ETHA, SGOV)
+// handlePaperSchwabPlan returns a read-only Charles Schwab v1 ETF proxy preview (IBIT, ETHA, SGOV, or full multi-asset Q57 ETFs)
 // aligned to the chosen composite blend (default: Q42_dualspeed_60_40_carry_spot).
 func (s *Server) handlePaperSchwabPlan(w http.ResponseWriter, r *http.Request) {
 	if s.authenticate(r) == authNone {
@@ -2013,13 +2031,51 @@ func (s *Server) handlePaperSchwabPlan(w http.ResponseWriter, r *http.Request) {
 			navUSD = parsed
 		}
 	}
+	creds := execution.LoadSchwabCredentials(s.opts.SchwabEnvPath)
+	client := execution.NewOptimizedHTTPClient(8 * time.Second)
+	selNorm := strings.ToLower(strings.TrimSpace(selector))
+	if selNorm == "q57_full_fund" || selNorm == "q57_full" || selNorm == "q57_macro" {
+		full, ok := trend.ComputeQ57FullFund(st, cState, rates, s.resolveEquitiesDir(), nil)
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q57_full_fund equities data unavailable"})
+			return
+		}
+		specs := []execution.SchwabTargetSpec{
+			{Symbol: "IBIT", Role: "BTC Spot Proxy (Q57 Crypto)", TargetPct: full.CryptoBTCPortPct},
+			{Symbol: "ETHA", Role: "ETH Spot Proxy (Q57 Crypto)", TargetPct: full.CryptoETHPortPct},
+		}
+		for _, mt := range full.MacroTargets {
+			if mt.TargetPct > 0 {
+				specs = append(specs, execution.SchwabTargetSpec{
+					Symbol:    mt.Symbol,
+					Role:      mt.Role + " (Q57 Macro HRP)",
+					TargetPct: mt.TargetPct,
+				})
+			}
+		}
+		specs = append(specs, execution.SchwabTargetSpec{
+			Symbol:    "SGOV",
+			Role:      "Idle Crypto + Macro T-Bills (0-3m)",
+			TargetPct: full.IdleSGOVPct,
+		})
+		plan := execution.BuildSchwabMultiAssetPlan(
+			r.Context(), client, creds,
+			s.opts.SchwabTokenURL, s.opts.SchwabMarketDataBase, s.opts.SchwabTraderBase,
+			full.Name, specs, full.CarrySleevePct, navUSD,
+		)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":        "ok",
+			"q57_full_fund": full,
+			"schwab":        plan,
+		})
+		return
+	}
+
 	blend, ok := trend.SelectBlend(st, cState, rates, selector, nil)
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown or unavailable portfolio selector"})
 		return
 	}
-	creds := execution.LoadSchwabCredentials(s.opts.SchwabEnvPath)
-	client := &http.Client{Timeout: 8 * time.Second}
 	plan := execution.BuildSchwabPlanFromTargets(
 		r.Context(), client, creds,
 		s.opts.SchwabTokenURL, s.opts.SchwabMarketDataBase, s.opts.SchwabTraderBase,

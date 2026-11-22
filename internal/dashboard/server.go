@@ -199,10 +199,11 @@ type Options struct {
 	ClusterMode string
 	// DryRun, when set, exposes the 14-day autonomous paper money dry run engine.
 	DryRun any
-	// Optional overrides for PREREG6/35/36 daily trend ledger, C1 carry ledger, and FRED DTB3 CSV.
+	// Optional overrides for PREREG6/35/36 daily trend ledger, C1 carry ledger, FRED DTB3 CSV, and Macro Equities dir.
 	TrendDir             string
 	CarryDir             string
 	DTB3Path             string
+	EquitiesDir          string
 	DisableLivePing      bool
 	SchwabEnvPath        string
 	SchwabTokenURL       string

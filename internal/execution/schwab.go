@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -285,6 +286,13 @@ func FetchSchwabQuotes(ctx context.Context, client *http.Client, baseURL, access
 	return out, nil
 }
 
+// SchwabTargetSpec describes a target portfolio allocation percentage for any Schwab-tradable ETF or stock.
+type SchwabTargetSpec struct {
+	Symbol    string
+	Role      string
+	TargetPct float64
+}
+
 // PlanSchwabETFRebalance maps S36_qd_carry_blend portfolio target weights (BTC%, ETH%, idle Cash%)
 // into passive limit order previews on commission-free US ETFs (`IBIT`, `ETHA`, `SGOV`).
 // It never submits orders and enforces a minimum $25 order notional filter to avoid tiny churn.
@@ -294,20 +302,53 @@ func PlanSchwabETFRebalance(
 	heldShares map[string]int,
 	quotes map[string]SchwabQuote,
 ) []SchwabRebalanceOrder {
+	return PlanSchwabMultiAssetRebalance(navUSD, []SchwabTargetSpec{
+		{Symbol: "IBIT", Role: "BTC Spot Proxy", TargetPct: targetBTCPct},
+		{Symbol: "ETHA", Role: "ETH Spot Proxy", TargetPct: targetETHPct},
+		{Symbol: "SGOV", Role: "Idle Trend T-Bills (0-3m)", TargetPct: idleCashPct},
+	}, heldShares, quotes)
+}
+
+// PlanSchwabMultiAssetRebalance maps arbitrary multi-asset target weights into passive whole-share
+// limit order previews (BUY at bid, SELL at ask) enforcing a $25 minimum order notional filter.
+func PlanSchwabMultiAssetRebalance(
+	navUSD float64,
+	targets []SchwabTargetSpec,
+	heldShares map[string]int,
+	quotes map[string]SchwabQuote,
+) []SchwabRebalanceOrder {
 	if navUSD <= 0 {
 		return nil
 	}
-	targets := []struct {
-		sym string
-		pct float64
-	}{
-		{"IBIT", targetBTCPct},
-		{"ETHA", targetETHPct},
-		{"SGOV", idleCashPct},
-	}
-	var orders []SchwabRebalanceOrder
+	targetMap := make(map[string]float64, len(targets))
+	orderSyms := make([]string, 0, len(targets)+len(heldShares))
+	seen := make(map[string]struct{}, len(targets)+len(heldShares))
 	for _, t := range targets {
-		q, ok := quotes[t.sym]
+		sym := strings.ToUpper(strings.TrimSpace(t.Symbol))
+		if sym == "" {
+			continue
+		}
+		targetMap[sym] += t.TargetPct
+		if _, dup := seen[sym]; !dup {
+			seen[sym] = struct{}{}
+			orderSyms = append(orderSyms, sym)
+		}
+	}
+	// Ensure held positions not present in targets are flattened cleanly.
+	for sym, qty := range heldShares {
+		u := strings.ToUpper(strings.TrimSpace(sym))
+		if u == "" || qty == 0 {
+			continue
+		}
+		if _, exists := seen[u]; !exists {
+			seen[u] = struct{}{}
+			orderSyms = append(orderSyms, u)
+		}
+	}
+
+	var orders []SchwabRebalanceOrder
+	for _, sym := range orderSyms {
+		q, ok := quotes[sym]
 		if !ok {
 			continue
 		}
@@ -318,10 +359,11 @@ func PlanSchwabETFRebalance(
 		if mid <= 0 {
 			continue
 		}
-		desiredShares := int(math.Floor((navUSD * (t.pct / 100.0)) / mid))
+		pct := targetMap[sym]
+		desiredShares := int(math.Floor((navUSD * (pct / 100.0)) / mid))
 		curShares := 0
 		if heldShares != nil {
-			curShares = heldShares[t.sym]
+			curShares = heldShares[sym]
 		}
 		diff := desiredShares - curShares
 		if diff == 0 {
@@ -345,7 +387,7 @@ func PlanSchwabETFRebalance(
 			continue
 		}
 		orders = append(orders, SchwabRebalanceOrder{
-			Symbol:         t.sym,
+			Symbol:         sym,
 			Side:           side,
 			QuantityShares: qty,
 			LimitPrice:     math.Round(limitPx*100) / 100,
@@ -476,7 +518,7 @@ type SchwabPortfolioPlan struct {
 
 // BuildSchwabPlanFromTargets computes target ETF dollar weights (`IBIT`, `ETHA`, `SGOV`) and, when
 // Schwab v1 credentials are configured, refreshes an OAuth2 access token to fetch read-only positions
-// and live NBBO quotes in order to size passive whole-share limit previews.
+// and live NBBO quotes concurrently in order to size passive whole-share limit previews.
 func BuildSchwabPlanFromTargets(
 	ctx context.Context,
 	client *http.Client,
@@ -484,6 +526,25 @@ func BuildSchwabPlanFromTargets(
 	tokenURL, marketDataBase, traderBase string,
 	portfolioName string,
 	btcPct, ethPct, idleCashPct, carryPct, navUSD float64,
+) SchwabPortfolioPlan {
+	return BuildSchwabMultiAssetPlan(ctx, client, creds, tokenURL, marketDataBase, traderBase, portfolioName,
+		[]SchwabTargetSpec{
+			{Symbol: "IBIT", Role: "BTC Spot Proxy", TargetPct: btcPct},
+			{Symbol: "ETHA", Role: "ETH Spot Proxy", TargetPct: ethPct},
+			{Symbol: "SGOV", Role: "Idle Trend T-Bills (0-3m)", TargetPct: idleCashPct},
+		}, carryPct, navUSD)
+}
+
+// BuildSchwabMultiAssetPlan builds a read-only multi-asset Schwab ETF/equity rebalance preview,
+// fetching account positions and batched NBBO quotes concurrently when Schwab v1 credentials are configured.
+func BuildSchwabMultiAssetPlan(
+	ctx context.Context,
+	client *http.Client,
+	creds SchwabCredentials,
+	tokenURL, marketDataBase, traderBase string,
+	portfolioName string,
+	targets []SchwabTargetSpec,
+	carryPct, navUSD float64,
 ) SchwabPortfolioPlan {
 	autoNav := navUSD <= 0
 	if navUSD <= 0 {
@@ -501,6 +562,19 @@ func BuildSchwabPlanFromTargets(
 		plan.AuthURL = SchwabAuthorizeURL(creds.ClientID, creds.RedirectURI)
 	}
 
+	syms := make([]string, 0, len(targets))
+	seenSym := make(map[string]struct{}, len(targets))
+	for _, t := range targets {
+		sym := strings.ToUpper(strings.TrimSpace(t.Symbol))
+		if sym == "" {
+			continue
+		}
+		if _, dup := seenSym[sym]; !dup {
+			seenSym[sym] = struct{}{}
+			syms = append(syms, sym)
+		}
+	}
+
 	var held map[string]int
 	if creds.Ready() {
 		tok, err := RefreshSchwabToken(ctx, client, tokenURL, creds.ClientID, creds.ClientSecret, creds.RefreshToken)
@@ -508,7 +582,25 @@ func BuildSchwabPlanFromTargets(
 			plan.Error = err.Error()
 		} else {
 			plan.Connected = true
-			if acct, aerr := FetchSchwabAccountPositions(ctx, client, traderBase, tok.AccessToken); aerr == nil {
+			var (
+				acct     SchwabAccountPositions
+				aerr     error
+				quotes   map[string]SchwabQuote
+				qerr     error
+				wg       sync.WaitGroup
+			)
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				acct, aerr = FetchSchwabAccountPositions(ctx, client, traderBase, tok.AccessToken)
+			}()
+			go func() {
+				defer wg.Done()
+				quotes, qerr = FetchSchwabQuotes(ctx, client, marketDataBase, tok.AccessToken, syms)
+			}()
+			wg.Wait()
+
+			if aerr == nil {
 				plan.AccountHash = acct.AccountHash
 				plan.AccountValueUSD = roundUSD(acct.LiquidationValue)
 				held = acct.SharesBySymbol
@@ -519,19 +611,29 @@ func BuildSchwabPlanFromTargets(
 			} else if plan.Error == "" {
 				plan.Error = aerr.Error()
 			}
-			if quotes, qerr := FetchSchwabQuotes(ctx, client, marketDataBase, tok.AccessToken, []string{"IBIT", "ETHA", "SGOV"}); qerr == nil {
+			if qerr == nil {
 				plan.Quotes = quotes
-				plan.Orders = PlanSchwabETFRebalance(plan.NavUSD, btcPct, ethPct, idleCashPct, held, quotes)
+				plan.Orders = PlanSchwabMultiAssetRebalance(plan.NavUSD, targets, held, quotes)
 			} else if plan.Error == "" {
 				plan.Error = qerr.Error()
 			}
 		}
 	}
 
-	plan.Allocations = []SchwabETFAllocation{
-		{Symbol: "IBIT", Role: "BTC Spot Proxy", TargetPct: roundUSD(btcPct), TargetUSD: roundUSD(plan.NavUSD * btcPct / 100.0), CurrentShares: held["IBIT"]},
-		{Symbol: "ETHA", Role: "ETH Spot Proxy", TargetPct: roundUSD(ethPct), TargetUSD: roundUSD(plan.NavUSD * ethPct / 100.0), CurrentShares: held["ETHA"]},
-		{Symbol: "SGOV", Role: "Idle Trend T-Bills (0-3m)", TargetPct: roundUSD(idleCashPct), TargetUSD: roundUSD(plan.NavUSD * idleCashPct / 100.0), CurrentShares: held["SGOV"]},
+	allocs := make([]SchwabETFAllocation, 0, len(targets))
+	for _, t := range targets {
+		sym := strings.ToUpper(strings.TrimSpace(t.Symbol))
+		if sym == "" {
+			continue
+		}
+		allocs = append(allocs, SchwabETFAllocation{
+			Symbol:        sym,
+			Role:          t.Role,
+			TargetPct:     roundUSD(t.TargetPct),
+			TargetUSD:     roundUSD(plan.NavUSD * t.TargetPct / 100.0),
+			CurrentShares: held[sym],
+		})
 	}
+	plan.Allocations = allocs
 	return plan
 }
