@@ -154,7 +154,7 @@ def main() -> None:
     pre_all_coins = YG.precompute_signals(u_all_coins)
     r_15_coins = R53.simulate_dual_momentum_spot(pre_all_coins, top_k=4, trend_weight=0.50, xs_weight=0.40, mr_weight=0.10)
 
-    u_eq = YG.load_equities_universe(tickers=YG.EQUITY_TICKERS)
+    u_eq = YG.load_equities_universe(tickers=YG.MACRO_EQUITY_TICKERS)
     pre_eq = YG.precompute_signals(u_eq)
     r_10_eq_tr = R53.simulate_dual_momentum_spot(pre_eq, top_k=3, trend_weight=0.50, xs_weight=0.40, mr_weight=0.10)
 
