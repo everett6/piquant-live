@@ -1,0 +1,765 @@
+{
+  "all_15_coins_1x": {
+    "full_cagr_pct": 34.73,
+    "full_max_dd_pct": 39.78,
+    "full_sharpe": 1.024,
+    "calmar": 0.873,
+    "oos_2024_2026_cagr_pct": 11.13,
+    "oos_2024_2026_sharpe": 0.512,
+    "oos_2024_2026_max_dd_pct": 35.42,
+    "monthly_reset_1000": {
+      "total_months": 82,
+      "winning_months": 45,
+      "win_rate_pct": 54.88,
+      "mean_monthly_pct": 3.328,
+      "median_monthly_pct": 0.51,
+      "worst_month": {
+        "month": "2024-04",
+        "days": 30,
+        "start_eq": 1000.0,
+        "end_eq": 732.25,
+        "ret_pct": -26.78,
+        "max_dd_pct": 26.78
+      },
+      "worst_5_months": [
+        {
+          "month": "2024-04",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 732.25,
+          "ret_pct": -26.78,
+          "max_dd_pct": 26.78
+        },
+        {
+          "month": "2020-09",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 856.4,
+          "ret_pct": -14.36,
+          "max_dd_pct": 16.2
+        },
+        {
+          "month": "2021-12",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 876.17,
+          "ret_pct": -12.38,
+          "max_dd_pct": 12.38
+        },
+        {
+          "month": "2022-04",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 906.59,
+          "ret_pct": -9.34,
+          "max_dd_pct": 11.51
+        },
+        {
+          "month": "2021-06",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 912.64,
+          "ret_pct": -8.74,
+          "max_dd_pct": 10.33
+        }
+      ],
+      "best_5_months": [
+        {
+          "month": "2024-11",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 1756.32,
+          "ret_pct": 75.63,
+          "max_dd_pct": 6.24
+        },
+        {
+          "month": "2021-01",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1534.79,
+          "ret_pct": 53.48,
+          "max_dd_pct": 14.21
+        },
+        {
+          "month": "2020-11",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 1488.59,
+          "ret_pct": 48.86,
+          "max_dd_pct": 12.95
+        },
+        {
+          "month": "2020-07",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1338.27,
+          "ret_pct": 33.83,
+          "max_dd_pct": 1.92
+        },
+        {
+          "month": "2024-03",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1224.02,
+          "ret_pct": 22.4,
+          "max_dd_pct": 14.54
+        }
+      ],
+      "total_monthly_profit_usd": 2729.41
+    }
+  },
+  "all_10_stocks_1x": {
+    "full_cagr_pct": 14.66,
+    "full_max_dd_pct": 13.56,
+    "full_sharpe": 1.215,
+    "calmar": 1.081,
+    "oos_2024_2026_cagr_pct": 17.17,
+    "oos_2024_2026_sharpe": 1.547,
+    "oos_2024_2026_max_dd_pct": 9.74,
+    "monthly_reset_1000": {
+      "total_months": 82,
+      "winning_months": 53,
+      "win_rate_pct": 64.63,
+      "mean_monthly_pct": 1.198,
+      "median_monthly_pct": 1.025,
+      "worst_month": {
+        "month": "2020-09",
+        "days": 30,
+        "start_eq": 1000.0,
+        "end_eq": 925.08,
+        "ret_pct": -7.49,
+        "max_dd_pct": 9.94
+      },
+      "worst_5_months": [
+        {
+          "month": "2020-09",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 925.08,
+          "ret_pct": -7.49,
+          "max_dd_pct": 9.94
+        },
+        {
+          "month": "2026-03",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 944.02,
+          "ret_pct": -5.6,
+          "max_dd_pct": 5.62
+        },
+        {
+          "month": "2022-04",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 948.65,
+          "ret_pct": -5.14,
+          "max_dd_pct": 6.14
+        },
+        {
+          "month": "2020-10",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 955.91,
+          "ret_pct": -4.41,
+          "max_dd_pct": 6.02
+        },
+        {
+          "month": "2021-09",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 965.09,
+          "ret_pct": -3.49,
+          "max_dd_pct": 3.74
+        }
+      ],
+      "best_5_months": [
+        {
+          "month": "2024-02",
+          "days": 29,
+          "start_eq": 1000.0,
+          "end_eq": 1109.13,
+          "ret_pct": 10.91,
+          "max_dd_pct": 2.19
+        },
+        {
+          "month": "2020-07",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1072.02,
+          "ret_pct": 7.2,
+          "max_dd_pct": 1.41
+        },
+        {
+          "month": "2026-04",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 1070.51,
+          "ret_pct": 7.05,
+          "max_dd_pct": 1.05
+        },
+        {
+          "month": "2023-01",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1065.71,
+          "ret_pct": 6.57,
+          "max_dd_pct": 1.42
+        },
+        {
+          "month": "2023-03",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1064.62,
+          "ret_pct": 6.46,
+          "max_dd_pct": 1.63
+        }
+      ],
+      "total_monthly_profit_usd": 982.67
+    }
+  },
+  "all_25_assets_raw_1x": {
+    "full_cagr_pct": 20.82,
+    "full_max_dd_pct": 18.12,
+    "full_sharpe": 1.539,
+    "calmar": 1.149,
+    "oos_2024_2026_cagr_pct": 18.67,
+    "oos_2024_2026_sharpe": 1.558,
+    "oos_2024_2026_max_dd_pct": 11.06,
+    "monthly_reset_1000": {
+      "total_months": 82,
+      "winning_months": 54,
+      "win_rate_pct": 65.85,
+      "mean_monthly_pct": 1.701,
+      "median_monthly_pct": 1.105,
+      "worst_month": {
+        "month": "2020-09",
+        "days": 30,
+        "start_eq": 1000.0,
+        "end_eq": 907.71,
+        "ret_pct": -9.23,
+        "max_dd_pct": 10.93
+      },
+      "worst_5_months": [
+        {
+          "month": "2020-09",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 907.71,
+          "ret_pct": -9.23,
+          "max_dd_pct": 10.93
+        },
+        {
+          "month": "2024-04",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 914.36,
+          "ret_pct": -8.56,
+          "max_dd_pct": 8.74
+        },
+        {
+          "month": "2022-04",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 933.55,
+          "ret_pct": -6.65,
+          "max_dd_pct": 7.93
+        },
+        {
+          "month": "2026-03",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 953.54,
+          "ret_pct": -4.65,
+          "max_dd_pct": 4.78
+        },
+        {
+          "month": "2021-09",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 960.06,
+          "ret_pct": -3.99,
+          "max_dd_pct": 6.56
+        }
+      ],
+      "best_5_months": [
+        {
+          "month": "2024-11",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 1180.9,
+          "ret_pct": 18.09,
+          "max_dd_pct": 1.19
+        },
+        {
+          "month": "2024-02",
+          "days": 29,
+          "start_eq": 1000.0,
+          "end_eq": 1170.52,
+          "ret_pct": 17.05,
+          "max_dd_pct": 1.63
+        },
+        {
+          "month": "2020-07",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1158.65,
+          "ret_pct": 15.87,
+          "max_dd_pct": 1.4
+        },
+        {
+          "month": "2020-11",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 1127.58,
+          "ret_pct": 12.76,
+          "max_dd_pct": 2.66
+        },
+        {
+          "month": "2024-03",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1095.67,
+          "ret_pct": 9.57,
+          "max_dd_pct": 3.22
+        }
+      ],
+      "total_monthly_profit_usd": 1394.51
+    }
+  },
+  "all_25_assets_fixed_1x": {
+    "full_cagr_pct": 17.83,
+    "full_max_dd_pct": 15.29,
+    "full_sharpe": 1.49,
+    "calmar": 1.166,
+    "oos_2024_2026_cagr_pct": 16.94,
+    "oos_2024_2026_sharpe": 1.48,
+    "oos_2024_2026_max_dd_pct": 9.9,
+    "monthly_reset_1000": {
+      "total_months": 82,
+      "winning_months": 51,
+      "win_rate_pct": 62.2,
+      "mean_monthly_pct": 1.473,
+      "median_monthly_pct": 0.84,
+      "worst_month": {
+        "month": "2020-09",
+        "days": 30,
+        "start_eq": 1000.0,
+        "end_eq": 911.11,
+        "ret_pct": -8.89,
+        "max_dd_pct": 10.47
+      },
+      "worst_5_months": [
+        {
+          "month": "2020-09",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 911.11,
+          "ret_pct": -8.89,
+          "max_dd_pct": 10.47
+        },
+        {
+          "month": "2024-04",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 917.45,
+          "ret_pct": -8.26,
+          "max_dd_pct": 8.43
+        },
+        {
+          "month": "2022-04",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 948.75,
+          "ret_pct": -5.13,
+          "max_dd_pct": 6.29
+        },
+        {
+          "month": "2021-09",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 957.74,
+          "ret_pct": -4.23,
+          "max_dd_pct": 6.78
+        },
+        {
+          "month": "2026-03",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 957.72,
+          "ret_pct": -4.23,
+          "max_dd_pct": 4.33
+        }
+      ],
+      "best_5_months": [
+        {
+          "month": "2024-02",
+          "days": 29,
+          "start_eq": 1000.0,
+          "end_eq": 1171.98,
+          "ret_pct": 17.2,
+          "max_dd_pct": 1.63
+        },
+        {
+          "month": "2024-11",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 1165.69,
+          "ret_pct": 16.57,
+          "max_dd_pct": 1.18
+        },
+        {
+          "month": "2020-07",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1158.65,
+          "ret_pct": 15.87,
+          "max_dd_pct": 1.4
+        },
+        {
+          "month": "2020-11",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 1105.8,
+          "ret_pct": 10.58,
+          "max_dd_pct": 2.66
+        },
+        {
+          "month": "2024-03",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1088.33,
+          "ret_pct": 8.83,
+          "max_dd_pct": 2.93
+        }
+      ],
+      "total_monthly_profit_usd": 1208.12
+    }
+  },
+  "q53_combo_1x_before_fix": {
+    "full_cagr_pct": 20.66,
+    "full_max_dd_pct": 11.93,
+    "full_sharpe": 1.954,
+    "calmar": 1.732,
+    "oos_2024_2026_cagr_pct": 19.01,
+    "oos_2024_2026_sharpe": 1.991,
+    "oos_2024_2026_max_dd_pct": 5.96,
+    "monthly_reset_1000": {
+      "total_months": 82,
+      "winning_months": 57,
+      "win_rate_pct": 69.51,
+      "mean_monthly_pct": 1.631,
+      "median_monthly_pct": 0.935,
+      "worst_month": {
+        "month": "2020-09",
+        "days": 30,
+        "start_eq": 1000.0,
+        "end_eq": 937.4,
+        "ret_pct": -6.26,
+        "max_dd_pct": 7.81
+      },
+      "worst_5_months": [
+        {
+          "month": "2020-09",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 937.4,
+          "ret_pct": -6.26,
+          "max_dd_pct": 7.81
+        },
+        {
+          "month": "2022-04",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 953.81,
+          "ret_pct": -4.62,
+          "max_dd_pct": 6.58
+        },
+        {
+          "month": "2026-03",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 965.46,
+          "ret_pct": -3.45,
+          "max_dd_pct": 3.48
+        },
+        {
+          "month": "2024-04",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 970.93,
+          "ret_pct": -2.91,
+          "max_dd_pct": 3.48
+        },
+        {
+          "month": "2021-09",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 973.9,
+          "ret_pct": -2.61,
+          "max_dd_pct": 4.59
+        }
+      ],
+      "best_5_months": [
+        {
+          "month": "2024-02",
+          "days": 29,
+          "start_eq": 1000.0,
+          "end_eq": 1147.6,
+          "ret_pct": 14.76,
+          "max_dd_pct": 0.94
+        },
+        {
+          "month": "2020-11",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 1097.81,
+          "ret_pct": 9.78,
+          "max_dd_pct": 1.47
+        },
+        {
+          "month": "2020-07",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1084.99,
+          "ret_pct": 8.5,
+          "max_dd_pct": 0.84
+        },
+        {
+          "month": "2025-05",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1079.25,
+          "ret_pct": 7.92,
+          "max_dd_pct": 1.27
+        },
+        {
+          "month": "2023-01",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1078.66,
+          "ret_pct": 7.87,
+          "max_dd_pct": 1.63
+        }
+      ],
+      "total_monthly_profit_usd": 1337.97
+    }
+  },
+  "q55_combo_1x_after_fix": {
+    "full_cagr_pct": 19.18,
+    "full_max_dd_pct": 10.33,
+    "full_sharpe": 1.974,
+    "calmar": 1.857,
+    "oos_2024_2026_cagr_pct": 17.54,
+    "oos_2024_2026_sharpe": 1.945,
+    "oos_2024_2026_max_dd_pct": 4.53,
+    "monthly_reset_1000": {
+      "total_months": 82,
+      "winning_months": 56,
+      "win_rate_pct": 68.29,
+      "mean_monthly_pct": 1.521,
+      "median_monthly_pct": 0.88,
+      "worst_month": {
+        "month": "2020-09",
+        "days": 30,
+        "start_eq": 1000.0,
+        "end_eq": 940.9,
+        "ret_pct": -5.91,
+        "max_dd_pct": 7.43
+      },
+      "worst_5_months": [
+        {
+          "month": "2020-09",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 940.9,
+          "ret_pct": -5.91,
+          "max_dd_pct": 7.43
+        },
+        {
+          "month": "2022-04",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 962.65,
+          "ret_pct": -3.74,
+          "max_dd_pct": 5.13
+        },
+        {
+          "month": "2022-08",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 971.75,
+          "ret_pct": -2.83,
+          "max_dd_pct": 4.69
+        },
+        {
+          "month": "2024-04",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 971.8,
+          "ret_pct": -2.82,
+          "max_dd_pct": 3.39
+        },
+        {
+          "month": "2021-09",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 973.01,
+          "ret_pct": -2.7,
+          "max_dd_pct": 4.67
+        }
+      ],
+      "best_5_months": [
+        {
+          "month": "2024-02",
+          "days": 29,
+          "start_eq": 1000.0,
+          "end_eq": 1147.6,
+          "ret_pct": 14.76,
+          "max_dd_pct": 0.94
+        },
+        {
+          "month": "2020-11",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 1096.44,
+          "ret_pct": 9.64,
+          "max_dd_pct": 1.47
+        },
+        {
+          "month": "2020-07",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1084.99,
+          "ret_pct": 8.5,
+          "max_dd_pct": 0.84
+        },
+        {
+          "month": "2024-03",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1071.42,
+          "ret_pct": 7.14,
+          "max_dd_pct": 1.67
+        },
+        {
+          "month": "2023-11",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 1065.21,
+          "ret_pct": 6.52,
+          "max_dd_pct": 0.76
+        }
+      ],
+      "total_monthly_profit_usd": 1247.43
+    }
+  },
+  "q55_combo_scaled_tv16_cap1.8": {
+    "full_cagr_pct": 29.05,
+    "full_max_dd_pct": 13.09,
+    "full_sharpe": 1.981,
+    "calmar": 2.219,
+    "oos_2024_2026_cagr_pct": 24.32,
+    "oos_2024_2026_sharpe": 1.727,
+    "oos_2024_2026_max_dd_pct": 7.91,
+    "monthly_reset_1000": {
+      "total_months": 82,
+      "winning_months": 57,
+      "win_rate_pct": 69.51,
+      "mean_monthly_pct": 2.242,
+      "median_monthly_pct": 1.685,
+      "worst_month": {
+        "month": "2020-09",
+        "days": 30,
+        "start_eq": 1000.0,
+        "end_eq": 936.7,
+        "ret_pct": -6.33,
+        "max_dd_pct": 8.34
+      },
+      "worst_5_months": [
+        {
+          "month": "2020-09",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 936.7,
+          "ret_pct": -6.33,
+          "max_dd_pct": 8.34
+        },
+        {
+          "month": "2021-09",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 949.55,
+          "ret_pct": -5.04,
+          "max_dd_pct": 7.54
+        },
+        {
+          "month": "2024-04",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 951.73,
+          "ret_pct": -4.83,
+          "max_dd_pct": 5.81
+        },
+        {
+          "month": "2026-03",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 951.81,
+          "ret_pct": -4.82,
+          "max_dd_pct": 4.85
+        },
+        {
+          "month": "2024-08",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 958.64,
+          "ret_pct": -4.14,
+          "max_dd_pct": 4.15
+        }
+      ],
+      "best_5_months": [
+        {
+          "month": "2024-02",
+          "days": 29,
+          "start_eq": 1000.0,
+          "end_eq": 1184.97,
+          "ret_pct": 18.5,
+          "max_dd_pct": 1.02
+        },
+        {
+          "month": "2020-07",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1135.7,
+          "ret_pct": 13.57,
+          "max_dd_pct": 1.52
+        },
+        {
+          "month": "2023-11",
+          "days": 30,
+          "start_eq": 1000.0,
+          "end_eq": 1116.28,
+          "ret_pct": 11.63,
+          "max_dd_pct": 1.19
+        },
+        {
+          "month": "2023-01",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1095.22,
+          "ret_pct": 9.52,
+          "max_dd_pct": 2.41
+        },
+        {
+          "month": "2025-07",
+          "days": 31,
+          "start_eq": 1000.0,
+          "end_eq": 1094.32,
+          "ret_pct": 9.43,
+          "max_dd_pct": 0.93
+        }
+      ],
+      "total_monthly_profit_usd": 1838.09
+    }
+  }
+}
