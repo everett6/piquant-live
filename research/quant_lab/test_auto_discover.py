@@ -152,7 +152,9 @@ def test_generate_llamacpp_candidates_cli_and_server(tmp_path, monkeypatch):
     assert exprs_srv == ["ema(btc_ret5, 8) * 2.0"]
 
 
-def test_llamacpp_and_ollama_fallback_dry_run_synth_end_to_end(tmp_path):
+def test_llamacpp_and_ollama_fallback_dry_run_synth_end_to_end(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(AD, "DEFAULT_OPENROUTER_ENV_PATH", str(tmp_path / "missing_or.env"))
     state_p = str(tmp_path / "state.json")
     shadow_p = str(tmp_path / "shadow.json")
     log_p = str(tmp_path / "log.jsonl")

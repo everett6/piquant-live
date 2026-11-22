@@ -767,6 +767,30 @@ def generate_ollama_candidates(
 
 DEFAULT_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_OPENROUTER_MODEL = "openrouter/free"
+DEFAULT_OPENROUTER_ENV_PATH = os.path.expanduser("~/.config/piquant/openrouter.env")
+
+
+def _load_openrouter_key(api_key: str | None = None, env_path: str | None = None) -> str:
+    """Resolve OpenRouter API key from explicit arg, env var, or chmod-600 openrouter.env."""
+    if api_key and api_key.strip():
+        return api_key.strip()
+    env_val = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if env_val:
+        return env_val
+    path = os.path.expanduser(env_path or DEFAULT_OPENROUTER_ENV_PATH)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                for raw_line in fh:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    if k.strip() == "OPENROUTER_API_KEY":
+                        return v.strip().strip('"').strip("'")
+        except OSError:
+            return ""
+    return ""
 
 
 def generate_openrouter_candidates(
@@ -779,7 +803,7 @@ def generate_openrouter_candidates(
     timeout_s: float = 35.0,
 ) -> tuple[list[str], str | None]:
     """Query OpenRouter chat-completions (supports `:free` models) for MFT/LFT alpha expressions."""
-    key = (api_key or os.environ.get("OPENROUTER_API_KEY", "")).strip()
+    key = _load_openrouter_key(api_key=api_key)
     if not key:
         return [], "OPENROUTER_API_KEY not set"
 
@@ -1217,7 +1241,7 @@ def run_discovery(
                 expr_pairs.append((e, llama_src))
                 seen_llama.add(e)
 
-    if mode == "openrouter" or (mode == "auto" and len(expr_pairs) < n_candidates and os.environ.get("OPENROUTER_API_KEY", "").strip()):
+    if mode == "openrouter" or (mode == "auto" and not dry_run_synth and len(expr_pairs) < n_candidates and _load_openrouter_key()):
         needed = n_candidates - len(expr_pairs)
         or_exprs, openrouter_note = generate_openrouter_candidates(
             n_candidates=needed,
@@ -1474,6 +1498,8 @@ def main() -> None:
     )
     if summary["llamacpp_note"]:
         print(f"  llamacpp note: {summary['llamacpp_note']}")
+    if summary.get("openrouter_note"):
+        print(f"  openrouter note: {summary['openrouter_note']}")
     if summary["ollama_note"]:
         print(f"  ollama note: {summary['ollama_note']} (fell back to symbolic generator)")
     for r in summary["results"]:

@@ -16,7 +16,7 @@ IOSchedulingClass=idle
 MemoryMax=1800M
 TimeoutStartSec=900
 
-ExecStart=/bin/bash -lc 'YDAY=$(date -u -d yesterday +%%Y-%%m-%%d); (/usr/local/bin/piquant backfill-gaps --dir /home/everett/piquant-collect --from "$YDAY" --to "$YDAY" || true) && /home/everett/prereg22-env/bin/python3 research/quant_lab/refresh_daily_csv.py --fetch-public && /home/everett/prereg22-env/bin/python3 research/quant_lab/auto_discover.py --mode llamacpp --venue spot --n-candidates 6 --llama-threads 2 && /home/everett/prereg22-env/bin/python3 research/quant_lab/shadow_paper_eval.py'
+ExecStart=/bin/bash -lc 'YDAY=$(date -u -d yesterday +%%Y-%%m-%%d); (/usr/local/bin/piquant backfill-gaps --dir /home/everett/piquant-collect --from "$YDAY" --to "$YDAY" || true) && /home/everett/prereg22-env/bin/python3 research/quant_lab/refresh_daily_csv.py --fetch-public && /home/everett/prereg22-env/bin/python3 research/quant_lab/auto_discover.py --mode llamacpp --venue spot --n-candidates 6 --llama-threads 2 && (/home/everett/prereg22-env/bin/python3 research/quant_lab/auto_discover.py --mode openrouter --venue spot --n-candidates 6 || true) && /home/everett/prereg22-env/bin/python3 research/quant_lab/shadow_paper_eval.py'
 
 [Install]
 WantedBy=multi-user.target

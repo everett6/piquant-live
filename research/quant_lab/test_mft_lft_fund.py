@@ -8,8 +8,9 @@ import auto_discover as AD
 import mft_lft_fund as MLF
 
 
-def test_openrouter_missing_key_graceful(monkeypatch):
+def test_openrouter_missing_key_graceful(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(AD, "DEFAULT_OPENROUTER_ENV_PATH", str(tmp_path / "missing_openrouter.env"))
     exprs, note = AD.generate_openrouter_candidates(n_candidates=3, api_key="")
     assert exprs == []
     assert note == "OPENROUTER_API_KEY not set"
