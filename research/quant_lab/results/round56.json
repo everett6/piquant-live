@@ -1,0 +1,79 @@
+{
+  "prereg": "PREREG56",
+  "n_trials": 885,
+  "variants": {
+    "baseline_mft_lft_1x": {
+      "cagr_pct": 18.96,
+      "max_dd_pct": 6.92,
+      "calmar": 2.74,
+      "sharpe": 2.123,
+      "y2022_pct": -3.43,
+      "y2026_pct": 5.96,
+      "oos_2024_2026_cagr_pct": 14.75,
+      "oos_2024_2026_sharpe": 1.827
+    },
+    "baseline_mft_lft_1p8x": {
+      "cagr_pct": 25.17,
+      "max_dd_pct": 11.98,
+      "calmar": 2.101,
+      "sharpe": 1.847,
+      "y2022_pct": -6.55,
+      "y2026_pct": 7.14,
+      "oos_2024_2026_cagr_pct": 17.1,
+      "oos_2024_2026_sharpe": 1.353
+    },
+    "Q56_hybrid_1x": {
+      "cagr_pct": 10.93,
+      "max_dd_pct": 3.63,
+      "calmar": 3.011,
+      "sharpe": 2.257,
+      "deflated_sharpe": 0.9943,
+      "y2022_pct": -0.78,
+      "y2026_pct": 4.56,
+      "monthly_win_rate_pct": 73.17,
+      "active_day_win_rate_pct": 65.54,
+      "oos_2024_2026_cagr_pct": 10.17,
+      "oos_2024_2026_max_dd_pct": 2.2,
+      "oos_2024_2026_calmar": 4.623,
+      "oos_2024_2026_sharpe": 2.252
+    },
+    "Q56_hybrid_scaled_1p8x": {
+      "cagr_pct": 14.29,
+      "max_dd_pct": 9.64,
+      "calmar": 1.482,
+      "sharpe": 1.745,
+      "deflated_sharpe": 0.8999,
+      "y2022_pct": -4.72,
+      "y2026_pct": 3.74,
+      "monthly_win_rate_pct": 62.2,
+      "active_day_win_rate_pct": 54.81,
+      "oos_2024_2026_cagr_pct": 12.62,
+      "oos_2024_2026_max_dd_pct": 4.25,
+      "oos_2024_2026_calmar": 2.969,
+      "oos_2024_2026_sharpe": 1.648
+    },
+    "Q56_hybrid_scaled_2p5x": {
+      "cagr_pct": 17.4,
+      "max_dd_pct": 12.79,
+      "calmar": 1.36,
+      "sharpe": 1.562,
+      "deflated_sharpe": 0.7962,
+      "y2022_pct": -6.09,
+      "y2026_pct": 2.9,
+      "monthly_win_rate_pct": 58.54,
+      "active_day_win_rate_pct": 50.56,
+      "oos_2024_2026_cagr_pct": 15.01,
+      "oos_2024_2026_max_dd_pct": 5.94,
+      "oos_2024_2026_calmar": 2.527,
+      "oos_2024_2026_sharpe": 1.427
+    }
+  },
+  "checks": {
+    "1_1x_calmar_gt_baseline": true,
+    "2_1x_max_dd_lt_5pct": true,
+    "3_scaled_sharpe_gt_baseline": false,
+    "4_scaled_calmar_gt_baseline": false,
+    "5_oos_2024_2026_sharpe_gt_baseline": true
+  },
+  "overall_pass": false
+}
