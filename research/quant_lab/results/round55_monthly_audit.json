@@ -106,6 +106,70 @@
         }
       ],
       "total_monthly_profit_usd": 2729.41
+    },
+    "yearly_reset_1000": {
+      "total_years": 7,
+      "winning_years": 4,
+      "win_rate_pct": 57.14,
+      "total_yearly_profit_usd": 3219.38,
+      "years": [
+        {
+          "year": 2020,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 2187.64,
+          "ret_pct": 118.76,
+          "max_dd_pct": 22.51
+        },
+        {
+          "year": 2021,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 2509.27,
+          "ret_pct": 150.93,
+          "max_dd_pct": 31.28
+        },
+        {
+          "year": 2022,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 774.53,
+          "ret_pct": -22.55,
+          "max_dd_pct": 23.94
+        },
+        {
+          "year": 2023,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1338.87,
+          "ret_pct": 33.89,
+          "max_dd_pct": 7.54
+        },
+        {
+          "year": 2024,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 1529.22,
+          "ret_pct": 52.92,
+          "max_dd_pct": 35.23
+        },
+        {
+          "year": 2025,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 901.58,
+          "ret_pct": -9.84,
+          "max_dd_pct": 20.79
+        },
+        {
+          "year": 2026,
+          "days": 304,
+          "start_eq": 1000.0,
+          "end_eq": 978.27,
+          "ret_pct": -2.17,
+          "max_dd_pct": 13.4
+        }
+      ]
     }
   },
   "all_10_stocks_1x": {
@@ -215,6 +279,70 @@
         }
       ],
       "total_monthly_profit_usd": 982.67
+    },
+    "yearly_reset_1000": {
+      "total_years": 7,
+      "winning_years": 6,
+      "win_rate_pct": 85.71,
+      "total_yearly_profit_usd": 1065.14,
+      "years": [
+        {
+          "year": 2020,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 1172.42,
+          "ret_pct": 17.24,
+          "max_dd_pct": 13.26
+        },
+        {
+          "year": 2021,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1113.93,
+          "ret_pct": 11.39,
+          "max_dd_pct": 4.72
+        },
+        {
+          "year": 2022,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 897.81,
+          "ret_pct": -10.22,
+          "max_dd_pct": 12.75
+        },
+        {
+          "year": 2023,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1386.47,
+          "ret_pct": 38.65,
+          "max_dd_pct": 5.4
+        },
+        {
+          "year": 2024,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 1231.71,
+          "ret_pct": 23.17,
+          "max_dd_pct": 4.8
+        },
+        {
+          "year": 2025,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1218.93,
+          "ret_pct": 21.89,
+          "max_dd_pct": 4.16
+        },
+        {
+          "year": 2026,
+          "days": 304,
+          "start_eq": 1000.0,
+          "end_eq": 1043.87,
+          "ret_pct": 4.39,
+          "max_dd_pct": 9.74
+        }
+      ]
     }
   },
   "all_25_assets_raw_1x": {
@@ -324,6 +452,70 @@
         }
       ],
       "total_monthly_profit_usd": 1394.51
+    },
+    "yearly_reset_1000": {
+      "total_years": 7,
+      "winning_years": 6,
+      "win_rate_pct": 85.71,
+      "total_yearly_profit_usd": 1547.42,
+      "years": [
+        {
+          "year": 2020,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 1453.68,
+          "ret_pct": 45.37,
+          "max_dd_pct": 11.82
+        },
+        {
+          "year": 2021,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1356.13,
+          "ret_pct": 35.61,
+          "max_dd_pct": 6.92
+        },
+        {
+          "year": 2022,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 867.22,
+          "ret_pct": -13.28,
+          "max_dd_pct": 15.01
+        },
+        {
+          "year": 2023,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1312.17,
+          "ret_pct": 31.22,
+          "max_dd_pct": 4.44
+        },
+        {
+          "year": 2024,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 1385.11,
+          "ret_pct": 38.51,
+          "max_dd_pct": 9.76
+        },
+        {
+          "year": 2025,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1172.95,
+          "ret_pct": 17.3,
+          "max_dd_pct": 4.87
+        },
+        {
+          "year": 2026,
+          "days": 304,
+          "start_eq": 1000.0,
+          "end_eq": 1000.16,
+          "ret_pct": 0.02,
+          "max_dd_pct": 10.16
+        }
+      ]
     }
   },
   "all_25_assets_fixed_1x": {
@@ -433,6 +625,70 @@
         }
       ],
       "total_monthly_profit_usd": 1208.12
+    },
+    "yearly_reset_1000": {
+      "total_years": 7,
+      "winning_years": 5,
+      "win_rate_pct": 71.43,
+      "total_yearly_profit_usd": 1320.56,
+      "years": [
+        {
+          "year": 2020,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 1427.75,
+          "ret_pct": 42.78,
+          "max_dd_pct": 11.35
+        },
+        {
+          "year": 2021,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1312.48,
+          "ret_pct": 31.25,
+          "max_dd_pct": 6.78
+        },
+        {
+          "year": 2022,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 881.08,
+          "ret_pct": -11.89,
+          "max_dd_pct": 12.3
+        },
+        {
+          "year": 2023,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1193.37,
+          "ret_pct": 19.34,
+          "max_dd_pct": 2.94
+        },
+        {
+          "year": 2024,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 1347.49,
+          "ret_pct": 34.75,
+          "max_dd_pct": 9.9
+        },
+        {
+          "year": 2025,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1168.13,
+          "ret_pct": 16.81,
+          "max_dd_pct": 4.71
+        },
+        {
+          "year": 2026,
+          "days": 304,
+          "start_eq": 1000.0,
+          "end_eq": 990.26,
+          "ret_pct": -0.97,
+          "max_dd_pct": 9.45
+        }
+      ]
     }
   },
   "q53_combo_1x_before_fix": {
@@ -542,6 +798,70 @@
         }
       ],
       "total_monthly_profit_usd": 1337.97
+    },
+    "yearly_reset_1000": {
+      "total_years": 7,
+      "winning_years": 6,
+      "win_rate_pct": 85.71,
+      "total_yearly_profit_usd": 1479.99,
+      "years": [
+        {
+          "year": 2020,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 1388.19,
+          "ret_pct": 38.82,
+          "max_dd_pct": 7.81
+        },
+        {
+          "year": 2021,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1276.72,
+          "ret_pct": 27.67,
+          "max_dd_pct": 4.71
+        },
+        {
+          "year": 2022,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 928.84,
+          "ret_pct": -7.12,
+          "max_dd_pct": 11.29
+        },
+        {
+          "year": 2023,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1339.47,
+          "ret_pct": 33.95,
+          "max_dd_pct": 4.35
+        },
+        {
+          "year": 2024,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 1268.76,
+          "ret_pct": 26.88,
+          "max_dd_pct": 4.13
+        },
+        {
+          "year": 2025,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1217.32,
+          "ret_pct": 21.73,
+          "max_dd_pct": 3.19
+        },
+        {
+          "year": 2026,
+          "days": 304,
+          "start_eq": 1000.0,
+          "end_eq": 1060.69,
+          "ret_pct": 6.07,
+          "max_dd_pct": 5.96
+        }
+      ]
     }
   },
   "q55_combo_1x_after_fix": {
@@ -651,6 +971,70 @@
         }
       ],
       "total_monthly_profit_usd": 1247.43
+    },
+    "yearly_reset_1000": {
+      "total_years": 7,
+      "winning_years": 6,
+      "win_rate_pct": 85.71,
+      "total_yearly_profit_usd": 1374.36,
+      "years": [
+        {
+          "year": 2020,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 1397.61,
+          "ret_pct": 39.76,
+          "max_dd_pct": 7.43
+        },
+        {
+          "year": 2021,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1228.48,
+          "ret_pct": 22.85,
+          "max_dd_pct": 4.67
+        },
+        {
+          "year": 2022,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 935.27,
+          "ret_pct": -6.47,
+          "max_dd_pct": 9.44
+        },
+        {
+          "year": 2023,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1307.32,
+          "ret_pct": 30.73,
+          "max_dd_pct": 4.35
+        },
+        {
+          "year": 2024,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 1274.35,
+          "ret_pct": 27.43,
+          "max_dd_pct": 3.81
+        },
+        {
+          "year": 2025,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1176.74,
+          "ret_pct": 17.67,
+          "max_dd_pct": 3.08
+        },
+        {
+          "year": 2026,
+          "days": 304,
+          "start_eq": 1000.0,
+          "end_eq": 1054.59,
+          "ret_pct": 5.46,
+          "max_dd_pct": 4.53
+        }
+      ]
     }
   },
   "q55_combo_scaled_tv16_cap1.8": {
@@ -760,6 +1144,70 @@
         }
       ],
       "total_monthly_profit_usd": 1838.09
+    },
+    "yearly_reset_1000": {
+      "total_years": 7,
+      "winning_years": 6,
+      "win_rate_pct": 85.71,
+      "total_yearly_profit_usd": 2112.86,
+      "years": [
+        {
+          "year": 2020,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 1561.36,
+          "ret_pct": 56.14,
+          "max_dd_pct": 8.34
+        },
+        {
+          "year": 2021,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1365.83,
+          "ret_pct": 36.58,
+          "max_dd_pct": 7.54
+        },
+        {
+          "year": 2022,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 924.16,
+          "ret_pct": -7.58,
+          "max_dd_pct": 11.57
+        },
+        {
+          "year": 2023,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1565.24,
+          "ret_pct": 56.52,
+          "max_dd_pct": 6.91
+        },
+        {
+          "year": 2024,
+          "days": 366,
+          "start_eq": 1000.0,
+          "end_eq": 1309.2,
+          "ret_pct": 30.92,
+          "max_dd_pct": 6.71
+        },
+        {
+          "year": 2025,
+          "days": 365,
+          "start_eq": 1000.0,
+          "end_eq": 1284.78,
+          "ret_pct": 28.48,
+          "max_dd_pct": 5.02
+        },
+        {
+          "year": 2026,
+          "days": 304,
+          "start_eq": 1000.0,
+          "end_eq": 1102.29,
+          "ret_pct": 10.23,
+          "max_dd_pct": 7.91
+        }
+      ]
     }
   }
 }

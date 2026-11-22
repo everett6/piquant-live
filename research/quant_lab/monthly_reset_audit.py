@@ -65,6 +65,37 @@ def monthly_reset_report(ret: pd.Series, start_cap: float = 1000.0) -> dict[str,
     }
 
 
+def yearly_reset_report(ret: pd.Series, start_cap: float = 1000.0) -> dict[str, Any]:
+    """Simulate $1,000 reset at the start of every calendar year."""
+    years: list[dict[str, Any]] = []
+    for yr, grp in ret.groupby(ret.index.year):
+        if len(grp) < 120:
+            continue
+        eq = start_cap * (1.0 + grp).cumprod()
+        end_eq = float(eq.iloc[-1])
+        ret_pct = (end_eq / start_cap - 1.0) * 100.0
+        dd_pct = float((1.0 - eq / np.maximum(start_cap, eq.cummax())).max()) * 100.0
+        years.append({
+            "year": int(yr),
+            "days": int(len(grp)),
+            "start_eq": start_cap,
+            "end_eq": round(end_eq, 2),
+            "ret_pct": round(ret_pct, 2),
+            "max_dd_pct": round(dd_pct, 2),
+        })
+
+    rets = np.array([y["ret_pct"] for y in years], dtype=float)
+    wins = int(np.sum(rets > 0.0))
+    total = len(years)
+    return {
+        "total_years": total,
+        "winning_years": wins,
+        "win_rate_pct": round(100.0 * wins / max(1, total), 2),
+        "total_yearly_profit_usd": round(float(np.sum([y["end_eq"] - start_cap for y in years])), 2),
+        "years": years,
+    }
+
+
 def apply_vol_tox_circuit_breaker(
     ret: pd.Series,
     mm: pd.DataFrame,
@@ -154,6 +185,7 @@ def main() -> None:
             "oos_2024_2026_sharpe": oos["sharpe"],
             "oos_2024_2026_max_dd_pct": oos["max_dd_pct"],
             "monthly_reset_1000": monthly_reset_report(s, start_cap=1000.0),
+            "yearly_reset_1000": yearly_reset_report(s, start_cap=1000.0),
         }
 
     out = {
@@ -179,6 +211,8 @@ def main() -> None:
             "win_mo%": v["monthly_reset_1000"]["win_rate_pct"],
             "worst_mo": v["monthly_reset_1000"]["worst_month"],
             "tot_mo_profit_$": v["monthly_reset_1000"]["total_monthly_profit_usd"],
+            "tot_yr_profit_$": v["yearly_reset_1000"]["total_yearly_profit_usd"],
+            "yearly_resets": {str(y["year"]): f"{y['ret_pct']:+.2f}% (${y['end_eq']})" for y in v["yearly_reset_1000"]["years"]},
         }
         for k, v in out.items()
     }, indent=2))

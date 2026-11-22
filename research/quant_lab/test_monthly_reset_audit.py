@@ -32,3 +32,13 @@ def test_monthly_reset_report_resets_every_month():
     assert rep["total_months"] == 3
     assert rep["winning_months"] == 3
     assert rep["win_rate_pct"] == 100.0
+
+
+def test_yearly_reset_report_resets_every_year():
+    idx = pd.date_range("2024-01-01", "2025-12-31", freq="D", tz="UTC")
+    ret = pd.Series(0.001, index=idx)
+    rep = MRA.yearly_reset_report(ret, start_cap=1000.0)
+    assert rep["total_years"] == 2
+    assert rep["winning_years"] == 2
+    assert rep["years"][0]["start_eq"] == 1000.0
+    assert rep["years"][1]["start_eq"] == 1000.0
