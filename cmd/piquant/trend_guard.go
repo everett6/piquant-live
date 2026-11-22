@@ -14,6 +14,7 @@ import (
 
 	"piquant-live/internal/alert"
 	"piquant-live/internal/collect"
+	"piquant-live/internal/execution"
 	"piquant-live/internal/trend"
 )
 
@@ -25,7 +26,7 @@ var trendMu sync.Mutex
 // its emergency drawdown (trend.EmergencyCheck). A failed price fetch is logged and retried at the next minute; no
 // ledger is touched without both prices.
 func runEmergencyWatch(ctx context.Context, dir string, al *alert.Alerter) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := execution.NewOptimizedHTTPClient(10 * time.Second)
 	path := filepath.Join(dir, "trend_state.json")
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
@@ -35,13 +36,20 @@ func runEmergencyWatch(ctx context.Context, dir string, al *alert.Alerter) {
 			return
 		case <-tick.C:
 		}
-		pxB, errB := spotPrice(ctx, client, "BTC-USD")
-		pxE, errE := spotPrice(ctx, client, "ETH-USD")
+		var (
+			pxB, pxE, pxS    float64
+			errB, errE, errS error
+			wg               sync.WaitGroup
+		)
+		wg.Add(3)
+		go func() { defer wg.Done(); pxB, errB = spotPrice(ctx, client, "BTC-USD") }()
+		go func() { defer wg.Done(); pxE, errE = spotPrice(ctx, client, "ETH-USD") }()
+		go func() { defer wg.Done(); pxS, errS = spotPrice(ctx, client, "SOL-USD") }()
+		wg.Wait()
 		if errB != nil || errE != nil {
 			fmt.Fprintln(os.Stderr, "[GUARD] price fetch:", errB, errE)
 			continue
 		}
-		pxS, errS := spotPrice(ctx, client, "SOL-USD")
 		if errS != nil {
 			pxS = 0
 		}

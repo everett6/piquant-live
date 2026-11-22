@@ -53,41 +53,29 @@ func rangeVolCrashBrake(hist []Day, fastWin, slowWin int, ratioThresh, floor flo
 	return 1.0 - (1.0-floor)*frac
 }
 
-// quantumSpectralEntropy3x3 computes the threshold-free Von Neumann spectral entropy
-// S(rho) = -Tr(rho * ln(rho)) / ln(3) in [0, 1] for the rescaled density matrix rho = C / 3
-// of trailing `window`-day returns across BTC, ETH, and SOL (Felippe et al., EPL 2023).
-func quantumSpectralEntropy3x3(histB, histE, histS []Day, window int) (float64, bool) {
-	if window < 5 || len(histB) < window+1 || len(histE) < window+1 || len(histS) < window+1 {
+const (
+	maxEntropyWindowBuf = 128
+	maxEntropyHistBuf   = 192
+)
+
+// quantumSpectralEntropyFromReturns computes S(rho) = -Tr(rho * ln(rho)) / ln(3) in [0, 1]
+// for three aligned return slices without heap allocations.
+func quantumSpectralEntropyFromReturns(rb, re, rs []float64) (float64, bool) {
+	w := len(rb)
+	if w < 5 || len(re) != w || len(rs) != w {
 		return 0, false
 	}
-	subB := histB[len(histB)-(window+1):]
-	subE := histE[len(histE)-(window+1):]
-	subS := histS[len(histS)-(window+1):]
-
-	rb := make([]float64, window)
-	re := make([]float64, window)
-	rs := make([]float64, window)
 	var sumB, sumE, sumS float64
-	for i := 1; i <= window; i++ {
-		if subB[i-1].Close <= 0 || subE[i-1].Close <= 0 || subS[i-1].Close <= 0 {
-			return 0, false
-		}
-		if subB[i].Close <= 0 || subE[i].Close <= 0 || subS[i].Close <= 0 {
-			return 0, false
-		}
-		vb := subB[i].Close/subB[i-1].Close - 1.0
-		ve := subE[i].Close/subE[i-1].Close - 1.0
-		vs := subS[i].Close/subS[i-1].Close - 1.0
-		rb[i-1], re[i-1], rs[i-1] = vb, ve, vs
-		sumB += vb
-		sumE += ve
-		sumS += vs
+	for i := 0; i < w; i++ {
+		sumB += rb[i]
+		sumE += re[i]
+		sumS += rs[i]
 	}
-	fn := float64(window)
+	fn := float64(w)
 	muB, muE, muS := sumB/fn, sumE/fn, sumS/fn
 
 	var vBB, vEE, vSS, cBE, cBS, cES float64
-	for i := 0; i < window; i++ {
+	for i := 0; i < w; i++ {
 		db := rb[i] - muB
 		de := re[i] - muE
 		ds := rs[i] - muS
@@ -170,49 +158,149 @@ func quantumSpectralEntropy3x3(histB, histE, histS []Day, window int) (float64, 
 	return s, true
 }
 
+// quantumSpectralEntropy3x3 computes the threshold-free Von Neumann spectral entropy
+// S(rho) = -Tr(rho * ln(rho)) / ln(3) in [0, 1] for the rescaled density matrix rho = C / 3
+// of trailing `window`-day returns across BTC, ETH, and SOL (Felippe et al., EPL 2023).
+func quantumSpectralEntropy3x3(histB, histE, histS []Day, window int) (float64, bool) {
+	if window < 5 || len(histB) < window+1 || len(histE) < window+1 || len(histS) < window+1 {
+		return 0, false
+	}
+	subB := histB[len(histB)-(window+1):]
+	subE := histE[len(histE)-(window+1):]
+	subS := histS[len(histS)-(window+1):]
+
+	var rbBuf, reBuf, rsBuf [maxEntropyWindowBuf]float64
+	var rb, re, rs []float64
+	if window <= maxEntropyWindowBuf {
+		rb, re, rs = rbBuf[:window], reBuf[:window], rsBuf[:window]
+	} else {
+		rb = make([]float64, window)
+		re = make([]float64, window)
+		rs = make([]float64, window)
+	}
+	for i := 1; i <= window; i++ {
+		cB0, cE0, cS0 := subB[i-1].Close, subE[i-1].Close, subS[i-1].Close
+		cB1, cE1, cS1 := subB[i].Close, subE[i].Close, subS[i].Close
+		if cB0 <= 0 || cE0 <= 0 || cS0 <= 0 || cB1 <= 0 || cE1 <= 0 || cS1 <= 0 {
+			return 0, false
+		}
+		rb[i-1] = cB1/cB0 - 1.0
+		re[i-1] = cE1/cE0 - 1.0
+		rs[i-1] = cS1/cS0 - 1.0
+	}
+	return quantumSpectralEntropyFromReturns(rb, re, rs)
+}
+
+// quantumSpectralEntropyStats3x3 computes the latest 3x3 Von Neumann spectral entropy and its
+// rolling z-score over `zWin` trailing bars in a single allocation-free pass.
+func quantumSpectralEntropyStats3x3(histB, histE, histS []Day, window, zWin int) (sNow, zScore float64, ok bool) {
+	if window < 5 || zWin < 20 {
+		return 0, 0, false
+	}
+	minLen := len(histB)
+	if len(histE) < minLen {
+		minLen = len(histE)
+	}
+	if len(histS) < minLen {
+		minLen = len(histS)
+	}
+	if minLen < window+1 {
+		return 0, 0, false
+	}
+	maxSteps := minLen - window
+	if maxSteps > zWin {
+		maxSteps = zWin
+	}
+	if maxSteps < 20 {
+		return 0, 0, false
+	}
+	nRet := window + maxSteps - 1
+	subB := histB[len(histB)-(nRet+1):]
+	subE := histE[len(histE)-(nRet+1):]
+	subS := histS[len(histS)-(nRet+1):]
+
+	var rbBuf, reBuf, rsBuf [maxEntropyHistBuf]float64
+	var validBuf [maxEntropyHistBuf]bool
+	var rb, re, rs []float64
+	var valid []bool
+	if nRet <= maxEntropyHistBuf {
+		rb, re, rs, valid = rbBuf[:nRet], reBuf[:nRet], rsBuf[:nRet], validBuf[:nRet]
+	} else {
+		rb = make([]float64, nRet)
+		re = make([]float64, nRet)
+		rs = make([]float64, nRet)
+		valid = make([]bool, nRet)
+	}
+	for i := 0; i < nRet; i++ {
+		cB0, cE0, cS0 := subB[i].Close, subE[i].Close, subS[i].Close
+		cB1, cE1, cS1 := subB[i+1].Close, subE[i+1].Close, subS[i+1].Close
+		if cB0 > 0 && cE0 > 0 && cS0 > 0 && cB1 > 0 && cE1 > 0 && cS1 > 0 {
+			rb[i] = cB1/cB0 - 1.0
+			re[i] = cE1/cE0 - 1.0
+			rs[i] = cS1/cS0 - 1.0
+			valid[i] = true
+		}
+	}
+
+	// Verify latest window returns are valid.
+	startNow := nRet - window
+	for i := startNow; i < nRet; i++ {
+		if !valid[i] {
+			return 0, 0, false
+		}
+	}
+	sNow, ok = quantumSpectralEntropyFromReturns(rb[startNow:nRet], re[startNow:nRet], rs[startNow:nRet])
+	if !ok {
+		return 0, 0, false
+	}
+
+	var sum, sum2 float64
+	var cnt int
+	for k := 0; k < maxSteps; k++ {
+		end := nRet - k
+		start := end - window
+		allValid := true
+		for i := start; i < end; i++ {
+			if !valid[i] {
+				allValid = false
+				break
+			}
+		}
+		if !allValid {
+			continue
+		}
+		if s, sok := quantumSpectralEntropyFromReturns(rb[start:end], re[start:end], rs[start:end]); sok {
+			sum += s
+			sum2 += s * s
+			cnt++
+		}
+	}
+	if cnt < 20 {
+		return 0, 0, false
+	}
+	fn := float64(cnt)
+	mu := sum / fn
+	variance := (sum2 - fn*mu*mu) / (fn - 1.0)
+	if variance > 1e-12 {
+		zScore = (sNow - mu) / math.Sqrt(variance)
+	}
+	return sNow, zScore, true
+}
+
 // quantumRegimeScale computes a causal risk-scaling multiplier in [floor, 1.0] from trailing
 // zWin observations of 3x3 Von Neumann spectral entropy. When correlation entropy drops
 // abruptly (herding / systemic risk-off compression), exposure tapers toward floor.
 func quantumRegimeScale(histB, histE, histS []Day, window, zWin int, floor float64) float64 {
-	if zWin < 20 || len(histB) < window+1 || len(histE) < window+1 || len(histS) < window+1 {
-		return 1.0
-	}
-	sNow, ok := quantumSpectralEntropy3x3(histB, histE, histS, window)
+	sNow, z, ok := quantumSpectralEntropyStats3x3(histB, histE, histS, window, zWin)
 	if !ok {
 		return 1.0
 	}
-	samples := make([]float64, 0, zWin)
-	for k := 0; k < zWin; k++ {
-		eb := len(histB) - k
-		ee := len(histE) - k
-		es := len(histS) - k
-		if eb < window+1 || ee < window+1 || es < window+1 {
-			break
-		}
-		if s, sok := quantumSpectralEntropy3x3(histB[:eb], histE[:ee], histS[:es], window); sok {
-			samples = append(samples, s)
-		}
-	}
-	if len(samples) < 20 {
-		return 1.0
-	}
-	var sum, sum2 float64
-	for _, v := range samples {
-		sum += v
-		sum2 += v * v
-	}
-	fn := float64(len(samples))
-	mu := sum / fn
-	variance := (sum2 - fn*mu*mu) / (fn - 1.0)
 	scale := 1.0
-	if variance > 1e-12 {
-		z := (sNow - mu) / math.Sqrt(variance)
-		if z <= -2.5 {
-			scale = floor
-		} else if z < -1.0 {
-			frac := (-1.0 - z) / 1.5
-			scale = 1.0 - (1.0-floor)*frac
-		}
+	if z <= -2.5 {
+		scale = floor
+	} else if z < -1.0 {
+		frac := (-1.0 - z) / 1.5
+		scale = 1.0 - (1.0-floor)*frac
 	}
 	if sNow < 0.35 {
 		rawScale := floor + (1.0-floor)*(sNow/0.35)

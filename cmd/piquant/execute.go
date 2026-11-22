@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"piquant-live/internal/alert"
@@ -114,7 +115,7 @@ func parseExecuteOptions(args []string) (executeOptions, error) {
 
 	dryRun := fs.Bool("dry-run", true, "simulate orders without submitting to the exchange (requires --dry-run=false + --confirm-live + PIQUANT_LIVE_ARM=YES for live)")
 	venue := fs.String("venue", "coinbase-spot", "execution venue (coinbase-spot)")
-	portfolio := fs.String("portfolio", "q42_dualspeed", "target portfolio: q42_dualspeed | q42_balanced | q44_bh_harvester | q44_barbell | q51_volparity | q56_quantum_fast | s36_spot | s36_fut")
+	portfolio := fs.String("portfolio", "q42_dualspeed", "target portfolio: q42_dualspeed | q42_balanced | q44_bh_harvester | q44_barbell | q51_volparity | q56_quantum_fast | q57_hrp_hurst | s36_spot | s36_fut")
 	dir := fs.String("dir", defaultTrendDir(), "trend state directory")
 	carryDir := fs.String("carry-dir", filepath.Join(home, "piquant-collect", "carry"), "carry state directory")
 	dtb3Path := fs.String("dtb3", filepath.Join(home, "piquant-data", "macro", "DTB3.csv"), "FRED DTB3 CSV path")
@@ -286,7 +287,7 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 
 	httpClient := opts.httpClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 10 * time.Second}
+		httpClient = execution.NewOptimizedHTTPClient(10 * time.Second)
 	}
 	cbClient := execution.NewCoinbaseSpotClient(creds, opts.coinbaseBaseURL, httpClient)
 
@@ -318,25 +319,55 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 		Logf:     func(format string, a ...any) { fmt.Fprintf(os.Stderr, format+"\n", a...) },
 	}
 
-	balances, err := venueClient.GetBalances(ctx)
-	if err != nil {
-		err = fmt.Errorf("fetch %s balances: %w", venueClient.Name(), err)
-		return ExecuteReport{
-			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
-			DryRun:       opts.dryRun,
-			LiveArmed:    liveArmed,
-			Venue:        venueClient.Name(),
-			Portfolio:    opts.portfolio,
-			BlendName:    blend.Name,
-			HWMPath:      hwmPath,
-			PingPlan:     pingPlan,
-			Errors:       []string{err.Error()},
-		}, err
+	// Fetch account balances and initial venue quotes concurrently (batching product_ids on Coinbase when supported).
+	quoteSyms := []string{"BTC-USD", "ETH-USD"}
+	if blend.TargetSOLPortPct > 0 {
+		quoteSyms = append(quoteSyms, "SOL-USD")
 	}
+	var (
+		balances                               map[string]float64
+		balErr, btcErr, ethErr, solErr         error
+		btcQuote, ethQuote, solQuote           execution.Quote
+		hasBTCQuote, hasETHQuote, hasSOLQuote  bool
+		fetchWG                                sync.WaitGroup
+	)
+	fetchWG.Add(2)
+	go func() {
+		defer fetchWG.Done()
+		balances, balErr = venueClient.GetBalances(ctx)
+	}()
+	go func() {
+		defer fetchWG.Done()
+		if batchClient, ok := venueClient.(execution.BatchQuoteClient); ok {
+			qs, qerr := batchClient.GetQuotes(ctx, quoteSyms)
+			if qerr == nil {
+				btcQuote, hasBTCQuote = qs["BTC-USD"]
+				ethQuote, hasETHQuote = qs["ETH-USD"]
+				solQuote, hasSOLQuote = qs["SOL-USD"]
+				if hasBTCQuote && hasETHQuote && (blend.TargetSOLPortPct <= 0 || hasSOLQuote) {
+					return
+				}
+			}
+		}
+		var qwg sync.WaitGroup
+		if !hasBTCQuote {
+			qwg.Add(1)
+			go func() { defer qwg.Done(); btcQuote, btcErr = venueClient.GetQuote(ctx, "BTC-USD"); hasBTCQuote = btcErr == nil }()
+		}
+		if !hasETHQuote {
+			qwg.Add(1)
+			go func() { defer qwg.Done(); ethQuote, ethErr = venueClient.GetQuote(ctx, "ETH-USD"); hasETHQuote = ethErr == nil }()
+		}
+		if blend.TargetSOLPortPct > 0 && !hasSOLQuote {
+			qwg.Add(1)
+			go func() { defer qwg.Done(); solQuote, solErr = venueClient.GetQuote(ctx, "SOL-USD"); hasSOLQuote = solErr == nil }()
+		}
+		qwg.Wait()
+	}()
+	fetchWG.Wait()
 
-	btcQuote, err := venueClient.GetQuote(ctx, "BTC-USD")
-	if err != nil {
-		err = fmt.Errorf("fetch BTC-USD quote: %w", err)
+	if balErr != nil {
+		err = fmt.Errorf("fetch %s balances: %w", venueClient.Name(), balErr)
 		return ExecuteReport{
 			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
 			DryRun:       opts.dryRun,
@@ -349,9 +380,28 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 			Errors:       []string{err.Error()},
 		}, err
 	}
-	ethQuote, err := venueClient.GetQuote(ctx, "ETH-USD")
-	if err != nil {
-		err = fmt.Errorf("fetch ETH-USD quote: %w", err)
+	if btcErr != nil || !hasBTCQuote {
+		if btcErr == nil {
+			btcErr = errors.New("missing BTC-USD quote")
+		}
+		err = fmt.Errorf("fetch BTC-USD quote: %w", btcErr)
+		return ExecuteReport{
+			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+			DryRun:       opts.dryRun,
+			LiveArmed:    liveArmed,
+			Venue:        venueClient.Name(),
+			Portfolio:    opts.portfolio,
+			BlendName:    blend.Name,
+			HWMPath:      hwmPath,
+			PingPlan:     pingPlan,
+			Errors:       []string{err.Error()},
+		}, err
+	}
+	if ethErr != nil || !hasETHQuote {
+		if ethErr == nil {
+			ethErr = errors.New("missing ETH-USD quote")
+		}
+		err = fmt.Errorf("fetch ETH-USD quote: %w", ethErr)
 		return ExecuteReport{
 			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
 			DryRun:       opts.dryRun,
@@ -366,11 +416,12 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 	}
 
 	needSOL := blend.TargetSOLPortPct > 0 || balances["SOL"] > 0
-	var solQuote execution.Quote
-	if needSOL {
-		solQuote, err = venueClient.GetQuote(ctx, "SOL-USD")
-		if err != nil {
-			err = fmt.Errorf("fetch SOL-USD quote: %w", err)
+	if needSOL && !hasSOLQuote {
+		if solErr == nil {
+			solQuote, solErr = venueClient.GetQuote(ctx, "SOL-USD")
+		}
+		if solErr != nil {
+			err = fmt.Errorf("fetch SOL-USD quote: %w", solErr)
 			return ExecuteReport{
 				TimestampUTC: time.Now().UTC().Format(time.RFC3339),
 				DryRun:       opts.dryRun,
@@ -722,6 +773,10 @@ func (d *dryRunSpotVenue) GetBalances(context.Context) (map[string]float64, erro
 
 func (d *dryRunSpotVenue) GetQuote(ctx context.Context, symbol string) (execution.Quote, error) {
 	return d.quoteClient.GetQuote(ctx, symbol)
+}
+
+func (d *dryRunSpotVenue) GetQuotes(ctx context.Context, symbols []string) (map[string]execution.Quote, error) {
+	return d.quoteClient.GetQuotes(ctx, symbols)
 }
 
 func (d *dryRunSpotVenue) PlaceLimitOrder(context.Context, execution.LimitOrderRequest) (execution.OrderReceipt, error) {

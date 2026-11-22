@@ -163,7 +163,7 @@ type coinbaseProductSpec struct {
 	quoteIncrement float64
 }
 
-// CoinbaseSpotClient implements VenueClient against Coinbase Advanced Trade v3 REST API.
+// CoinbaseSpotClient implements VenueClient and BatchQuoteClient against Coinbase Advanced Trade v3 REST API.
 type CoinbaseSpotClient struct {
 	BaseURL       string
 	HTTPClient    *http.Client
@@ -172,9 +172,30 @@ type CoinbaseSpotClient struct {
 	creds CoinbaseCredentials
 	now   func() time.Time
 
-	specMu sync.Mutex
+	authMu       sync.RWMutex
+	authCached   bool
+	cachedSecret string
+	isCDP        bool
+	ecKey        *ecdsa.PrivateKey
+	ecKeyErr     error
+	hmacKey      []byte
+
+	specMu sync.RWMutex
 	specs  map[string]coinbaseProductSpec
 }
+
+var (
+	cbReadBufPool = sync.Pool{
+		New: func() any {
+			return bytes.NewBuffer(make([]byte, 0, 8<<10))
+		},
+	}
+	cbJWTBufPool = sync.Pool{
+		New: func() any {
+			return bytes.NewBuffer(make([]byte, 0, 512))
+		},
+	}
+)
 
 // NewCoinbaseSpotClient constructs a CoinbaseSpotClient with optional custom baseURL and httpClient.
 func NewCoinbaseSpotClient(creds CoinbaseCredentials, baseURL string, httpClient *http.Client) *CoinbaseSpotClient {
@@ -182,16 +203,52 @@ func NewCoinbaseSpotClient(creds CoinbaseCredentials, baseURL string, httpClient
 		baseURL = DefaultCoinbaseBaseURL
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 10 * time.Second}
+		httpClient = NewOptimizedHTTPClient(10 * time.Second)
 	}
 	creds.APISecret = normalizePEMSecret(creds.APISecret)
-	return &CoinbaseSpotClient{
+	c := &CoinbaseSpotClient{
 		BaseURL:    strings.TrimRight(baseURL, "/"),
 		HTTPClient: httpClient,
 		creds:      creds,
 		now:        time.Now,
 		specs:      make(map[string]coinbaseProductSpec),
 	}
+	c.initAuthCacheLocked()
+	return c
+}
+
+func (c *CoinbaseSpotClient) initAuthCacheLocked() {
+	sec := normalizePEMSecret(c.creds.APISecret)
+	c.cachedSecret = sec
+	c.isCDP = strings.Contains(sec, "BEGIN EC PRIVATE KEY") || strings.Contains(sec, "BEGIN PRIVATE KEY")
+	c.ecKey = nil
+	c.ecKeyErr = nil
+	c.hmacKey = nil
+	if sec != "" {
+		if c.isCDP {
+			c.ecKey, c.ecKeyErr = parseECPrivateKey(sec)
+		} else {
+			c.hmacKey = []byte(sec)
+		}
+	}
+	c.authCached = true
+}
+
+func (c *CoinbaseSpotClient) cachedSigner() (isCDP bool, apiKey string, ecKey *ecdsa.PrivateKey, hmacKey []byte, err error) {
+	c.authMu.RLock()
+	if c.authCached && c.cachedSecret == normalizePEMSecret(c.creds.APISecret) {
+		isCDP, apiKey, ecKey, hmacKey, err = c.isCDP, c.creds.APIKey, c.ecKey, c.hmacKey, c.ecKeyErr
+		c.authMu.RUnlock()
+		return isCDP, apiKey, ecKey, hmacKey, err
+	}
+	c.authMu.RUnlock()
+
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+	if !c.authCached || c.cachedSecret != normalizePEMSecret(c.creds.APISecret) {
+		c.initAuthCacheLocked()
+	}
+	return c.isCDP, c.creds.APIKey, c.ecKey, c.hmacKey, c.ecKeyErr
 }
 
 // Name returns the canonical venue identifier.
@@ -288,6 +345,106 @@ func (c *CoinbaseSpotClient) GetQuote(ctx context.Context, symbol string) (Quote
 		}
 	}
 	return Quote{}, err
+}
+
+// GetQuotes fetches top-of-book quotes for multiple symbols. When authenticated (or AllowUnauthed),
+// it batches all product_ids into a single GET /api/v3/brokerage/best_bid_ask call and concurrently
+// fetches any missing symbols via GetQuote. When unauthenticated, it fetches each symbol concurrently.
+func (c *CoinbaseSpotClient) GetQuotes(ctx context.Context, symbols []string) (map[string]Quote, error) {
+	seen := make(map[string]struct{}, len(symbols))
+	clean := make([]string, 0, len(symbols))
+	for _, raw := range symbols {
+		sym := strings.ToUpper(strings.TrimSpace(raw))
+		if sym == "" {
+			continue
+		}
+		if _, dup := seen[sym]; dup {
+			continue
+		}
+		seen[sym] = struct{}{}
+		clean = append(clean, sym)
+	}
+	if len(clean) == 0 {
+		return map[string]Quote{}, nil
+	}
+	if len(clean) == 1 {
+		q, err := c.GetQuote(ctx, clean[0])
+		if err != nil {
+			return nil, err
+		}
+		return map[string]Quote{clean[0]: q}, nil
+	}
+
+	out := make(map[string]Quote, len(clean))
+	signed := c.creds.Ready()
+	if signed || c.AllowUnauthed {
+		var pbURL strings.Builder
+		pbURL.WriteString("/api/v3/brokerage/best_bid_ask?")
+		for i, sym := range clean {
+			if i > 0 {
+				pbURL.WriteByte('&')
+			}
+			pbURL.WriteString("product_ids=")
+			pbURL.WriteString(url.QueryEscape(sym))
+		}
+		var resp struct {
+			Pricebooks []coinbasePricebook `json:"pricebooks"`
+		}
+		if err := c.doJSON(ctx, http.MethodGet, pbURL.String(), nil, signed, &resp); err != nil {
+			return nil, fmt.Errorf("coinbase best_bid_ask batch: %w", err)
+		}
+		for _, pb := range resp.Pricebooks {
+			pid := strings.ToUpper(strings.TrimSpace(pb.ProductID))
+			if pid == "" {
+				continue
+			}
+			q, qerr := pricebookToQuote(pid, pb, "")
+			if qerr != nil {
+				continue
+			}
+			if _, wanted := seen[q.Symbol]; wanted {
+				out[q.Symbol] = q
+			} else if _, wantedPID := seen[pid]; wantedPID {
+				out[pid] = q
+			}
+		}
+	}
+
+	// Fetch any symbols not already populated (unauthed path or single-product mock servers).
+	missing := make([]string, 0, len(clean))
+	for _, sym := range clean {
+		if _, ok := out[sym]; !ok {
+			missing = append(missing, sym)
+		}
+	}
+	if len(missing) == 0 {
+		return out, nil
+	}
+
+	var mu sync.Mutex
+	var firstErr error
+	var wg sync.WaitGroup
+	wg.Add(len(missing))
+	for _, sym := range missing {
+		go func(s string) {
+			defer wg.Done()
+			q, err := c.GetQuote(ctx, s)
+			mu.Lock()
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+			} else {
+				out[s] = q
+			}
+			mu.Unlock()
+		}(sym)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return out, nil
 }
 
 func (c *CoinbaseSpotClient) fetchBestBidAsk(ctx context.Context, sym string, signed bool) (Quote, error) {
@@ -626,14 +783,14 @@ func (c *CoinbaseSpotClient) doJSON(ctx context.Context, method, pathWithQuery s
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if sign && c.creds.Ready() {
-		if err := applyCoinbaseAuth(req, c.creds, bodyBytes, c.clock()); err != nil {
+		if err := c.applyAuth(req, bodyBytes, c.clock()); err != nil {
 			return err
 		}
 	}
 
 	httpClient := c.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 10 * time.Second}
+		httpClient = NewOptimizedHTTPClient(10 * time.Second)
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -641,10 +798,18 @@ func (c *CoinbaseSpotClient) doJSON(ctx context.Context, method, pathWithQuery s
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
+	buf := cbReadBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer func() {
+		if buf.Cap() <= 256<<10 {
+			buf.Reset()
+			cbReadBufPool.Put(buf)
+		}
+	}()
+	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, 4<<20)); err != nil {
 		return err
 	}
+	respBytes := buf.Bytes()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return &httpStatusError{status: resp.StatusCode, body: strings.TrimSpace(string(respBytes))}
 	}
@@ -654,6 +819,24 @@ func (c *CoinbaseSpotClient) doJSON(ctx context.Context, method, pathWithQuery s
 		}
 	}
 	return nil
+}
+
+func (c *CoinbaseSpotClient) applyAuth(req *http.Request, body []byte, now time.Time) error {
+	isCDP, apiKey, ecKey, hmacKey, err := c.cachedSigner()
+	if err != nil {
+		return fmt.Errorf("coinbase jwt sign: %w", err)
+	}
+	method := strings.ToUpper(req.Method)
+	reqPath := req.URL.Path
+	if isCDP {
+		token, serr := buildCoinbaseCDPJWTWithKey(apiKey, ecKey, method, req.URL.Host, reqPath, now)
+		if serr != nil {
+			return fmt.Errorf("coinbase jwt sign: %w", serr)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		return nil
+	}
+	return applyCoinbaseHMAC(req, apiKey, hmacKey, method, reqPath, body, now)
 }
 
 func applyCoinbaseAuth(req *http.Request, creds CoinbaseCredentials, body []byte, now time.Time) error {
@@ -667,22 +850,32 @@ func applyCoinbaseAuth(req *http.Request, creds CoinbaseCredentials, body []byte
 		req.Header.Set("Authorization", "Bearer "+token)
 		return nil
 	}
+	return applyCoinbaseHMAC(req, creds.APIKey, []byte(creds.APISecret), method, reqPath, body, now)
+}
 
-	ts := strconv.FormatInt(now.UTC().Unix(), 10)
-	prehash := ts + method + reqPath + string(body)
-	mac := hmac.New(sha256.New, []byte(creds.APISecret))
-	_, _ = mac.Write([]byte(prehash))
-	sig := hex.EncodeToString(mac.Sum(nil))
-	req.Header.Set("CB-ACCESS-KEY", creds.APIKey)
-	req.Header.Set("CB-ACCESS-SIGN", sig)
-	req.Header.Set("CB-ACCESS-TIMESTAMP", ts)
+func applyCoinbaseHMAC(req *http.Request, apiKey string, secret []byte, method, reqPath string, body []byte, now time.Time) error {
+	var tsBuf [24]byte
+	tsSlice := strconv.AppendInt(tsBuf[:0], now.UTC().Unix(), 10)
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write(tsSlice)
+	_, _ = io.WriteString(mac, method)
+	_, _ = io.WriteString(mac, reqPath)
+	if len(body) > 0 {
+		_, _ = mac.Write(body)
+	}
+	var sumBuf [sha256.Size]byte
+	sum := mac.Sum(sumBuf[:0])
+	var hexBuf [sha256.Size * 2]byte
+	hex.Encode(hexBuf[:], sum)
+	req.Header.Set("CB-ACCESS-KEY", apiKey)
+	req.Header.Set("CB-ACCESS-SIGN", string(hexBuf[:]))
+	req.Header.Set("CB-ACCESS-TIMESTAMP", string(tsSlice))
 	return nil
 }
 
-func buildCoinbaseCDPJWT(apiKey, pemSecret, method, host, reqPath string, now time.Time) (string, error) {
-	priv, err := parseECPrivateKey(pemSecret)
-	if err != nil {
-		return "", err
+func buildCoinbaseCDPJWTWithKey(apiKey string, priv *ecdsa.PrivateKey, method, host, reqPath string, now time.Time) (string, error) {
+	if priv == nil {
+		return "", errors.New("nil EC private key")
 	}
 	if priv.Curve != elliptic.P256() {
 		return "", fmt.Errorf("unsupported EC curve %s (expected P-256)", priv.Curve.Params().Name)
@@ -691,42 +884,77 @@ func buildCoinbaseCDPJWT(apiKey, pemSecret, method, host, reqPath string, now ti
 	if _, err := rand.Read(nonceBytes[:]); err != nil {
 		return "", err
 	}
+	var nonceHex [32]byte
+	hex.Encode(nonceHex[:], nonceBytes[:])
 
-	headerJSON, err := json.Marshal(struct {
-		Alg   string `json:"alg"`
-		Kid   string `json:"kid"`
-		Nonce string `json:"nonce"`
-		Typ   string `json:"typ"`
-	}{
-		Alg:   "ES256",
-		Kid:   apiKey,
-		Nonce: hex.EncodeToString(nonceBytes[:]),
-		Typ:   "JWT",
-	})
-	if err != nil {
-		return "", err
+	jsonBuf := cbJWTBufPool.Get().(*bytes.Buffer)
+	tokBuf := cbJWTBufPool.Get().(*bytes.Buffer)
+	defer func() {
+		if jsonBuf.Cap() <= 8<<10 {
+			jsonBuf.Reset()
+			cbJWTBufPool.Put(jsonBuf)
+		}
+		if tokBuf.Cap() <= 8<<10 {
+			tokBuf.Reset()
+			cbJWTBufPool.Put(tokBuf)
+		}
+	}()
+
+	// Header JSON -> base64url
+	jsonBuf.Reset()
+	b := jsonBuf.Bytes()[:0]
+	b = append(b, `{"alg":"ES256","kid":`...)
+	b = strconv.AppendQuote(b, apiKey)
+	b = append(b, `,"nonce":"`...)
+	b = append(b, nonceHex[:]...)
+	b = append(b, `","typ":"JWT"}`...)
+
+	var encStack [512]byte
+	hdrEncLen := base64.RawURLEncoding.EncodedLen(len(b))
+	var hdrEnc []byte
+	if hdrEncLen <= len(encStack) {
+		hdrEnc = encStack[:hdrEncLen]
+	} else {
+		hdrEnc = make([]byte, hdrEncLen)
 	}
+	base64.RawURLEncoding.Encode(hdrEnc, b)
 
+	tokBuf.Reset()
+	tokBuf.Grow(hdrEncLen + 512)
+	tokBuf.Write(hdrEnc)
+	tokBuf.WriteByte('.')
+
+	// Claims JSON -> base64url
 	issuedAt := now.UTC().Unix()
-	claimsJSON, err := json.Marshal(struct {
-		Iss string `json:"iss"`
-		Nbf int64  `json:"nbf"`
-		Exp int64  `json:"exp"`
-		Sub string `json:"sub"`
-		URI string `json:"uri"`
-	}{
-		Iss: "cdp",
-		Nbf: issuedAt,
-		Exp: issuedAt + 120,
-		Sub: apiKey,
-		URI: fmt.Sprintf("%s %s%s", strings.ToUpper(method), host, reqPath),
-	})
-	if err != nil {
-		return "", err
-	}
+	var uriBuf [256]byte
+	uri := uriBuf[:0]
+	uri = append(uri, strings.ToUpper(method)...)
+	uri = append(uri, ' ')
+	uri = append(uri, host...)
+	uri = append(uri, reqPath...)
 
-	signingInput := base64.RawURLEncoding.EncodeToString(headerJSON) + "." + base64.RawURLEncoding.EncodeToString(claimsJSON)
-	digest := sha256.Sum256([]byte(signingInput))
+	b = b[:0]
+	b = append(b, `{"iss":"cdp","nbf":`...)
+	b = strconv.AppendInt(b, issuedAt, 10)
+	b = append(b, `,"exp":`...)
+	b = strconv.AppendInt(b, issuedAt+120, 10)
+	b = append(b, `,"sub":`...)
+	b = strconv.AppendQuote(b, apiKey)
+	b = append(b, `,"uri":`...)
+	b = strconv.AppendQuote(b, string(uri))
+	b = append(b, '}')
+
+	claimsEncLen := base64.RawURLEncoding.EncodedLen(len(b))
+	var claimsEnc []byte
+	if claimsEncLen <= len(encStack) {
+		claimsEnc = encStack[:claimsEncLen]
+	} else {
+		claimsEnc = make([]byte, claimsEncLen)
+	}
+	base64.RawURLEncoding.Encode(claimsEnc, b)
+	tokBuf.Write(claimsEnc)
+
+	digest := sha256.Sum256(tokBuf.Bytes())
 	r, s, err := ecdsa.Sign(rand.Reader, priv, digest[:])
 	if err != nil {
 		return "", err
@@ -734,11 +962,23 @@ func buildCoinbaseCDPJWT(apiKey, pemSecret, method, host, reqPath string, now ti
 	if r.BitLen() > 256 || s.BitLen() > 256 {
 		return "", errors.New("ecdsa signature exceeds 256-bit P-256 size")
 	}
-	rawSig := make([]byte, 64)
+	var rawSig [64]byte
 	r.FillBytes(rawSig[:32])
 	s.FillBytes(rawSig[32:])
+	var sigEnc [86]byte // base64.RawURLEncoding.EncodedLen(64) == 86
+	base64.RawURLEncoding.Encode(sigEnc[:], rawSig[:])
 
-	return signingInput + "." + base64.RawURLEncoding.EncodeToString(rawSig), nil
+	tokBuf.WriteByte('.')
+	tokBuf.Write(sigEnc[:])
+	return tokBuf.String(), nil
+}
+
+func buildCoinbaseCDPJWT(apiKey, pemSecret, method, host, reqPath string, now time.Time) (string, error) {
+	priv, err := parseECPrivateKey(pemSecret)
+	if err != nil {
+		return "", err
+	}
+	return buildCoinbaseCDPJWTWithKey(apiKey, priv, method, host, reqPath, now)
 }
 
 func parseECPrivateKey(pemSecret string) (*ecdsa.PrivateKey, error) {
@@ -762,12 +1002,12 @@ func parseECPrivateKey(pemSecret string) (*ecdsa.PrivateKey, error) {
 }
 
 func (c *CoinbaseSpotClient) lookupProductSpec(ctx context.Context, sym string) coinbaseProductSpec {
-	c.specMu.Lock()
+	c.specMu.RLock()
 	if spec, ok := c.specs[sym]; ok {
-		c.specMu.Unlock()
+		c.specMu.RUnlock()
 		return spec
 	}
-	c.specMu.Unlock()
+	c.specMu.RUnlock()
 
 	var resp struct {
 		BaseIncrement  string `json:"base_increment"`
@@ -810,13 +1050,18 @@ func roundPricePassive(price, step float64, side string) float64 {
 func formatDecimal(v float64, maxDecimals int) string {
 	factor := math.Pow10(maxDecimals)
 	rounded := math.Round(v*factor) / factor
-	s := strconv.FormatFloat(rounded, 'f', maxDecimals, 64)
-	if strings.Contains(s, ".") {
-		s = strings.TrimRight(s, "0")
-		s = strings.TrimRight(s, ".")
+	var stack [64]byte
+	b := strconv.AppendFloat(stack[:0], rounded, 'f', maxDecimals, 64)
+	if bytes.IndexByte(b, '.') >= 0 {
+		for len(b) > 0 && b[len(b)-1] == '0' {
+			b = b[:len(b)-1]
+		}
+		if len(b) > 0 && b[len(b)-1] == '.' {
+			b = b[:len(b)-1]
+		}
 	}
-	if s == "" || s == "-0" {
+	if len(b) == 0 || (len(b) == 2 && b[0] == '-' && b[1] == '0') {
 		return "0"
 	}
-	return s
+	return string(b)
 }

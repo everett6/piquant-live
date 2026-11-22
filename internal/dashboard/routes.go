@@ -1970,6 +1970,7 @@ func (s *Server) handlePaperTrendBlend(w http.ResponseWriter, r *http.Request) {
 	q44Blends := trend.ComputeQ44Blends(st, cState, rates, plan)
 	q51Blends := trend.ComputeQ51Blends(st, cState, rates, plan)
 	q56Blends := trend.ComputeQ56Blends(st, cState, rates, plan)
+	q57Blends := trend.ComputeQ57Blends(st, cState, rates, plan)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":                   "ok",
@@ -1980,6 +1981,7 @@ func (s *Server) handlePaperTrendBlend(w http.ResponseWriter, r *http.Request) {
 		"q44_vol_harvester_blends": q44Blends,
 		"q51_volparity_blends":     q51Blends,
 		"q56_quantum_fast_blends":  q56Blends,
+		"q57_hrp_hurst_blends":     q57Blends,
 		"venue_leverage_profiles":  paper.SupportedVenueProfiles(),
 		"ping_plan":                plan,
 	})

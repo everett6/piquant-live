@@ -106,6 +106,9 @@ scp -q \
   "$WORK/research/quant_lab/quantum_meta_alpha.py" \
   "$WORK/research/quant_lab/fast_universal_alpha.py" \
   "$WORK/research/quant_lab/run_round56.py" \
+  "$WORK/research/quant_lab/hrp_hurst_alpha.py" \
+  "$WORK/research/quant_lab/kalman_yz_alpha.py" \
+  "$WORK/research/quant_lab/run_round57.py" \
   "$PI:PiQuant/piquant-live/research/quant_lab/"
 [ -f "$WORK/research/quant_lab/results/micro_tox_mlp.npz" ] && scp -q "$WORK/research/quant_lab/results/micro_tox_mlp.npz" "$PI:PiQuant/piquant-live/research/quant_lab/results/"
 $SSH "printf '%s\n' '$V' > ~/PiQuant/piquant-live/.synced_commit && sync"

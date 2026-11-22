@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -59,7 +60,7 @@ type PingExecutionPlan struct {
 	Venues                []VenueLatency `json:"venues"`
 }
 
-// ProbeEndpoints measures TCP connect and full HTTP round-trip latency for each endpoint.
+// ProbeEndpoints measures TCP connect and full HTTP round-trip latency for each endpoint concurrently.
 func ProbeEndpoints(ctx context.Context, endpoints []ExchangeEndpoint, samples int, timeout time.Duration) []VenueLatency {
 	if samples <= 0 {
 		samples = 3
@@ -67,10 +68,16 @@ func ProbeEndpoints(ctx context.Context, endpoints []ExchangeEndpoint, samples i
 	if timeout <= 0 {
 		timeout = 4 * time.Second
 	}
-	out := make([]VenueLatency, 0, len(endpoints))
-	for _, ep := range endpoints {
-		out = append(out, probeOne(ctx, ep, samples, timeout))
+	out := make([]VenueLatency, len(endpoints))
+	var wg sync.WaitGroup
+	wg.Add(len(endpoints))
+	for i, ep := range endpoints {
+		go func(idx int, endpoint ExchangeEndpoint) {
+			defer wg.Done()
+			out[idx] = probeOne(ctx, endpoint, samples, timeout)
+		}(i, ep)
 	}
+	wg.Wait()
 	return out
 }
 
@@ -78,6 +85,12 @@ func probeOne(ctx context.Context, ep ExchangeEndpoint, samples int, timeout tim
 	res := VenueLatency{Venue: ep.Venue, URL: ep.URL, Samples: samples}
 	tcpSamples := make([]float64, 0, samples)
 	httpSamples := make([]float64, 0, samples)
+	tr := &http.Transport{
+		DisableKeepAlives: true,
+		TLSClientConfig:   &tls.Config{MinVersion: tls.VersionTLS12},
+	}
+	defer tr.CloseIdleConnections()
+	client := &http.Client{Transport: tr, Timeout: timeout}
 
 	for i := 0; i < samples; i++ {
 		if ctx.Err() != nil {
@@ -106,11 +119,6 @@ func probeOne(ctx context.Context, ep ExchangeEndpoint, samples int, timeout tim
 			res.LastError = err.Error()
 			continue
 		}
-		tr := &http.Transport{
-			DisableKeepAlives: true,
-			TLSClientConfig:   &tls.Config{MinVersion: tls.VersionTLS12},
-		}
-		client := &http.Client{Transport: tr, Timeout: timeout}
 		httpStart = time.Now()
 		resp, err := client.Do(req)
 		elapsedMs := float64(time.Since(httpStart).Microseconds()) / 1000.0

@@ -91,24 +91,76 @@ type CoinbaseSignalState struct {
 // CoinbaseSignalOracle maintains institutional USD price discovery signals from Coinbase
 // and provides lead-lag skews to GLFT market making models on Binance/Bybit.
 type CoinbaseSignalOracle struct {
-	mu        sync.RWMutex
-	signals   map[string]*CoinbaseSymbolSignal
-	connected atomic.Bool
-	lastNs    atomic.Int64
+	mu         sync.RWMutex
+	signals    map[string]*CoinbaseSymbolSignal
+	baseToKeys map[string][]string
+	symToBase  map[string]string
+	connected  atomic.Bool
+	lastNs     atomic.Int64
 }
 
 // NewCoinbaseSignalOracle creates a new oracle instance for the given symbols.
 func NewCoinbaseSignalOracle(symbols []string) *CoinbaseSignalOracle {
 	sigs := make(map[string]*CoinbaseSymbolSignal, len(symbols))
+	baseToKeys := make(map[string][]string, len(symbols))
+	symToBase := make(map[string]string, len(symbols)*2)
 	for _, sym := range symbols {
 		norm := NormalizeToUniverseSymbol(sym)
-		sigs[norm] = &CoinbaseSymbolSignal{
-			Symbol: norm,
+		if _, exists := sigs[norm]; !exists {
+			sigs[norm] = &CoinbaseSymbolSignal{
+				Symbol: norm,
+			}
 		}
 	}
-	return &CoinbaseSignalOracle{
-		signals: sigs,
+	o := &CoinbaseSignalOracle{
+		signals:    sigs,
+		baseToKeys: baseToKeys,
+		symToBase:  symToBase,
 	}
+	for k := range sigs {
+		o.ensureSymbolIndexedLocked(k)
+	}
+	return o
+}
+
+func (o *CoinbaseSignalOracle) ensureSymbolIndexedLocked(sym string) string {
+	if base, ok := o.symToBase[sym]; ok {
+		return base
+	}
+	base := extractBaseCurrency(sym)
+	o.symToBase[sym] = base
+	o.appendKeyIfMissingLocked(base, sym)
+	if base != "" && base != sym {
+		if _, exists := o.signals[base]; !exists {
+			o.signals[base] = &CoinbaseSymbolSignal{Symbol: base}
+		}
+		o.symToBase[base] = base
+		o.appendKeyIfMissingLocked(base, base)
+	}
+	for registeredSym := range o.signals {
+		regBase, ok := o.symToBase[registeredSym]
+		if !ok {
+			regBase = extractBaseCurrency(registeredSym)
+			o.symToBase[registeredSym] = regBase
+		}
+		if regBase == base {
+			o.appendKeyIfMissingLocked(base, registeredSym)
+		}
+	}
+	return base
+}
+
+func (o *CoinbaseSignalOracle) appendKeyIfMissingLocked(base, key string) {
+	if base == "" || key == "" {
+		return
+	}
+	keys := o.baseToKeys[base]
+	for _, existing := range keys {
+		if existing == key {
+			return
+		}
+	}
+	o.baseToKeys[base] = append(keys, key)
 }
 
 // extractBaseCurrency extracts the underlying asset symbol (e.g. BTC from BTC-USD, BTCUSDC, BTCUSDT).
@@ -142,22 +194,12 @@ func (o *CoinbaseSignalOracle) UpdateTick(normSymbol string, price, bestBid, bes
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	base := extractBaseCurrency(normSymbol)
-	keySet := make(map[string]struct{}, 4)
-	keySet[normSymbol] = struct{}{}
-	if base != normSymbol && base != "" {
-		keySet[base] = struct{}{}
-	}
-	// Also update any registered universe symbol that shares this base asset
-	for registeredSym := range o.signals {
-		if extractBaseCurrency(registeredSym) == base {
-			keySet[registeredSym] = struct{}{}
-		}
-	}
+	base := o.ensureSymbolIndexedLocked(normSymbol)
+	keys := o.baseToKeys[base]
 
-	for k := range keySet {
-		sig, ok := o.signals[k]
-		if !ok {
+	for _, k := range keys {
+		sig := o.signals[k]
+		if sig == nil {
 			sig = &CoinbaseSymbolSignal{Symbol: k}
 			o.signals[k] = sig
 		}
@@ -166,7 +208,7 @@ func (o *CoinbaseSignalOracle) UpdateTick(normSymbol string, price, bestBid, bes
 		sig.BestBid = bestBid
 		sig.BestAsk = bestAsk
 		if bestBid > 0 && bestAsk > 0 {
-			sig.MidPrice = (bestBid + bestAsk) / 2.0
+			sig.MidPrice = (bestBid + bestAsk) * 0.5
 		} else if price > 0 {
 			sig.MidPrice = price
 		}
@@ -222,10 +264,12 @@ func (o *CoinbaseSignalOracle) EvaluateAgainstBinance(normSymbol string, binance
 
 	sig, ok := o.signals[normSymbol]
 	if !ok || sig.MidPrice <= 0 || math.IsNaN(sig.MidPrice) || math.IsInf(sig.MidPrice, 0) {
-		// Multi-quote fallback: try base currency or equivalent quote pair
-		base := extractBaseCurrency(normSymbol)
-		for _, cand := range []string{base, base + "USD", base + "USDT", base + "USDC"} {
-			if s, found := o.signals[cand]; found && s.MidPrice > 0 && !math.IsNaN(s.MidPrice) && !math.IsInf(s.MidPrice, 0) {
+		base, bok := o.symToBase[normSymbol]
+		if !bok {
+			base = extractBaseCurrency(normSymbol)
+		}
+		for _, k := range o.baseToKeys[base] {
+			if s := o.signals[k]; s != nil && s.MidPrice > 0 && !math.IsNaN(s.MidPrice) && !math.IsInf(s.MidPrice, 0) {
 				sig = s
 				break
 			}

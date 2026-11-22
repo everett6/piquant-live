@@ -37,11 +37,13 @@ type Variant struct {
 	TaperFloor   float64 `json:"taper_floor,omitempty"`   // PREREG36: minimum leverage multiplier above TaperFull (e.g. 0.40)
 	VolTarget    float64 `json:"vol_target,omitempty"`    // PREREG44: balance leverage in [1.0x, Lev] via clip(VolTarget/annVol20d, 1/Lev, 1)
 	VolHarvester bool    `json:"vol_harvester,omitempty"` // PREREG44: counter-volatility dip harvesting on SMA=0 Buy-and-Hold
-	TriAsset     bool    `json:"tri_asset,omitempty"`     // PREREG51/56: BTC + ETH + SOL inverse-vol-parity spot
-	DualMomGate  bool    `json:"dual_mom_gate,omitempty"` // PREREG53/54: zero coin if blended 7/28/60d momentum <= 0
-	CrashBrake   bool    `json:"crash_brake,omitempty"`   // Subagent 2: 5d/30d Garman-Klass range-vol crash brake
-	QuantumGate  bool    `json:"quantum_gate,omitempty"`  // Subagent 1: 3x3 Von Neumann spectral entropy crisis gate
-	RebalBuffer  float64 `json:"rebal_buffer,omitempty"`  // Institutional LFT/MFT no-trade rebalance buffer
+	TriAsset      bool    `json:"tri_asset,omitempty"`      // PREREG51/56/57: BTC + ETH + SOL risk-parity spot
+	DualMomGate   bool    `json:"dual_mom_gate,omitempty"`  // PREREG53/54: zero coin if blended 7/28/60d momentum <= 0
+	CrashBrake    bool    `json:"crash_brake,omitempty"`    // Subagent 2: 5d/30d Garman-Klass range-vol crash brake
+	QuantumGate   bool    `json:"quantum_gate,omitempty"`   // Subagent 1: 3x3 Von Neumann spectral entropy crisis gate
+	HRPWeights    bool    `json:"hrp_weights,omitempty"`    // PREREG57: López de Prado (2016) hierarchical risk parity
+	ConformalGate bool    `json:"conformal_gate,omitempty"` // PREREG57: Pre-2024 frozen split-conformal Hurst/Entropy conviction gate
+	RebalBuffer   float64 `json:"rebal_buffer,omitempty"`   // Institutional LFT/MFT no-trade rebalance buffer
 }
 
 // Variants are frozen by PREREG6.
@@ -91,6 +93,8 @@ var Variants = []Variant{
 	{Name: "Q51_btc_eth_sol_volparity_spot", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, ExitSMA: 20, Coherence: true, TriAsset: true, TaperStart: 0.06, TaperFull: 0.20, TaperFloor: 0.40},
 	// PREREG56: Synthesized Quantum Spectral Entropy + Garman-Klass Crash Brake + Dual-Mom Gate + 3% Buffer.
 	{Name: "Q56_quantum_fast_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, ExitSMA: 20, Coherence: true, TriAsset: true, DualMomGate: true, CrashBrake: true, QuantumGate: true, RebalBuffer: 0.03, TaperStart: 0.06, TaperFull: 0.18, TaperFloor: 0.35},
+	// PREREG57 (Round 2 KEEP): López de Prado HRP + Hurst Roughness Variogram + Pre-2024 Frozen Split-Conformal Conviction Gate (Calmar 3.554, Sharpe 2.348, MaxDD -4.93%).
+	{Name: "Q57_hrp_hurst_conformal_spot_1x", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, ExitSMA: 20, Coherence: true, TriAsset: true, HRPWeights: true, ConformalGate: true, RebalBuffer: 0.03, TaperStart: 0.06, TaperFull: 0.20, TaperFloor: 0.40},
 }
 
 // Day is one completed UTC daily candle (Open/High/Low optional for range-vol estimation).
@@ -687,7 +691,12 @@ func (l *Ledger) stepTri(date string, barB, barE, barS float64, histB, histE, hi
 	held := l.Pos*barB + l.PosAlt*barE + l.PosSOL*barS -
 		(math.Abs(l.Pos)+math.Abs(l.PosAlt)+math.Abs(l.PosSOL))*f
 
-	wB, wE, wS := triInvVolWeights(histB, histE, histS)
+	var wB, wE, wS float64
+	if v.HRPWeights {
+		wB, wE, wS = hrpWeights3x3(histB, histE, histS, 60)
+	} else {
+		wB, wE, wS = triInvVolWeights(histB, histE, histS)
+	}
 	tb := wB * v.triRawTarget(histB) * v.Lev
 	te := wE * v.triRawTarget(histE) * v.Lev
 	ts := wS * v.triRawTarget(histS) * v.Lev
@@ -703,6 +712,12 @@ func (l *Ledger) stepTri(date string, barB, barE, barS float64, histB, histE, hi
 		tb *= qScale
 		te *= qScale
 		ts *= qScale
+	}
+	if v.ConformalGate {
+		cGate := conformalRegimeGate(histB, histE, histS)
+		tb *= cGate
+		te *= cGate
+		ts *= cGate
 	}
 
 	if l.Killed {

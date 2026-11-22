@@ -91,7 +91,7 @@ func buildSchwabTokenRequest(ctx context.Context, tokenURL, clientID, clientSecr
 
 func doSchwabTokenRequest(ctx context.Context, client *http.Client, tokenURL, clientID, clientSecret string, form url.Values) (SchwabTokenResponse, error) {
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = NewOptimizedHTTPClient(10 * time.Second)
 	}
 	req, err := buildSchwabTokenRequest(ctx, tokenURL, clientID, clientSecret, form)
 	if err != nil {
@@ -163,7 +163,7 @@ func FetchSchwabAccountPositions(ctx context.Context, client *http.Client, trade
 		traderBaseURL = SchwabTraderBase
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 8 * time.Second}
+		client = NewOptimizedHTTPClient(8 * time.Second)
 	}
 	u := strings.TrimRight(traderBaseURL, "/") + "/accounts?fields=positions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -235,7 +235,7 @@ func FetchSchwabQuotes(ctx context.Context, client *http.Client, baseURL, access
 		baseURL = SchwabMarketDataBase
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 8 * time.Second}
+		client = NewOptimizedHTTPClient(8 * time.Second)
 	}
 	u := strings.TrimRight(baseURL, "/") + "/quotes?symbols=" + url.QueryEscape(strings.Join(symbols, ",")) + "&fields=quote"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)

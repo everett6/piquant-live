@@ -172,3 +172,15 @@ func TestCoinbaseStreamIngestorPushToRing(t *testing.T) {
 		t.Errorf("expected oracle updated with BTC price, got %+v", btcSig)
 	}
 }
+
+func BenchmarkCoinbaseSignalOracleUpdateTick(b *testing.B) {
+	oracle := NewCoinbaseSignalOracle([]string{"BTCUSDT", "ETHUSDT", "SOLUSDT"})
+	baseTime := time.Unix(1795300000, 0).UTC()
+	oracle.UpdateTick("BTC-USD", 75000, 74999, 75001, 0.1, true, baseTime)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		oracle.UpdateTick("BTC-USD", 75005, 75004, 75006, 0.2, true, baseTime.Add(time.Duration(i+1)*time.Millisecond))
+	}
+}

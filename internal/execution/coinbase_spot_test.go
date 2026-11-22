@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -413,5 +414,95 @@ func TestCoinbaseSpotRejectedOrderAndCancelFailure(t *testing.T) {
 
 	if err := client.CancelOrder(ctx, "ord-missing"); err == nil || !strings.Contains(err.Error(), "UNKNOWN_ORDER") {
 		t.Fatalf("expected descriptive cancel error, got %v", err)
+	}
+}
+
+func TestCoinbaseSpotBatchGetQuotesAndFallback(t *testing.T) {
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path != "/api/v3/brokerage/best_bid_ask" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		pids := r.URL.Query()["product_ids"]
+		nowStr := time.Now().UTC().Format(time.RFC3339Nano)
+		pbs := make([]map[string]any, 0, len(pids))
+		for _, pid := range pids {
+			switch strings.ToUpper(pid) {
+			case "BTC-USD":
+				pbs = append(pbs, map[string]any{"product_id": "BTC-USD", "bids": []map[string]string{{"price": "60000", "size": "1"}}, "asks": []map[string]string{{"price": "60001", "size": "1"}}, "time": nowStr})
+			case "ETH-USD":
+				pbs = append(pbs, map[string]any{"product_id": "ETH-USD", "bids": []map[string]string{{"price": "3000", "size": "2"}}, "asks": []map[string]string{{"price": "3001", "size": "2"}}, "time": nowStr})
+			case "SOL-USD":
+				// Simulate a server that only includes SOL-USD when queried individually as fallback.
+				if len(pids) == 1 {
+					pbs = append(pbs, map[string]any{"product_id": "SOL-USD", "bids": []map[string]string{{"price": "200", "size": "5"}}, "asks": []map[string]string{{"price": "200.2", "size": "5"}}, "time": nowStr})
+				}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"pricebooks": pbs})
+	}))
+	defer srv.Close()
+
+	c := NewCoinbaseSpotClient(CoinbaseCredentials{APIKey: "k", APISecret: "s"}, srv.URL, srv.Client())
+	// 1. BTC+ETH returns in 1 single batch HTTP round-trip.
+	qs2, err := c.GetQuotes(context.Background(), []string{"BTC-USD", "ETH-USD", "btc-usd"})
+	if err != nil {
+		t.Fatalf("GetQuotes 2 failed: %v", err)
+	}
+	if hits.Load() != 1 || qs2["BTC-USD"].Mid != 60000.5 || qs2["ETH-USD"].Mid != 3000.5 {
+		t.Fatalf("unexpected 2-symbol batch result: hits=%d qs=%+v", hits.Load(), qs2)
+	}
+
+	// 2. When SOL-USD is omitted from batch response, client falls back cleanly to fetch only SOL-USD.
+	hits.Store(0)
+	qs3, err := c.GetQuotes(context.Background(), []string{"BTC-USD", "ETH-USD", "SOL-USD"})
+	if err != nil {
+		t.Fatalf("GetQuotes 3 fallback failed: %v", err)
+	}
+	if hits.Load() != 2 || qs3["SOL-USD"].Mid != 200.1 {
+		t.Fatalf("unexpected 3-symbol fallback result: hits=%d qs=%+v", hits.Load(), qs3)
+	}
+}
+
+func BenchmarkCoinbaseSpotCDPJWTSign(b *testing.B) {
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		b.Fatal(err)
+	}
+	der, _ := x509.MarshalPKCS8PrivateKey(ecKey)
+	pemKey := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	c := NewCoinbaseSpotClient(CoinbaseCredentials{
+		APIKey:    "organizations/org-bench/apiKeys/key-bench",
+		APISecret: pemKey,
+	}, "https://api.coinbase.com", nil)
+	req, _ := http.NewRequest(http.MethodGet, "https://api.coinbase.com/api/v3/brokerage/accounts", nil)
+	now := time.Unix(1795300000, 0).UTC()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := c.applyAuth(req, nil, now); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkCoinbaseSpotHMACSign(b *testing.B) {
+	c := NewCoinbaseSpotClient(CoinbaseCredentials{
+		APIKey:    "hmac-key-bench",
+		APISecret: "hmac-secret-bench",
+	}, "https://api.coinbase.com", nil)
+	req, _ := http.NewRequest(http.MethodPost, "https://api.coinbase.com/api/v3/brokerage/orders", nil)
+	body := []byte(`{"client_order_id":"123","product_id":"BTC-USD"}`)
+	now := time.Unix(1795300000, 0).UTC()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := c.applyAuth(req, body, now); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

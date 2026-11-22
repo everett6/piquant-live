@@ -172,12 +172,24 @@ func ComputeQ56Blends(st *State, carryState *carry.State, dtb3ByDate map[string]
 	return out
 }
 
-// SelectBlend resolves one named portfolio ("q42_dualspeed", "q42_balanced", "q44_bh_harvester", "q44_barbell", "q51_volparity", "q56_quantum_fast", "s36_spot", or "s36_fut")
+// ComputeQ57Blends returns the PREREG57 HRP + Hurst Variogram + Pre-2024 Frozen Split-Conformal Conviction spot blend.
+func ComputeQ57Blends(st *State, carryState *carry.State, dtb3ByDate map[string]float64, plan *execution.PingExecutionPlan) []BlendSummary {
+	var out []BlendSummary
+	if q57, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
+		[]BlendLeg{{Variant: "Q57_hrp_hurst_conformal_spot_1x", Weight: 0.60}},
+		0.40, "Q57_hrp_hurst_conformal_spot_1x", "Q57_hrp_hurst_conformal_carry_spot", plan); ok {
+		out = append(out, q57)
+	}
+	return out
+}
+
+// SelectBlend resolves one named portfolio ("q42_dualspeed", "q42_balanced", "q44_bh_harvester", "q44_barbell", "q51_volparity", "q56_quantum_fast", "q57_hrp_hurst", "s36_spot", or "s36_fut")
 // into a composite BlendSummary, defaulting to Q42_dualspeed_60_40_carry_spot when available.
 func SelectBlend(st *State, carryState *carry.State, dtb3ByDate map[string]float64, selector string, plan *execution.PingExecutionPlan) (BlendSummary, bool) {
 	all := append(ComputeQ42Blends(st, carryState, dtb3ByDate, plan), ComputeQ44Blends(st, carryState, dtb3ByDate, plan)...)
 	all = append(all, ComputeQ51Blends(st, carryState, dtb3ByDate, plan)...)
 	all = append(all, ComputeQ56Blends(st, carryState, dtb3ByDate, plan)...)
+	all = append(all, ComputeQ57Blends(st, carryState, dtb3ByDate, plan)...)
 	findBlend := func(name string) (BlendSummary, bool) {
 		for _, b := range all {
 			if b.Name == name {
@@ -209,6 +221,10 @@ func SelectBlend(st *State, carryState *carry.State, dtb3ByDate map[string]float
 		}
 	case "q56", "q56_quantum_fast", "q56_quantum_fast_carry_spot":
 		if b, ok := findBlend("Q56_quantum_fast_carry_spot"); ok {
+			return b, true
+		}
+	case "q57", "q57_hrp_hurst", "q57_hrp_conformal", "q57_hrp_hurst_conformal", "q57_hrp_hurst_conformal_carry_spot":
+		if b, ok := findBlend("Q57_hrp_hurst_conformal_carry_spot"); ok {
 			return b, true
 		}
 	case "s36", "s36_spot", "s36_qd_carry_blend_spot":

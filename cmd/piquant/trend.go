@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -70,7 +71,7 @@ func runTrend(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := execution.NewOptimizedHTTPClient(20 * time.Second)
 	for {
 		st, err = advanceTrend(ctx, client, st, path)
 		if err != nil {
@@ -99,7 +100,37 @@ func runTrend(args []string) error {
 
 func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, path string) (*trend.State, error) {
 	now := time.Now().UTC()
-	rows, err := collect.FetchCoinbaseDailyCandles(ctx, client, "BTC-USD", now.AddDate(0, 0, -299), now)
+	dailyStart := now.AddDate(0, 0, -299)
+	g0 := now.Add(-299 * 6 * time.Hour)
+
+	var (
+		rows, ethRows, solRows, gb, ge []collect.CandleRow
+		err, ethErr, solErr, gbErr, geErr error
+		wg                             sync.WaitGroup
+	)
+	wg.Add(5)
+	go func() {
+		defer wg.Done()
+		rows, err = collect.FetchCoinbaseDailyCandles(ctx, client, "BTC-USD", dailyStart, now)
+	}()
+	go func() {
+		defer wg.Done()
+		ethRows, ethErr = collect.FetchCoinbaseDailyCandles(ctx, client, "ETH-USD", dailyStart, now)
+	}()
+	go func() {
+		defer wg.Done()
+		solRows, solErr = collect.FetchCoinbaseDailyCandles(ctx, client, "SOL-USD", dailyStart, now)
+	}()
+	go func() {
+		defer wg.Done()
+		gb, gbErr = collect.FetchCoinbase6hCandles(ctx, client, "BTC-USD", g0, now)
+	}()
+	go func() {
+		defer wg.Done()
+		ge, geErr = collect.FetchCoinbase6hCandles(ctx, client, "ETH-USD", g0, now)
+	}()
+	wg.Wait()
+
 	if err != nil {
 		return st, fmt.Errorf("fetch daily candles: %w", err)
 	}
@@ -110,7 +141,6 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 	st.Seed(pre) // idempotent; also picks up the registration day once its candle completes
 	n := st.Advance(post)
 	// PREREG11 pair variant: ETH sleeve, stepped after the BTC day it shares.
-	ethRows, ethErr := collect.FetchCoinbaseDailyCandles(ctx, client, "ETH-USD", now.AddDate(0, 0, -299), now)
 	if ethErr == nil {
 		epre, epost := splitDays(ethRows, now)
 		st.SeedETH(epre)
@@ -118,8 +148,7 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 		// PREREG16 D2 needs SMA200: extend both histories backwards (no ledger is touched).
 		st.Backfill(append(pre, post...), append(epre, epost...))
 	}
-	// PREREG51/56 tri-asset sleeve: SOL daily candles fetched and stepped after BTC and ETH.
-	solRows, solErr := collect.FetchCoinbaseDailyCandles(ctx, client, "SOL-USD", now.AddDate(0, 0, -299), now)
+	// PREREG51/56/57 tri-asset sleeve: SOL daily candles fetched and stepped after BTC and ETH.
 	if solErr == nil {
 		spre, spost := splitDays(solRows, now)
 		st.SeedSOL(spre)
@@ -129,9 +158,6 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 		fmt.Fprintln(os.Stderr, "[TREND] fetch SOL daily candles:", solErr)
 	}
 	// PREREG30 E4: four clocks on 6-hour bars. A failed fetch is retried on the next pass; bars are never skipped.
-	g0 := now.Add(-299 * 6 * time.Hour)
-	gb, gbErr := collect.FetchCoinbase6hCandles(ctx, client, "BTC-USD", g0, now)
-	ge, geErr := collect.FetchCoinbase6hCandles(ctx, client, "ETH-USD", g0, now)
 	if gbErr == nil && geErr == nil {
 		if k := st.AdvanceGrid(gridBars(gb, now), gridBars(ge, now)); k > 0 {
 			fmt.Printf("[TREND] four-clock ledger advanced %d six-hour bar(s)\n", k)
@@ -185,7 +211,7 @@ func splitDays(rows []collect.CandleRow, now time.Time) (pre, post []trend.Day) 
 // runTrendCore keeps the 2x/1x trend ledger current and pushes the daily regime into the engine's trend gate,
 // hourly, inside the dryrun process (no extra service). Errors are logged and retried.
 func runTrendCore(ctx context.Context, dir string, gate *paper.TrendGate) {
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := execution.NewOptimizedHTTPClient(20 * time.Second)
 	path := filepath.Join(dir, "trend_state.json")
 	st, err := trend.Load(path)
 	if err != nil {
@@ -243,6 +269,7 @@ func printTrendWithBlend(ctx context.Context, st *trend.State, carryDir, dtb3Pat
 	q44Blends := trend.ComputeQ44Blends(st, cs, rates, planPtr)
 	q51Blends := trend.ComputeQ51Blends(st, cs, rates, planPtr)
 	q56Blends := trend.ComputeQ56Blends(st, cs, rates, planPtr)
+	q57Blends := trend.ComputeQ57Blends(st, cs, rates, planPtr)
 	payload := struct {
 		Scorecard []trend.Summary      `json:"scorecard"`
 		S36Blend  []trend.BlendSummary `json:"s36_qd_carry_blend,omitempty"`
@@ -250,6 +277,7 @@ func printTrendWithBlend(ctx context.Context, st *trend.State, carryDir, dtb3Pat
 		Q44Blends []trend.BlendSummary `json:"q44_vol_harvester_blends,omitempty"`
 		Q51Blends []trend.BlendSummary `json:"q51_volparity_blends,omitempty"`
 		Q56Blends []trend.BlendSummary `json:"q56_quantum_fast_blends,omitempty"`
+		Q57Blends []trend.BlendSummary `json:"q57_hrp_hurst_blends,omitempty"`
 	}{
 		Scorecard: st.Score(time.Now()),
 		S36Blend:  blends,
@@ -257,6 +285,7 @@ func printTrendWithBlend(ctx context.Context, st *trend.State, carryDir, dtb3Pat
 		Q44Blends: q44Blends,
 		Q51Blends: q51Blends,
 		Q56Blends: q56Blends,
+		Q57Blends: q57Blends,
 	}
 	b, err := json.MarshalIndent(payload, "", " ")
 	if err != nil {
