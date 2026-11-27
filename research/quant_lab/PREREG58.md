@@ -69,3 +69,13 @@ is 814 (shared with piquant-stocks); this round adds 12 -> 826.
 - **Run 2:** the identical registered command, once, on the fixed loader. This replaces run 1; nothing
   else changes (same 12 formulas, gates, window, costs). Both runs are charged to the counters:
   discovery state 818 -> 830 (run 1) -> 842 (run 2); repo counter 814 -> 838.
+
+## Result (run 2, 2026-11-27): **FAIL**
+Buy-and-hold QQQ 2008-01-02..2024-12-31: Sharpe 0.760, Calmar 0.316, max DD -49.4%.
+All 12 passed the AST, causality and purged-CV gates. 11 of 12 beat buy-and-hold on Sharpe, Calmar
+and max drawdown (#4, the dollar/credit filter, did not). **None reached DSR 0.80** at 831-842 trials,
+so none passed. Best: #5 (RSI dip-buy + 200-day trend + vol brake), Sharpe 0.877, Calmar 0.459,
+max DD -34.0%, DSR 0.659. Next: #3 (SPY vol regime) Sharpe 0.858, DSR 0.630.
+Reading: these overlays cut QQQ's worst drawdown by about a third for a small Sharpe gain (+0.05 to
++0.12), too small to stand out from the number of ideas already tried. Nothing enters the shadow queue.
+The 2025+ holdout stays unread. Counters: discovery state 842; repo 838.
