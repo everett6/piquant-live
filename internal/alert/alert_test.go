@@ -1,6 +1,7 @@
 package alert
 
 import (
+	"fmt"
 	"net/smtp"
 	"os"
 	"path/filepath"
@@ -75,5 +76,24 @@ func TestUnconfiguredLogsOnly(t *testing.T) {
 	}
 	if maskEmail("someone@example.com") != "s***@example.com" {
 		t.Fatal("mask")
+	}
+}
+
+func TestSendLogsBodyWhenEmailOff(t *testing.T) {
+	var lines []string
+	a := &Alerter{Source: "raspberrypi", Logf: func(f string, args ...any) { lines = append(lines, fmt.Sprintf(f, args...)) }}
+	long := strings.Repeat("x", 400)
+	if !a.Send("venue-kraken", "Tick recording problem", "kraken websocket\ndisconnected for 5+ minutes") {
+		t.Fatal("first send suppressed")
+	}
+	a.Send("gap-BTC", "Tick recording problem", long)
+	if len(lines) != 2 {
+		t.Fatalf("want 2 log lines, got %v", lines)
+	}
+	if lines[0] != "[ALERT] [PiQuant raspberrypi] Tick recording problem: kraken websocket disconnected for 5+ minutes" {
+		t.Fatalf("unexpected log line %q", lines[0])
+	}
+	if !strings.HasSuffix(lines[1], "...") || len(lines[1]) > 360 {
+		t.Fatalf("long body not capped: %d chars", len(lines[1]))
 	}
 }

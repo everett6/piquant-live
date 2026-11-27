@@ -135,7 +135,7 @@ func (a *Alerter) Send(key, subject, body string) bool {
 	a.last[key] = now
 	a.mu.Unlock()
 	subj := fmt.Sprintf("[PiQuant %s] %s", a.Source, subject)
-	a.logf("[ALERT] %s", subj)
+	a.logf("[ALERT] %s: %s", subj, logLine(body))
 	if !a.Cfg.Configured() {
 		return true
 	}
@@ -145,6 +145,16 @@ func (a *Alerter) Send(key, subject, body string) bool {
 		}
 	}()
 	return true
+}
+
+// logLine flattens an alert body to one log line (capped at 300 chars) so the log alone says what went wrong
+// when email is off.
+func logLine(body string) string {
+	b := strings.Join(strings.Fields(body), " ")
+	if len(b) > 300 {
+		b = b[:297] + "..."
+	}
+	return b
 }
 
 // SendNow is Send but synchronous, returning the delivery error (for `piquant alert-test`).

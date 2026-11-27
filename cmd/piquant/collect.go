@@ -52,7 +52,12 @@ func runCollect(ctx context.Context, args []string) error {
 		return err
 	}
 	collect.GDELTSpacing = *gdeltSpacing
-	al := alert.New(*alertEnv, "desktop")
+	// label alerts with the machine that sent them: the same binary records on the Pi and the desktop
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "collector"
+	}
+	al := alert.New(*alertEnv, host)
 	symList := strings.Split(*symbols, ",")
 	cbProds := []string{}
 	for i := range symList {
