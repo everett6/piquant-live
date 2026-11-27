@@ -28,7 +28,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -103,6 +103,9 @@ ALLOWED_FEATURES: tuple[str, ...] = (
     "news_vol_7d",
 )
 ALLOWED_FEATURE_SET = frozenset(ALLOWED_FEATURES)
+
+# (n_candidates, recent_feedback, latency_profile) -> prompt text; lets other asset classes reuse the LLM cascade
+PromptFn = Callable[[int, "list[str] | None", "dict[str, Any] | None"], str]
 
 # Pure causal elementwise / rolling helpers (name -> expected arg count)
 FUNC_ARITY: dict[str, int] = {
@@ -183,7 +186,8 @@ class SafeAlphaEvaluator:
     )
 
     @classmethod
-    def validate(cls, expr: str) -> ast.Expression:
+    def validate(cls, expr: str, allowed: frozenset[str] | None = None) -> ast.Expression:
+        feature_set = ALLOWED_FEATURE_SET if allowed is None else allowed
         if not isinstance(expr, str):
             raise UnsafeExpressionError("expression must be a string")
         cleaned = expr.strip()
@@ -211,7 +215,7 @@ class SafeAlphaEvaluator:
                 if not np.isfinite(float(node.value)):
                     raise UnsafeExpressionError("non-finite constant")
             elif isinstance(node, ast.Name):
-                if node.id in ALLOWED_FEATURE_SET:
+                if node.id in feature_set:
                     used_features += 1
                 elif node.id not in ALLOWED_FUNC_SET:
                     raise UnsafeExpressionError(f"unknown identifier: {node.id}")
@@ -314,11 +318,18 @@ class SafeAlphaEvaluator:
         raise UnsafeExpressionError(f"unsupported node: {type(node).__name__}")
 
     @classmethod
-    def evaluate(cls, expr: str, features: pd.DataFrame, role: str = "overlay") -> pd.Series:
-        tree = cls.validate(expr)
+    def evaluate(
+        cls,
+        expr: str,
+        features: pd.DataFrame,
+        role: str = "overlay",
+        allowed: tuple[str, ...] | None = None,
+    ) -> pd.Series:
+        names = ALLOWED_FEATURES if allowed is None else allowed
+        tree = cls.validate(expr, None if allowed is None else frozenset(allowed))
         n = len(features)
         env: dict[str, np.ndarray] = {}
-        for col in ALLOWED_FEATURES:
+        for col in names:
             if col in features.columns:
                 arr = features[col].to_numpy(dtype=float)
                 env[col] = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
@@ -636,6 +647,7 @@ def generate_llamacpp_candidates(
     llama_url: str = DEFAULT_LLAMA_URL,
     recent_feedback: list[str] | None = None,
     latency_profile: dict[str, Any] | None = None,
+    prompt_fn: PromptFn | None = None,
     timeout_s: float = 180.0,
     max_tokens: int = 512,
     temperature: float = 0.2,
@@ -648,7 +660,7 @@ def generate_llamacpp_candidates(
 
     Returns `(expressions, error_note, source_tag)`.
     """
-    prompt = _build_alpha_prompt(n_candidates, recent_feedback=recent_feedback, latency_profile=latency_profile)
+    prompt = (prompt_fn or _build_alpha_prompt)(n_candidates, recent_feedback, latency_profile)
     sys_prompt = (
         "You are a quantitative crypto researcher. Output ONLY a valid JSON array "
         "of expression strings using ONLY the allowed features and functions."
@@ -741,10 +753,11 @@ def generate_ollama_candidates(
     model: str = "lfm2.5",
     recent_feedback: list[str] | None = None,
     latency_profile: dict[str, Any] | None = None,
+    prompt_fn: PromptFn | None = None,
     timeout_s: float = 25.0,
 ) -> tuple[list[str], str | None]:
     """Query local Ollama `/api/generate` for novel causal alpha expressions."""
-    prompt = _build_alpha_prompt(n_candidates, recent_feedback=recent_feedback, latency_profile=latency_profile)
+    prompt = (prompt_fn or _build_alpha_prompt)(n_candidates, recent_feedback, latency_profile)
 
     payload = json.dumps({
         "model": model,
@@ -800,6 +813,7 @@ def generate_openrouter_candidates(
     openrouter_url: str = DEFAULT_OPENROUTER_URL,
     recent_feedback: list[str] | None = None,
     latency_profile: dict[str, Any] | None = None,
+    prompt_fn: PromptFn | None = None,
     timeout_s: float = 35.0,
 ) -> tuple[list[str], str | None]:
     """Query OpenRouter chat-completions (supports `:free` models) for MFT/LFT alpha expressions."""
@@ -807,7 +821,7 @@ def generate_openrouter_candidates(
     if not key:
         return [], "OPENROUTER_API_KEY not set"
 
-    prompt = _build_alpha_prompt(n_candidates, recent_feedback=recent_feedback, latency_profile=latency_profile)
+    prompt = (prompt_fn or _build_alpha_prompt)(n_candidates, recent_feedback, latency_profile)
     payload = json.dumps({
         "model": model,
         "messages": [
@@ -1186,6 +1200,95 @@ def _evaluate_real_full(
     return base_m, stress_m, spot_m
 
 
+def generate_candidates(
+    n_candidates: int,
+    mode: str = "auto",
+    dry_run_synth: bool = False,
+    llama_bin: str = DEFAULT_LLAMA_BIN,
+    llama_model: str = DEFAULT_LLAMA_MODEL,
+    llama_threads: int = DEFAULT_LLAMA_THREADS,
+    llama_url: str = DEFAULT_LLAMA_URL,
+    ollama_url: str = "http://127.0.0.1:11434",
+    openrouter_model: str = DEFAULT_OPENROUTER_MODEL,
+    openrouter_url: str = DEFAULT_OPENROUTER_URL,
+    model: str = "lfm2.5",
+    seed: int = 42,
+    recent_feedback: list[str] | None = None,
+    latency_profile: dict[str, Any] | None = None,
+    prompt_fn: PromptFn | None = None,
+    symbolic_fn: Callable[[int, int], list[str]] | None = None,
+) -> tuple[list[tuple[str, str]], dict[str, str | None]]:
+    """Candidate cascade: llama.cpp -> OpenRouter -> Ollama -> deterministic symbolic.
+
+    Returns `([(expr, source), ...], {"llamacpp": note, "openrouter": note, "ollama": note})`.
+    """
+    symbolic = symbolic_fn or (lambda n, sd: generate_symbolic_candidates(n_candidates=n, seed=sd))
+    expr_pairs: list[tuple[str, str]] = []
+    llamacpp_note: str | None = None
+    openrouter_note: str | None = None
+    ollama_note: str | None = None
+
+    if mode in ("auto", "llamacpp"):
+        llama_exprs, llamacpp_note, llama_src = generate_llamacpp_candidates(
+            n_candidates=n_candidates,
+            llama_bin=llama_bin,
+            llama_model=llama_model,
+            llama_threads=llama_threads,
+            llama_url=llama_url,
+            recent_feedback=recent_feedback,
+            prompt_fn=prompt_fn,
+            latency_profile=latency_profile,
+        )
+        seen_llama: set[str] = set()
+        for e in llama_exprs:
+            if e not in seen_llama:
+                expr_pairs.append((e, llama_src))
+                seen_llama.add(e)
+
+    if mode == "openrouter" or (mode == "auto" and not dry_run_synth and len(expr_pairs) < n_candidates and _load_openrouter_key()):
+        needed = n_candidates - len(expr_pairs)
+        or_exprs, openrouter_note = generate_openrouter_candidates(
+            n_candidates=needed,
+            model=openrouter_model,
+            openrouter_url=openrouter_url,
+            recent_feedback=recent_feedback,
+            prompt_fn=prompt_fn,
+            latency_profile=latency_profile,
+        )
+        seen = {e for e, _ in expr_pairs}
+        for e in or_exprs:
+            if e not in seen:
+                expr_pairs.append((e, f"openrouter:{openrouter_model}"))
+                seen.add(e)
+
+    if mode == "ollama" or (mode == "auto" and len(expr_pairs) < n_candidates):
+        needed = n_candidates - len(expr_pairs)
+        ollama_exprs, ollama_note = generate_ollama_candidates(
+            n_candidates=needed,
+            ollama_url=ollama_url,
+            model=model,
+            recent_feedback=recent_feedback,
+            prompt_fn=prompt_fn,
+            latency_profile=latency_profile,
+        )
+        seen = {e for e, _ in expr_pairs}
+        for e in ollama_exprs:
+            if e not in seen:
+                expr_pairs.append((e, f"ollama:{model}"))
+                seen.add(e)
+
+    if mode == "symbolic" or (mode == "auto" and len(expr_pairs) < n_candidates):
+        needed = n_candidates - len(expr_pairs)
+        seen = {e for e, _ in expr_pairs}
+        for e in symbolic(needed + len(seen), seed):
+            if e not in seen:
+                expr_pairs.append((e, "symbolic"))
+                seen.add(e)
+            if len(expr_pairs) >= n_candidates:
+                break
+    return expr_pairs, {"llamacpp": llamacpp_note, "openrouter": openrouter_note, "ollama": ollama_note}
+
+
 def run_discovery(
     n_candidates: int = 8,
     mode: str = "auto",
@@ -1220,66 +1323,13 @@ def run_discovery(
     latency_profile = build_latency_profile(measured_ms, venue=venue)
 
     # 1. Generate candidate expressions: C++ llama.cpp -> OpenRouter -> Ollama -> deterministic symbolic
-    expr_pairs: list[tuple[str, str]] = []
-    llamacpp_note: str | None = None
-    openrouter_note: str | None = None
-    ollama_note: str | None = None
-
-    if mode in ("auto", "llamacpp"):
-        llama_exprs, llamacpp_note, llama_src = generate_llamacpp_candidates(
-            n_candidates=n_candidates,
-            llama_bin=llama_bin,
-            llama_model=llama_model,
-            llama_threads=llama_threads,
-            llama_url=llama_url,
-            recent_feedback=recent_fb,
-            latency_profile=latency_profile,
-        )
-        seen_llama: set[str] = set()
-        for e in llama_exprs:
-            if e not in seen_llama:
-                expr_pairs.append((e, llama_src))
-                seen_llama.add(e)
-
-    if mode == "openrouter" or (mode == "auto" and not dry_run_synth and len(expr_pairs) < n_candidates and _load_openrouter_key()):
-        needed = n_candidates - len(expr_pairs)
-        or_exprs, openrouter_note = generate_openrouter_candidates(
-            n_candidates=needed,
-            model=openrouter_model,
-            openrouter_url=openrouter_url,
-            recent_feedback=recent_fb,
-            latency_profile=latency_profile,
-        )
-        seen = {e for e, _ in expr_pairs}
-        for e in or_exprs:
-            if e not in seen:
-                expr_pairs.append((e, f"openrouter:{openrouter_model}"))
-                seen.add(e)
-
-    if mode == "ollama" or (mode == "auto" and len(expr_pairs) < n_candidates):
-        needed = n_candidates - len(expr_pairs)
-        ollama_exprs, ollama_note = generate_ollama_candidates(
-            n_candidates=needed,
-            ollama_url=ollama_url,
-            model=model,
-            recent_feedback=recent_fb,
-            latency_profile=latency_profile,
-        )
-        seen = {e for e, _ in expr_pairs}
-        for e in ollama_exprs:
-            if e not in seen:
-                expr_pairs.append((e, f"ollama:{model}"))
-                seen.add(e)
-
-    if mode == "symbolic" or (mode == "auto" and len(expr_pairs) < n_candidates):
-        needed = n_candidates - len(expr_pairs)
-        seen = {e for e, _ in expr_pairs}
-        for e in generate_symbolic_candidates(n_candidates=needed + len(seen), seed=seed):
-            if e not in seen:
-                expr_pairs.append((e, "symbolic"))
-                seen.add(e)
-            if len(expr_pairs) >= n_candidates:
-                break
+    expr_pairs, notes = generate_candidates(
+        n_candidates=n_candidates, mode=mode, dry_run_synth=dry_run_synth,
+        llama_bin=llama_bin, llama_model=llama_model, llama_threads=llama_threads, llama_url=llama_url,
+        ollama_url=ollama_url, openrouter_model=openrouter_model, openrouter_url=openrouter_url, model=model,
+        seed=seed, recent_feedback=recent_fb, latency_profile=latency_profile,
+    )
+    llamacpp_note, openrouter_note, ollama_note = notes["llamacpp"], notes["openrouter"], notes["ollama"]
 
     # 2. Load market context (synthetic or real 2020-2026 candles)
     if dry_run_synth:
@@ -1466,7 +1516,38 @@ def main() -> None:
     p.add_argument("--state-path", default=DEFAULT_STATE_PATH)
     p.add_argument("--shadow-path", default=DEFAULT_SHADOW_PATH)
     p.add_argument("--log-path", default=DEFAULT_LOG_PATH)
+    p.add_argument("--asset-class", choices=("crypto", "etf"), default="crypto",
+                   help="etf: score candidates on a US ETF (see etf_discover.py) instead of BTC/ETH")
+    p.add_argument("--etf-target", default="QQQ", help="ETF the signal trades when --asset-class etf")
+    p.add_argument("--etf-refresh", action="store_true", help="Re-download the ETF price cache")
     args = p.parse_args()
+
+    if args.asset_class == "etf":
+        import etf_discover as ED
+
+        closes = None
+        if args.etf_refresh and not args.dry_run_synth:
+            closes = ED.load_etf_closes(refresh=True)
+        es = ED.run_etf_discovery(
+            n_candidates=args.n_candidates, mode=args.mode, target=args.etf_target, role=args.role,
+            seed=args.seed, dry_run_synth=args.dry_run_synth, closes=closes,
+            state_path=args.state_path, shadow_path=args.shadow_path, log_path=args.log_path,
+            llama_bin=args.llama_bin, llama_model=args.llama_model, llama_threads=args.llama_threads,
+            llama_url=args.llama_url, ollama_url=args.ollama_url, openrouter_model=args.openrouter_model,
+            model=args.model,
+        )
+        b = es["benchmark"]
+        print(
+            f"etf_discover done | {es['venue']} window={es['window'][0]}..{es['window'][1]} synth={es['dry_run_synth']} "
+            f"buy-hold sharpe={b['sharpe']} calmar={b['calmar']} maxDD={b['max_dd_pct']}% | "
+            f"evaluated={es['evaluated']} accepted={es['accepted']} n_trials={es['n_trials_total']}"
+        )
+        for r in es["results"]:
+            bm = r.get("base_metrics") or {}
+            status = "SHADOW_PASS" if r["accepted"] else f"REJECT ({r['reject_reason']})"
+            extra = f" | sharpe={bm.get('sharpe')} calmar={bm.get('calmar')} maxDD={bm.get('max_dd_pct')}%" if bm else ""
+            print(f"  [{r['source']}] {status}{extra}\n    expr: {r['expr']}")
+        return
 
     summary = run_discovery(
         n_candidates=args.n_candidates,
