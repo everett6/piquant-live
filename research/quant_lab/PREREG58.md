@@ -57,3 +57,15 @@ next day. Cost 2 bps per unit traded (stress 10 bps). Exposure above 1.0 pays T-
 ## Counters
 The discovery state counter (818) charges each candidate that reaches CV. The repo-wide trial counter
 is 814 (shared with piquant-stocks); this round adds 12 -> 826.
+
+## Run log
+- **Run 1 (2026-11-27), INVALID, data bug.** Yahoo's chart API returned monthly bars for `range=max`
+  despite `interval=1d`, so the evaluator treated 534 monthly bars as days (buy-and-hold QQQ showed
+  Sharpe 1.92, ~97%/yr, which is impossible). All 12 were rejected anyway (output kept in
+  `results/round58_invalid_monthly.log`, local only: logs are gitignored). No result is taken from it.
+- **Fix:** the loader now asks for an explicit date range (`period1/period2`) and refuses any series
+  whose median bar gap exceeds 4 days (new test `test_loader_refuses_monthly_bars`). The re-downloaded
+  data has 4,279 QQQ days in 2008-2024 (43.26 -> 506.92). No formula was evaluated on it.
+- **Run 2:** the identical registered command, once, on the fixed loader. This replaces run 1; nothing
+  else changes (same 12 formulas, gates, window, costs). Both runs are charged to the counters:
+  discovery state 818 -> 830 (run 1) -> 842 (run 2); repo counter 814 -> 838.

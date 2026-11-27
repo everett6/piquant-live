@@ -136,3 +136,10 @@ def test_run_etf_discovery_synthetic_end_to_end(tmp_path, monkeypatch):
 def test_cli_rejects_unknown_target(tmp_path):
     with pytest.raises(ValueError):
         ED.run_etf_discovery(target="ARKK", dry_run_synth=True, state_path=str(tmp_path / "s.json"))
+
+
+def test_loader_refuses_monthly_bars(tmp_path):
+    idx = pd.date_range("2010-01-01", periods=30, freq="MS", tz="UTC")
+    pd.DataFrame({"date": idx, "adj_close": np.arange(30.0) + 50}).to_csv(tmp_path / "QQQ.csv", index=False)
+    with pytest.raises(ValueError, match="not daily"):
+        ED.load_etf_closes(tickers=("QQQ",), cache_dir=str(tmp_path))

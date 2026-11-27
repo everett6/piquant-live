@@ -384,7 +384,10 @@ def load_etf_closes(
     for sym in tickers:
         path = os.path.join(cdir, f"{sym}.csv")
         if refresh or not os.path.exists(path):
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=max&events=div,split"
+            # range=max silently returns monthly bars; an explicit period keeps interval=1d
+            now = int(dt.datetime.now(dt.timezone.utc).timestamp())
+            url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+                   f"?interval=1d&period1=0&period2={now}&events=div,split")
             resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
             resp.raise_for_status()
             res = resp.json()["chart"]["result"][0]
@@ -397,10 +400,21 @@ def load_etf_closes(
             df.to_csv(path, index=False)
         df = pd.read_csv(path)
         s = pd.Series(df["adj_close"].to_numpy(dtype=float), index=pd.to_datetime(df["date"], utc=True))
-        series[sym] = s.sort_index()
+        s = s.sort_index()
+        _check_daily(s, sym)
+        series[sym] = s
     closes = pd.DataFrame(series).sort_index()
     closes = closes[closes.index < pd.Timestamp(end, tz="UTC")]
     return closes.dropna(how="all")
+
+
+def _check_daily(s: pd.Series, sym: str) -> None:
+    """Refuse non-daily bars (e.g. Yahoo's monthly fallback): median gap must be <= 4 days."""
+    if len(s) < 3:
+        return
+    gap = float(pd.Series(s.index).diff().dt.days.median())
+    if gap > 4.0:
+        raise ValueError(f"{sym}: median bar gap {gap:.0f} days, not daily data; re-download with refresh")
 
 
 def load_tbill_rate(path: str = DTB3_PATH) -> pd.Series | None:
