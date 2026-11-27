@@ -1,0 +1,227 @@
+{
+  "prereg": "PREREG59",
+  "window": [
+    "2008-01-01",
+    "2025-01-01"
+  ],
+  "n_trials": 840,
+  "E1_multi_asset": {
+    "tickers": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "DIA",
+      "RSP",
+      "XLK",
+      "SMH",
+      "SOXX",
+      "IGV",
+      "XLC",
+      "XLF",
+      "XLE",
+      "XLV",
+      "XLY",
+      "XLP",
+      "XLU",
+      "XLI",
+      "XLB",
+      "XLRE",
+      "IEF",
+      "TLT",
+      "HYG",
+      "LQD",
+      "GLD",
+      "SLV",
+      "DBC",
+      "UUP"
+    ],
+    "benchmark_mix": {
+      "SPY": 0.6,
+      "IEF": 0.4
+    },
+    "strategy": {
+      "cagr_pct": 3.828,
+      "sharpe": 0.8761,
+      "max_dd_pct": -7.632,
+      "deflated_sharpe": 0.6534,
+      "recent_return_pct": 17.512
+    },
+    "stress": {
+      "cagr_pct": 2.229,
+      "sharpe": 0.5849,
+      "max_dd_pct": -8.211,
+      "deflated_sharpe": 0.218,
+      "recent_return_pct": 14.632
+    },
+    "benchmark": {
+      "cagr_pct": 8.073,
+      "sharpe": 0.7362,
+      "max_dd_pct": -30.79,
+      "deflated_sharpe": 0.4323,
+      "recent_return_pct": 33.628
+    },
+    "checks": {
+      "1_sharpe_edge_0.10": true,
+      "2_shallower_dd": true,
+      "3_cagr_within_2pts": false,
+      "4_dsr_0.80": false,
+      "5_stress_and_recent_positive": true
+    },
+    "pass": false,
+    "report": {
+      "mean_gross_exposure": 0.4822,
+      "share_days_any_position": 0.9998,
+      "trades_per_year_turnover": 15.641,
+      "mean_exposure_by_group": {
+        "broad": 0.0904,
+        "nasdaq_tech": 0.0716,
+        "sectors": 0.1329,
+        "rates_credit": 0.1419,
+        "real_assets_fx": 0.0622
+      },
+      "year_returns_pct": {
+        "2008": 0.09,
+        "2009": 2.36,
+        "2010": 9.63,
+        "2011": -0.2,
+        "2012": 4.7,
+        "2013": 5.49,
+        "2014": 1.96,
+        "2015": -5.89,
+        "2016": 4.5,
+        "2017": 6.69,
+        "2018": 1.75,
+        "2019": 8.31,
+        "2020": 7.9,
+        "2021": 3.05,
+        "2022": -0.77,
+        "2023": 10.49,
+        "2024": 6.36
+      },
+      "bench_year_returns_pct": {
+        "2008": -16.73,
+        "2009": 13.26,
+        "2010": 13.45,
+        "2011": 8.3,
+        "2012": 11.26,
+        "2013": 15.6,
+        "2014": 11.96,
+        "2015": 1.77,
+        "2016": 7.79,
+        "2017": 13.76,
+        "2018": -1.96,
+        "2019": 21.77,
+        "2020": 16.91,
+        "2021": 15.09,
+        "2022": -16.39,
+        "2023": 16.97,
+        "2024": 14.24
+      },
+      "corr_with_bench": 0.4874
+    }
+  },
+  "E2_equity_only": {
+    "tickers": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "DIA",
+      "RSP",
+      "XLK",
+      "SMH",
+      "SOXX",
+      "IGV",
+      "XLC",
+      "XLF",
+      "XLE",
+      "XLV",
+      "XLY",
+      "XLP",
+      "XLU",
+      "XLI",
+      "XLB",
+      "XLRE"
+    ],
+    "benchmark_mix": {
+      "SPY": 1.0
+    },
+    "strategy": {
+      "cagr_pct": 3.925,
+      "sharpe": 0.6155,
+      "max_dd_pct": -10.689,
+      "deflated_sharpe": 0.2571,
+      "recent_return_pct": 23.364
+    },
+    "stress": {
+      "cagr_pct": 2.358,
+      "sharpe": 0.4473,
+      "max_dd_pct": -8.681,
+      "deflated_sharpe": 0.0917,
+      "recent_return_pct": 20.141
+    },
+    "benchmark": {
+      "cagr_pct": 10.6,
+      "sharpe": 0.6044,
+      "max_dd_pct": -51.874,
+      "deflated_sharpe": 0.2384,
+      "recent_return_pct": 57.576
+    },
+    "checks": {
+      "1_sharpe_edge_0.10": false,
+      "2_shallower_dd": true,
+      "3_cagr_within_2pts": false,
+      "4_dsr_0.80": false,
+      "5_stress_and_recent_positive": true
+    },
+    "pass": false,
+    "report": {
+      "mean_gross_exposure": 0.4733,
+      "share_days_any_position": 0.939,
+      "trades_per_year_turnover": 14.89,
+      "mean_exposure_by_group": {
+        "broad": 0.153,
+        "nasdaq_tech": 0.1211,
+        "sectors": 0.2274
+      },
+      "year_returns_pct": {
+        "2008": -6.31,
+        "2009": 2.7,
+        "2010": 6.57,
+        "2011": -4.22,
+        "2012": 4.39,
+        "2013": 12.11,
+        "2014": 2.13,
+        "2015": -7.93,
+        "2016": 4.29,
+        "2017": 10.95,
+        "2018": -0.05,
+        "2019": 9.99,
+        "2020": 11.48,
+        "2021": 6.21,
+        "2022": -4.25,
+        "2023": 13.88,
+        "2024": 8.33
+      },
+      "bench_year_returns_pct": {
+        "2008": -36.8,
+        "2009": 26.35,
+        "2010": 15.06,
+        "2011": 1.89,
+        "2012": 15.99,
+        "2013": 32.31,
+        "2014": 13.46,
+        "2015": 1.23,
+        "2016": 12.0,
+        "2017": 21.71,
+        "2018": -4.57,
+        "2019": 31.22,
+        "2020": 18.33,
+        "2021": 28.73,
+        "2022": -18.18,
+        "2023": 26.18,
+        "2024": 24.89
+      },
+      "corr_with_bench": 0.5657
+    }
+  }
+}

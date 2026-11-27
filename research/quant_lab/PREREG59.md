@@ -54,3 +54,22 @@ calendar-year returns, 2008 and 2022 returns vs benchmark, correlation with the 
 ## Decision
 PASS for a trial = all 5 rules. A passing trial still needs a separate pre-registered confirmation on
 2025-01-01 onward before any paper use. FAIL = no reruns or variants.
+
+## Result (run once, 2026-11-27; results/round59.json): **both FAIL**
+
+| | CAGR | Sharpe | Max DD | DSR(840) | 2023-24 | Stress CAGR | Failed rules |
+|---|---|---|---|---|---|---|---|
+| E1 multi-asset (27 ETFs) | 3.8% | 0.876 | -7.6% | 0.653 | +17.5% | 2.2% | 3, 4 |
+| 60% SPY / 40% IEF | 8.1% | 0.736 | -30.8% | | +33.6% | | |
+| E2 equity-only (19 ETFs) | 3.9% | 0.616 | -10.7% | 0.257 | +23.4% | 2.4% | 1, 3, 4 |
+| Buy-and-hold SPY | 10.6% | 0.604 | -51.9% | | +57.6% | | |
+
+- The rotation is an excellent drawdown cutter: 2008 +0.1% (E1) and -6.3% (E2) vs -16.7% / -36.8%;
+  2022 -0.8% / -4.3% vs -16.4% / -18.2%. Max DD falls from -31% to -8% and from -52% to -11%.
+- The cost is return: average exposure is only 48% (inverse-vol weights x trend positions x taper), so
+  CAGR is about 4% against 8-11%. E1 clears the Sharpe edge (+0.14) but not DSR 0.80; E2 has no Sharpe edge.
+- Same lesson as PREREG48: the crypto trend rule protects on stocks but gives up too much return, because
+  stock uptrends are slower and steadier than crypto's, so the SMA50 exits and re-entries cost more than
+  they save outside 2008 and 2022.
+- As pre-registered, the trend-on-ETFs family is closed again: no variants (more leverage to restore
+  return, other universes or settings). Repo counter 838 -> 840. The 2025+ holdout stays unread.
