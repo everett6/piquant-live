@@ -17,26 +17,26 @@ import (
 
 // Variant is a frozen PREREG6 strategy definition.
 type Variant struct {
-	Name         string  `json:"name"`
-	Lev          float64 `json:"lev"`                     // position when trend holds (0 when not); BH holds Lev always
-	FeeBps       float64 `json:"fee_bps"`                 // per unit of turnover
-	SlipBps      float64 `json:"slip_bps"`                // per unit of turnover
-	FundingBpsH  float64 `json:"funding_bps_h"`           // per hour per unit of |position|
-	SMA          int     `json:"sma"`                     // 0 = always hold (benchmark)
-	KillDD       float64 `json:"kill_dd"`                 // stop the variant at this drawdown from peak (0 = never)
-	Pair         bool    `json:"pair,omitempty"`          // PREREG11: half BTC, half ETH sleeve, each Lev when above its own SMA
-	ExitSMA      int     `json:"exit_sma,omitempty"`      // PREREG13 R3: also exit below SMA(ExitSMA); enter only at/above it
-	DailyStop    float64 `json:"daily_stop,omitempty"`    // flatten at the close of a day losing this fraction (re-enter next close)
-	Capital      float64 `json:"capital,omitempty"`       // display only: starting dollars for equity_usd
-	Pullback     bool    `json:"pullback,omitempty"`      // PREREG16 D2: 15% pullback above SMA200; exit > SMA20 or day 10
-	Clocks       bool    `json:"clocks,omitempty"`        // PREREG30 E4: four daily clocks on 6-hour bars (stepped by AdvanceGrid)
-	Tunnel       bool    `json:"tunnel,omitempty"`        // PREREG34 QB: size = Lev * (1 - exp(-2 ln(close/SMA) / sigma30)) above the SMA
-	Coherence    bool    `json:"coherence,omitempty"`     // PREREG35 QD: size = Lev * (1 - exp(-age / 5)), age = closes in a row above the SMA
-	TaperStart   float64 `json:"taper_start,omitempty"`   // PREREG36: drawdown where soft taper starts (e.g. 0.10)
-	TaperFull    float64 `json:"taper_full,omitempty"`    // PREREG36: drawdown where soft taper reaches TaperFloor (e.g. 0.28)
-	TaperFloor   float64 `json:"taper_floor,omitempty"`   // PREREG36: minimum leverage multiplier above TaperFull (e.g. 0.40)
-	VolTarget    float64 `json:"vol_target,omitempty"`    // PREREG44: balance leverage in [1.0x, Lev] via clip(VolTarget/annVol20d, 1/Lev, 1)
-	VolHarvester bool    `json:"vol_harvester,omitempty"` // PREREG44: counter-volatility dip harvesting on SMA=0 Buy-and-Hold
+	Name          string  `json:"name"`
+	Lev           float64 `json:"lev"`                      // position when trend holds (0 when not); BH holds Lev always
+	FeeBps        float64 `json:"fee_bps"`                  // per unit of turnover
+	SlipBps       float64 `json:"slip_bps"`                 // per unit of turnover
+	FundingBpsH   float64 `json:"funding_bps_h"`            // per hour per unit of |position|
+	SMA           int     `json:"sma"`                      // 0 = always hold (benchmark)
+	KillDD        float64 `json:"kill_dd"`                  // stop the variant at this drawdown from peak (0 = never)
+	Pair          bool    `json:"pair,omitempty"`           // PREREG11: half BTC, half ETH sleeve, each Lev when above its own SMA
+	ExitSMA       int     `json:"exit_sma,omitempty"`       // PREREG13 R3: also exit below SMA(ExitSMA); enter only at/above it
+	DailyStop     float64 `json:"daily_stop,omitempty"`     // flatten at the close of a day losing this fraction (re-enter next close)
+	Capital       float64 `json:"capital,omitempty"`        // display only: starting dollars for equity_usd
+	Pullback      bool    `json:"pullback,omitempty"`       // PREREG16 D2: 15% pullback above SMA200; exit > SMA20 or day 10
+	Clocks        bool    `json:"clocks,omitempty"`         // PREREG30 E4: four daily clocks on 6-hour bars (stepped by AdvanceGrid)
+	Tunnel        bool    `json:"tunnel,omitempty"`         // PREREG34 QB: size = Lev * (1 - exp(-2 ln(close/SMA) / sigma30)) above the SMA
+	Coherence     bool    `json:"coherence,omitempty"`      // PREREG35 QD: size = Lev * (1 - exp(-age / 5)), age = closes in a row above the SMA
+	TaperStart    float64 `json:"taper_start,omitempty"`    // PREREG36: drawdown where soft taper starts (e.g. 0.10)
+	TaperFull     float64 `json:"taper_full,omitempty"`     // PREREG36: drawdown where soft taper reaches TaperFloor (e.g. 0.28)
+	TaperFloor    float64 `json:"taper_floor,omitempty"`    // PREREG36: minimum leverage multiplier above TaperFull (e.g. 0.40)
+	VolTarget     float64 `json:"vol_target,omitempty"`     // PREREG44: balance leverage in [1.0x, Lev] via clip(VolTarget/annVol20d, 1/Lev, 1)
+	VolHarvester  bool    `json:"vol_harvester,omitempty"`  // PREREG44: counter-volatility dip harvesting on SMA=0 Buy-and-Hold
 	TriAsset      bool    `json:"tri_asset,omitempty"`      // PREREG51/56/57: BTC + ETH + SOL risk-parity spot
 	DualMomGate   bool    `json:"dual_mom_gate,omitempty"`  // PREREG53/54: zero coin if blended 7/28/60d momentum <= 0
 	CrashBrake    bool    `json:"crash_brake,omitempty"`    // Subagent 2: 5d/30d Garman-Klass range-vol crash brake
@@ -188,11 +188,15 @@ func sma(h []Day, n int) (float64, bool) {
 	return s / float64(n), true
 }
 
+func validPrice(x float64) bool {
+	return x > 0 && !math.IsNaN(x) && !math.IsInf(x, 0)
+}
+
 // Seed loads pre-registration closes for the SMA without touching any ledger (forward test starts after).
 func (st *State) Seed(days []Day) {
 	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
 	for _, d := range days {
-		if d.Close > 0 && d.Date > st.LastDate {
+		if validPrice(d.Close) && d.Date > st.LastDate {
 			st.History = append(st.History, d)
 			st.LastDate = d.Date
 		}
@@ -208,7 +212,7 @@ func (st *State) Advance(days []Day) int {
 	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
 	n := 0
 	for _, d := range days {
-		if d.Close <= 0 || d.Date <= st.LastDate {
+		if !validPrice(d.Close) || d.Date <= st.LastDate {
 			continue
 		}
 		var prev float64
@@ -262,7 +266,7 @@ func prependOlder(h, days []Day) []Day {
 	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
 	var old []Day
 	for _, d := range days {
-		if d.Close > 0 && d.Date < h[0].Date {
+		if validPrice(d.Close) && d.Date < h[0].Date {
 			old = append(old, d)
 		}
 	}
@@ -276,7 +280,7 @@ func prependOlder(h, days []Day) []Day {
 func (st *State) SeedETH(days []Day) {
 	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
 	for _, d := range days {
-		if d.Close > 0 && d.Date > st.ETHLast {
+		if validPrice(d.Close) && d.Date > st.ETHLast {
 			st.ETHHistory = append(st.ETHHistory, d)
 			st.ETHLast = d.Date
 		}
@@ -290,7 +294,7 @@ func (st *State) AdvanceETH(days []Day) int {
 	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
 	n := 0
 	for _, d := range days {
-		if d.Close <= 0 || d.Date <= st.ETHLast || d.Date > st.LastDate {
+		if !validPrice(d.Close) || d.Date <= st.ETHLast || d.Date > st.LastDate {
 			continue
 		}
 		bi := -1
@@ -334,7 +338,7 @@ func (st *State) AdvanceETH(days []Day) int {
 func (st *State) SeedSOL(days []Day) {
 	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
 	for _, d := range days {
-		if d.Close > 0 && d.Date > st.SOLLast {
+		if validPrice(d.Close) && d.Date > st.SOLLast {
 			st.SOLHistory = append(st.SOLHistory, d)
 			st.SOLLast = d.Date
 		}
@@ -353,7 +357,7 @@ func (st *State) AdvanceSOL(days []Day) int {
 	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
 	n := 0
 	for _, d := range days {
-		if d.Close <= 0 || d.Date <= st.SOLLast || d.Date > st.LastDate || d.Date > st.ETHLast {
+		if !validPrice(d.Close) || d.Date <= st.SOLLast || d.Date > st.LastDate || d.Date > st.ETHLast {
 			continue
 		}
 		bi := -1
@@ -633,7 +637,10 @@ func (l *Ledger) stepPair(date string, barB, barE float64, histB, histE []Day) {
 	if l.Equity > l.Peak {
 		l.Peak = l.Equity
 	}
-	dd := 1 - l.Equity/l.Peak
+	dd := 0.0
+	if l.Peak > 0 {
+		dd = 1 - l.Equity/l.Peak
+	}
 	if dd > l.MaxDD {
 		l.MaxDD = dd
 	}
@@ -751,7 +758,10 @@ func (l *Ledger) stepTri(date string, barB, barE, barS float64, histB, histE, hi
 	if l.Equity > l.Peak {
 		l.Peak = l.Equity
 	}
-	dd := 1 - l.Equity/l.Peak
+	dd := 0.0
+	if l.Peak > 0 {
+		dd = 1 - l.Equity/l.Peak
+	}
 	if dd > l.MaxDD {
 		l.MaxDD = dd
 	}
@@ -814,7 +824,10 @@ func (l *Ledger) step(date string, bar float64, hist []Day) {
 	if l.Equity > l.Peak {
 		l.Peak = l.Equity
 	}
-	dd := 1 - l.Equity/l.Peak
+	dd := 0.0
+	if l.Peak > 0 {
+		dd = 1 - l.Equity/l.Peak
+	}
 	if dd > l.MaxDD {
 		l.MaxDD = dd
 	}

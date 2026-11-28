@@ -73,7 +73,7 @@ func (l *Ledger) TaxRows(capital float64) (rows []TaxRow, open []OpenLot, skippe
 	var lastDate string
 	lastClose := make([]float64, len(coins))
 	eqPrev := 1.0
-	if len(l.Days) > 0 {
+	if len(l.Days) > 0 && 1+l.Days[0].Ret > 0 {
 		eqPrev = l.Days[0].Equity / (1 + l.Days[0].Ret)
 	}
 
@@ -166,6 +166,12 @@ func (l *Ledger) TaxRows(capital float64) (rows []TaxRow, open []OpenLot, skippe
 }
 
 func heldOverYear(opened, closed string) bool {
+	if len(opened) >= 10 {
+		opened = opened[:10]
+	}
+	if len(closed) >= 10 {
+		closed = closed[:10]
+	}
 	a, err1 := time.Parse("2006-01-02", opened)
 	b, err2 := time.Parse("2006-01-02", closed)
 	return err1 == nil && err2 == nil && b.After(a.AddDate(1, 0, 0))

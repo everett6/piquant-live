@@ -110,19 +110,75 @@ func ComputeS36Blend(st *State, carryState *carry.State, dtb3ByDate map[string]f
 	return ComputeWeightedBlend(st, carryState, dtb3ByDate, []BlendLeg{{Variant: trendVariant, Weight: S36TrendShare}}, S36CarryShare, trendVariant, outName, plan)
 }
 
+type blendSpec struct {
+	legs       []BlendLeg
+	carryShare float64
+	trendLabel string
+	outName    string
+}
+
+var (
+	blendQ42DualSpec = blendSpec{
+		legs:       []BlendLeg{{Variant: "Q42_safe_qd_spot_1x", Weight: 0.30}, {Variant: "Q42_r3_fastexit_qd_spot_1x", Weight: 0.30}},
+		carryShare: 0.40,
+		trendLabel: "Q42_safe_qd_spot_1x+Q42_r3_fastexit_qd_spot_1x",
+		outName:    "Q42_dualspeed_60_40_carry_spot",
+	}
+	blendQ42BalSpec = blendSpec{
+		legs:       []BlendLeg{{Variant: "Q42_safe_qd_spot_1x", Weight: 0.50}},
+		carryShare: 0.50,
+		trendLabel: "Q42_safe_qd_spot_1x",
+		outName:    "Q42_balanced_50_50_carry_spot",
+	}
+	blendQ44HarvSpec = blendSpec{
+		legs:       []BlendLeg{{Variant: "Q44_bh_vol_harvester_spot_1x", Weight: 0.20}, {Variant: "Q44_qd_vol_1x_2p5x_spot", Weight: 0.55}},
+		carryShare: 0.25,
+		trendLabel: "Q44_bh_vol_harvester_spot_1x+Q44_qd_vol_1x_2p5x_spot",
+		outName:    "Q44_bh_vol_harvester_1x_2p5x_spot",
+	}
+	blendQ44BarbSpec = blendSpec{
+		legs: []BlendLeg{
+			{Variant: "Q44_bh_vol_harvester_spot_1x", Weight: 0.25},
+			{Variant: "Q44_qd_vol_1x_2p5x_spot", Weight: 0.25},
+			{Variant: "Q44_dualspeed_r3_1x_2p5x_spot", Weight: 0.25},
+		},
+		carryShare: 0.25,
+		trendLabel: "Q44_bh_vol_harvester_spot_1x+Q44_qd_vol_1x_2p5x_spot+Q44_dualspeed_r3_1x_2p5x_spot",
+		outName:    "Q44_barbell_1x_bh_2p5x_dualspeed_spot",
+	}
+	blendQ51Spec = blendSpec{
+		legs:       []BlendLeg{{Variant: "Q51_btc_eth_sol_volparity_spot", Weight: 0.60}},
+		carryShare: 0.40,
+		trendLabel: "Q51_btc_eth_sol_volparity_spot",
+		outName:    "Q51_btc_eth_sol_volparity_spot",
+	}
+	blendQ56Spec = blendSpec{
+		legs:       []BlendLeg{{Variant: "Q56_quantum_fast_spot_1x", Weight: 0.60}},
+		carryShare: 0.40,
+		trendLabel: "Q56_quantum_fast_spot_1x",
+		outName:    "Q56_quantum_fast_carry_spot",
+	}
+	blendQ57Spec = blendSpec{
+		legs:       []BlendLeg{{Variant: "Q57_hrp_hurst_conformal_spot_1x", Weight: 0.60}},
+		carryShare: 0.40,
+		trendLabel: "Q57_hrp_hurst_conformal_spot_1x",
+		outName:    "Q57_hrp_hurst_conformal_carry_spot",
+	}
+)
+
+func evalBlendSpec(st *State, carryState *carry.State, dtb3ByDate map[string]float64, sp blendSpec, plan *execution.PingExecutionPlan) (BlendSummary, bool) {
+	return ComputeWeightedBlend(st, carryState, dtb3ByDate, sp.legs, sp.carryShare, sp.trendLabel, sp.outName, plan)
+}
+
 // ComputeQ42Blends returns the two PREREG42 PASS low-expected-drawdown spot portfolios:
 //   - Q42_dualspeed_60_40_carry_spot (30% Safe-QD + 30% R3_FastExit_QD + 40% C1 Carry + DTB3)
 //   - Q42_balanced_50_50_carry_spot  (50% Safe-QD + 50% C1 Carry + DTB3)
 func ComputeQ42Blends(st *State, carryState *carry.State, dtb3ByDate map[string]float64, plan *execution.PingExecutionPlan) []BlendSummary {
 	var out []BlendSummary
-	if dual, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
-		[]BlendLeg{{Variant: "Q42_safe_qd_spot_1x", Weight: 0.30}, {Variant: "Q42_r3_fastexit_qd_spot_1x", Weight: 0.30}},
-		0.40, "Q42_safe_qd_spot_1x+Q42_r3_fastexit_qd_spot_1x", "Q42_dualspeed_60_40_carry_spot", plan); ok {
+	if dual, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ42DualSpec, plan); ok {
 		out = append(out, dual)
 	}
-	if bal, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
-		[]BlendLeg{{Variant: "Q42_safe_qd_spot_1x", Weight: 0.50}},
-		0.50, "Q42_safe_qd_spot_1x", "Q42_balanced_50_50_carry_spot", plan); ok {
+	if bal, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ42BalSpec, plan); ok {
 		out = append(out, bal)
 	}
 	return out
@@ -133,18 +189,10 @@ func ComputeQ42Blends(st *State, carryState *carry.State, dtb3ByDate map[string]
 //   - Q44_barbell_1x_bh_2p5x_dualspeed_spot   (25% BH Vol-Harvester + 25% 1x..2.5x QD + 25% 1x..2.5x R3 + 25% C1 Carry + DTB3)
 func ComputeQ44Blends(st *State, carryState *carry.State, dtb3ByDate map[string]float64, plan *execution.PingExecutionPlan) []BlendSummary {
 	var out []BlendSummary
-	if harv, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
-		[]BlendLeg{{Variant: "Q44_bh_vol_harvester_spot_1x", Weight: 0.20}, {Variant: "Q44_qd_vol_1x_2p5x_spot", Weight: 0.55}},
-		0.25, "Q44_bh_vol_harvester_spot_1x+Q44_qd_vol_1x_2p5x_spot", "Q44_bh_vol_harvester_1x_2p5x_spot", plan); ok {
+	if harv, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ44HarvSpec, plan); ok {
 		out = append(out, harv)
 	}
-	if barb, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
-		[]BlendLeg{
-			{Variant: "Q44_bh_vol_harvester_spot_1x", Weight: 0.25},
-			{Variant: "Q44_qd_vol_1x_2p5x_spot", Weight: 0.25},
-			{Variant: "Q44_dualspeed_r3_1x_2p5x_spot", Weight: 0.25},
-		},
-		0.25, "Q44_bh_vol_harvester_spot_1x+Q44_qd_vol_1x_2p5x_spot+Q44_dualspeed_r3_1x_2p5x_spot", "Q44_barbell_1x_bh_2p5x_dualspeed_spot", plan); ok {
+	if barb, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ44BarbSpec, plan); ok {
 		out = append(out, barb)
 	}
 	return out
@@ -153,9 +201,7 @@ func ComputeQ44Blends(st *State, carryState *carry.State, dtb3ByDate map[string]
 // ComputeQ51Blends returns the PREREG51 BTC+ETH+SOL inverse-vol-parity spot blend (60% trend + 40% C1 Carry + DTB3).
 func ComputeQ51Blends(st *State, carryState *carry.State, dtb3ByDate map[string]float64, plan *execution.PingExecutionPlan) []BlendSummary {
 	var out []BlendSummary
-	if q51, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
-		[]BlendLeg{{Variant: "Q51_btc_eth_sol_volparity_spot", Weight: 0.60}},
-		0.40, "Q51_btc_eth_sol_volparity_spot", "Q51_btc_eth_sol_volparity_spot", plan); ok {
+	if q51, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ51Spec, plan); ok {
 		out = append(out, q51)
 	}
 	return out
@@ -164,9 +210,7 @@ func ComputeQ51Blends(st *State, carryState *carry.State, dtb3ByDate map[string]
 // ComputeQ56Blends returns the PREREG56 synthesized Quantum + Garman-Klass Crash Brake + Dual-Mom + 3% Buffer spot blend.
 func ComputeQ56Blends(st *State, carryState *carry.State, dtb3ByDate map[string]float64, plan *execution.PingExecutionPlan) []BlendSummary {
 	var out []BlendSummary
-	if q56, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
-		[]BlendLeg{{Variant: "Q56_quantum_fast_spot_1x", Weight: 0.60}},
-		0.40, "Q56_quantum_fast_spot_1x", "Q56_quantum_fast_carry_spot", plan); ok {
+	if q56, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ56Spec, plan); ok {
 		out = append(out, q56)
 	}
 	return out
@@ -175,9 +219,7 @@ func ComputeQ56Blends(st *State, carryState *carry.State, dtb3ByDate map[string]
 // ComputeQ57Blends returns the PREREG57 HRP + Hurst Variogram + Pre-2024 Frozen Split-Conformal Conviction spot blend.
 func ComputeQ57Blends(st *State, carryState *carry.State, dtb3ByDate map[string]float64, plan *execution.PingExecutionPlan) []BlendSummary {
 	var out []BlendSummary
-	if q57, ok := ComputeWeightedBlend(st, carryState, dtb3ByDate,
-		[]BlendLeg{{Variant: "Q57_hrp_hurst_conformal_spot_1x", Weight: 0.60}},
-		0.40, "Q57_hrp_hurst_conformal_spot_1x", "Q57_hrp_hurst_conformal_carry_spot", plan); ok {
+	if q57, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ57Spec, plan); ok {
 		out = append(out, q57)
 	}
 	return out
@@ -186,45 +228,33 @@ func ComputeQ57Blends(st *State, carryState *carry.State, dtb3ByDate map[string]
 // SelectBlend resolves one named portfolio ("q42_dualspeed", "q42_balanced", "q44_bh_harvester", "q44_barbell", "q51_volparity", "q56_quantum_fast", "q57_hrp_hurst", "s36_spot", or "s36_fut")
 // into a composite BlendSummary, defaulting to Q42_dualspeed_60_40_carry_spot when available.
 func SelectBlend(st *State, carryState *carry.State, dtb3ByDate map[string]float64, selector string, plan *execution.PingExecutionPlan) (BlendSummary, bool) {
-	all := append(ComputeQ42Blends(st, carryState, dtb3ByDate, plan), ComputeQ44Blends(st, carryState, dtb3ByDate, plan)...)
-	all = append(all, ComputeQ51Blends(st, carryState, dtb3ByDate, plan)...)
-	all = append(all, ComputeQ56Blends(st, carryState, dtb3ByDate, plan)...)
-	all = append(all, ComputeQ57Blends(st, carryState, dtb3ByDate, plan)...)
-	findBlend := func(name string) (BlendSummary, bool) {
-		for _, b := range all {
-			if b.Name == name {
-				return b, true
-			}
-		}
-		return BlendSummary{}, false
-	}
 	switch strings.ToLower(strings.TrimSpace(selector)) {
 	case "", "q42", "q42_dualspeed", "q42_dualspeed_60_40_carry_spot":
-		if b, ok := findBlend("Q42_dualspeed_60_40_carry_spot"); ok {
+		if b, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ42DualSpec, plan); ok {
 			return b, true
 		}
 	case "q42_balanced", "q42_balanced_50_50_carry_spot":
-		if b, ok := findBlend("Q42_balanced_50_50_carry_spot"); ok {
+		if b, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ42BalSpec, plan); ok {
 			return b, true
 		}
 	case "q44", "q44_bh_harvester", "q44_bh_vol_harvester_1x_2p5x_spot":
-		if b, ok := findBlend("Q44_bh_vol_harvester_1x_2p5x_spot"); ok {
+		if b, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ44HarvSpec, plan); ok {
 			return b, true
 		}
 	case "q44_barbell", "q44_barbell_1x_bh_2p5x_dualspeed_spot":
-		if b, ok := findBlend("Q44_barbell_1x_bh_2p5x_dualspeed_spot"); ok {
+		if b, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ44BarbSpec, plan); ok {
 			return b, true
 		}
 	case "q51", "q51_volparity", "q51_btc_eth_sol_volparity_spot":
-		if b, ok := findBlend("Q51_btc_eth_sol_volparity_spot"); ok {
+		if b, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ51Spec, plan); ok {
 			return b, true
 		}
 	case "q56", "q56_quantum_fast", "q56_quantum_fast_carry_spot":
-		if b, ok := findBlend("Q56_quantum_fast_carry_spot"); ok {
+		if b, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ56Spec, plan); ok {
 			return b, true
 		}
 	case "q57", "q57_hrp_hurst", "q57_hrp_conformal", "q57_hrp_hurst_conformal", "q57_hrp_hurst_conformal_carry_spot":
-		if b, ok := findBlend("Q57_hrp_hurst_conformal_carry_spot"); ok {
+		if b, ok := evalBlendSpec(st, carryState, dtb3ByDate, blendQ57Spec, plan); ok {
 			return b, true
 		}
 	case "s36", "s36_spot", "s36_qd_carry_blend_spot":
@@ -289,17 +319,24 @@ func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[str
 		}, true
 	}
 
-	extraByDate := make([]map[string]DayRec, len(legs))
-	for li := 1; li < len(legs); li++ {
-		m := make(map[string]DayRec, len(ledgers[li].Days))
-		for _, rec := range ledgers[li].Days {
-			m[rec.Date] = rec
+	// Fast path: single leg, no carry -> avoid all heap allocations
+	singleLegNoCarry := len(legs) == 1 && carryState == nil && carryShare == 0
+
+	var extraByDate []map[string]DayRec
+	if !singleLegNoCarry && len(legs) > 1 {
+		extraByDate = make([]map[string]DayRec, len(legs))
+		for li := 1; li < len(legs); li++ {
+			m := make(map[string]DayRec, len(ledgers[li].Days))
+			for _, rec := range ledgers[li].Days {
+				m[rec.Date] = rec
+			}
+			extraByDate[li] = m
 		}
-		extraByDate[li] = m
 	}
 
-	carryRet := map[string]float64{}
+	var carryRet map[string]float64
 	if carryState != nil {
+		carryRet = make(map[string]float64, len(carryState.Days))
 		for _, d := range carryState.Days {
 			carryRet[d.Date] = d.Ret
 		}
@@ -329,16 +366,45 @@ func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[str
 	sumDD2 := 0.0
 	curUW := 0
 	maxUW := 0
-	dds := make([]float64, 0, len(baseDays))
-	rets := make([]float64, 0, len(baseDays))
 	matchedCarry := 0
 	prevIdleCash := 0.0
 	prevRate := 0.0
 	var lastB, lastE, lastS, prevB, prevE, prevS float64
 
+	// Stack-allocated buffers for single-leg no-carry case
+	var ddsBuf [512]float64
+	var retsBuf [512]float64
+	var dds, rets []float64
+	if singleLegNoCarry && len(baseDays) <= len(ddsBuf) {
+		dds = ddsBuf[:0]
+		rets = retsBuf[:0]
+	} else {
+		dds = make([]float64, 0, len(baseDays))
+		rets = make([]float64, 0, len(baseDays))
+	}
+
+	var legFactorsBuf [4]float64
+	var legFactors []float64
+	if len(legs) <= len(legFactorsBuf) {
+		legFactors = legFactorsBuf[:len(legs)]
+	} else {
+		legFactors = make([]float64, len(legs))
+	}
+	for li := range legs {
+		if ledgers[li].Variant.TriAsset {
+			legFactors[li] = 1.0
+		} else {
+			legFactors[li] = 0.5
+		}
+	}
+	f0 := legFactors[0]
+
 	for i, d := range baseDays {
 		curRate := lookupRate(d.Date)
-		cRet, hasCarry := carryRet[d.Date]
+		cRet, hasCarry := 0.0, false
+		if carryRet != nil {
+			cRet, hasCarry = carryRet[d.Date]
+		}
 		if hasCarry {
 			matchedCarry++
 		}
@@ -347,13 +413,6 @@ func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[str
 			bills = prevIdleCash * (prevRate / 100.0 / 365.0)
 		}
 
-		legFactor := func(li int) float64 {
-			if ledgers[li].Variant.TriAsset {
-				return 1.0
-			}
-			return 0.5
-		}
-		f0 := legFactor(0)
 		trendRet := legs[0].Weight * d.Ret
 		weightedPos := legs[0].Weight * d.PosOut
 		posB := f0 * legs[0].Weight * d.PosB * 100
@@ -364,7 +423,7 @@ func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[str
 		}
 		for li := 1; li < len(legs); li++ {
 			if rec, ok := extraByDate[li][d.Date]; ok {
-				fi := legFactor(li)
+				fi := legFactors[li]
 				trendRet += legs[li].Weight * rec.Ret
 				weightedPos += legs[li].Weight * rec.PosOut
 				posB += fi * legs[li].Weight * rec.PosB * 100
@@ -413,7 +472,7 @@ func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[str
 	n := float64(len(baseDays))
 	meanDD := sumDD / n
 	ulcer := math.Sqrt(sumDD2 / n)
-	cdar95 := computeCDaR95(dds)
+	cdar95 := computeCDaR95InPlace(dds)
 	delta := math.Abs(lastB-prevB) + math.Abs(lastE-prevE) + math.Abs(lastS-prevS)
 
 	// Annualized Sharpe across daily blend returns.
@@ -427,7 +486,10 @@ func ComputeWeightedBlend(st *State, carryState *carry.State, dtb3ByDate map[str
 		rn := float64(len(rets))
 		mu := mean / rn
 		v := (s2 - rn*mu*mu) / (rn - 1)
-		if v > 0 {
+		// Guard against near-zero variance (exploding Sharpe) and numerical noise.
+		// Minimum annualized variance floor: ~0.5% daily vol -> 0.005^2 * 365 = 0.0091
+		const minAnnVar = 1e-6
+		if v > minAnnVar/365.0 {
 			sharpe = mu / math.Sqrt(v) * math.Sqrt(365)
 		}
 	}
@@ -472,18 +534,35 @@ func computeCDaR95(dds []float64) float64 {
 		return 0
 	}
 	sorted := append([]float64(nil), dds...)
-	sort.Float64s(sorted)
+	return computeCDaR95InPlace(sorted)
+}
+
+func computeCDaR95InPlace(sorted []float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	// Filter out NaN values before sorting to avoid NaN propagation
+	filtered := sorted[:0]
+	for _, v := range sorted {
+		if !math.IsNaN(v) && !math.IsInf(v, 0) {
+			filtered = append(filtered, v)
+		}
+	}
+	if len(filtered) == 0 {
+		return 0
+	}
+	sort.Float64s(filtered)
 	// Linear-interpolated 95th percentile (matches numpy.percentile(dd, 95)), then mean of tail >= p95.
-	pos := 0.95 * float64(len(sorted)-1)
+	pos := 0.95 * float64(len(filtered)-1)
 	lo := int(math.Floor(pos))
 	hi := int(math.Ceil(pos))
-	p95 := sorted[lo]
+	p95 := filtered[lo]
 	if hi > lo {
-		p95 += (pos - float64(lo)) * (sorted[hi] - sorted[lo])
+		p95 += (pos - float64(lo)) * (filtered[hi] - filtered[lo])
 	}
 	var sum float64
 	var cnt int
-	for _, d := range sorted {
+	for _, d := range filtered {
 		if d >= p95 {
 			sum += d
 			cnt++

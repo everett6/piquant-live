@@ -236,3 +236,155 @@ func BenchmarkStepTriQ57(b *testing.B) {
 		l.stepTri("2026-04-10", barB, barE, barS, dB, dE, dS)
 	}
 }
+
+func TestHRPWeights3x3ZeroVarianceAndNaN(t *testing.T) {
+	// All zero variance -> uniform weights
+	n := 60
+	zero := make([]float64, n)
+	w0, w1, w2 := hrpWeights3x3Matrix(zero, zero, zero)
+	if math.Abs(w0-1.0/3.0) > 1e-12 || math.Abs(w1-1.0/3.0) > 1e-12 || math.Abs(w2-1.0/3.0) > 1e-12 {
+		t.Fatalf("all-zero HRP weights = (%v, %v, %v), want uniform 1/3", w0, w1, w2)
+	}
+	
+	// One active, two zero
+	r0 := make([]float64, n)
+	for i := 0; i < n; i++ {
+		r0[i] = 0.01 * math.Sin(float64(i)*0.1)
+	}
+	a0, a1, a2 := hrpWeights3x3Matrix(r0, zero, zero)
+	if math.Abs(a0-1.0) > 1e-12 || a1 != 0 || a2 != 0 {
+		t.Fatalf("1-active HRP weights = (%v, %v, %v), want (1, 0, 0)", a0, a1, a2)
+	}
+	
+	// NaN in returns -> treated as 0 deviation from mean
+	rNaN := make([]float64, n)
+	copy(rNaN, r0)
+	rNaN[10] = math.NaN()
+	rNaN[20] = math.Inf(1)
+	b0, b1, b2 := hrpWeights3x3Matrix(rNaN, r0, r0)
+	if math.IsNaN(b0) || math.IsNaN(b1) || math.IsNaN(b2) || math.IsInf(b0, 0) || math.IsInf(b1, 0) || math.IsInf(b2, 0) {
+		t.Fatalf("NaN/Inf input produced non-finite weights: (%v, %v, %v)", b0, b1, b2)
+	}
+	if math.Abs(b0+b1+b2-1.0) > 1e-9 {
+		t.Fatalf("NaN input weights don't sum to 1: %v", b0+b1+b2)
+	}
+}
+
+func TestRollingHurstVariogramEdgeCases(t *testing.T) {
+	// Flat prices -> Hurst = 0.5 (random walk)
+	flat := makeOHLCDays("2026-01-01", make([]float64, 100), 0.0)
+	for i := range flat {
+		flat[i].Close = 100.0
+	}
+	h, ok := rollingHurstVariogram(flat, 64)
+	if !ok || math.Abs(h-0.01) > 1e-9 {
+		t.Fatalf("flat prices Hurst = %v ok=%v, want 0.01", h, ok)
+	}
+	
+	// Very short history (< window) -> returns 0.5, false
+	short := makeOHLCDays("2026-01-01", []float64{100, 101, 102}, 0.01)
+	h, ok = rollingHurstVariogram(short, 64)
+	if ok || math.Abs(h-0.5) > 1e-9 {
+		t.Fatalf("short history Hurst = %v ok=%v, want 0.5 false", h, ok)
+	}
+	
+	// Window <= 16 -> returns 0.5, false
+	h, ok = rollingHurstVariogram(flat, 10)
+	if ok || math.Abs(h-0.5) > 1e-9 {
+		t.Fatalf("small window Hurst = %v ok=%v, want 0.5 false", h, ok)
+	}
+	
+	// Zero or negative close -> returns 0.5, false
+	badClose := makeOHLCDays("2026-01-01", []float64{100, 101, 0, 103}, 0.01)
+	h, ok = rollingHurstVariogram(badClose, 64)
+	if ok || math.Abs(h-0.5) > 1e-9 {
+		t.Fatalf("zero close Hurst = %v ok=%v, want 0.5 false", h, ok)
+	}
+}
+
+func TestRollingBasketHurstVariogramEdgeCases(t *testing.T) {
+	// Mismatched lengths -> returns 0.5, false
+	hB := makeOHLCDays("2026-01-01", []float64{100, 101, 102, 103, 104}, 0.01)
+	hE := makeOHLCDays("2026-01-01", []float64{50, 51}, 0.01)
+	hS := makeOHLCDays("2026-01-01", []float64{20, 21, 22, 23, 24}, 0.01)
+	h, ok := rollingBasketHurstVariogram(hB, hE, hS, 64)
+	if ok || math.Abs(h-0.5) > 1e-9 {
+		t.Fatalf("mismatched lengths Hurst = %v ok=%v, want 0.5 false", h, ok)
+	}
+	
+	// Zero close in any asset -> returns 0.5, false
+	hB = makeOHLCDays("2026-01-01", make([]float64, 70), 0.01)
+	hE = makeOHLCDays("2026-01-01", make([]float64, 70), 0.01)
+	hS = makeOHLCDays("2026-01-01", make([]float64, 70), 0.01)
+	for i := range hB {
+		hB[i].Close = 100 + float64(i)*0.1
+		hE[i].Close = 50 + float64(i)*0.05
+		hS[i].Close = 20 + float64(i)*0.02
+	}
+	hS[35].Close = 0
+	h, ok = rollingBasketHurstVariogram(hB, hE, hS, 64)
+	if ok || math.Abs(h-0.5) > 1e-9 {
+		t.Fatalf("zero close in SOL Hurst = %v ok=%v, want 0.5 false", h, ok)
+	}
+}
+
+func TestConformalConvictionGateScoreEdgeCases(t *testing.T) {
+	// NaN/Inf inputs -> sanitized to defaults
+	g := conformalConvictionGateScore(math.NaN(), math.NaN(), math.NaN())
+	if g < conformalGateFloor || g > 1.0 || math.IsNaN(g) || math.IsInf(g, 0) {
+		t.Fatalf("NaN inputs gate = %v, want in [0.45, 1.0]", g)
+	}
+	g = conformalConvictionGateScore(math.Inf(1), math.Inf(-1), math.Inf(1))
+	if g < conformalGateFloor || g > 1.0 || math.IsNaN(g) || math.IsInf(g, 0) {
+		t.Fatalf("Inf inputs gate = %v, want in [0.45, 1.0]", g)
+	}
+	
+	// Extreme values that could cause overflow in logistic
+	g = conformalConvictionGateScore(100.0, -100.0, 100.0)
+	if g < conformalGateFloor || g > 1.0 || math.IsNaN(g) || math.IsInf(g, 0) {
+		t.Fatalf("extreme inputs gate = %v, want in [0.45, 1.0]", g)
+	}
+	
+	// Trend preserve threshold
+	g = conformalConvictionGateScore(0.5, 0.0, conformalTrendPreserve)
+	if g != 1.0 {
+		t.Fatalf("trendPreserve gate = %v, want 1.0", g)
+	}
+	
+	// Entropy crisis floor with trendStrength < conformalTrendPreserve evaluates conformal gate in [0.45, 1.0]
+	g = conformalConvictionGateScore(0.5, conformalEntropyCrisisFloor, 0.5)
+	if g < conformalGateFloor || g > 1.0 || math.IsNaN(g) {
+		t.Fatalf("entropyCrisisFloor gate = %v, want in [0.45, 1.0]", g)
+	}
+}
+
+func TestConformalRegimeGateCausality(t *testing.T) {
+	// Strict causality: future bars must not affect past gate decisions
+	n := 100
+	hB := makeOHLCDays("2026-01-01", make([]float64, n), 0.01)
+	hE := makeOHLCDays("2026-01-01", make([]float64, n), 0.01)
+	hS := makeOHLCDays("2026-01-01", make([]float64, n), 0.01)
+	for i := range hB {
+		hB[i].Close = 50000 * math.Exp(0.001*float64(i))
+		hE[i].Close = 3000 * math.Exp(0.001*float64(i))
+		hS[i].Close = 150 * math.Exp(0.001*float64(i))
+	}
+	
+	// Gate at bar 80
+	gate80 := conformalRegimeGate(hB[:80], hE[:80], hS[:80])
+	
+	// Corrupt future bars
+	corruptB := append([]Day(nil), hB...)
+	corruptE := append([]Day(nil), hE...)
+	corruptS := append([]Day(nil), hS...)
+	for i := 81; i < n; i++ {
+		corruptB[i].Close = 1.0
+		corruptE[i].Close = 1e6
+		corruptS[i].Close = 1e-6
+	}
+	gate80Corrupt := conformalRegimeGate(corruptB[:80], corruptE[:80], corruptS[:80])
+	
+	if gate80 != gate80Corrupt {
+		t.Fatalf("causality violation: gate80=%v vs gate80Corrupt=%v", gate80, gate80Corrupt)
+	}
+}

@@ -1,6 +1,7 @@
 package trend
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -176,6 +177,183 @@ func TestQ44VolBalancedAndBHHarvesterBlends(t *testing.T) {
 	}
 }
 
+func TestSelectBlendAllSelectors(t *testing.T) {
+	st := NewState("2022-01-01")
+	st.Seed(days("2021-10-01", rising(90, 100, 1.0)...))
+	st.SeedETH(days("2021-10-01", rising(90, 50, 0.5)...))
+	st.SeedSOL(days("2021-10-01", rising(90, 20, 0.2)...))
+	st.Advance(days("2022-01-02", rising(70, 200, 1.0)...))
+	st.AdvanceETH(days("2022-01-02", rising(70, 100, 0.5)...))
+	st.AdvanceSOL(days("2022-01-02", rising(70, 40, 0.2)...))
+
+	cases := []struct {
+		sel  string
+		want string
+	}{
+		{"q42_dualspeed", "Q42_dualspeed_60_40_carry_spot"},
+		{"q42_balanced", "Q42_balanced_50_50_carry_spot"},
+		{"q44_bh_harvester", "Q44_bh_vol_harvester_1x_2p5x_spot"},
+		{"q44_barbell", "Q44_barbell_1x_bh_2p5x_dualspeed_spot"},
+		{"q51_volparity", "Q51_btc_eth_sol_volparity_spot"},
+		{"q56_quantum_fast", "Q56_quantum_fast_carry_spot"},
+		{"q57_hrp_hurst", "Q57_hrp_hurst_conformal_carry_spot"},
+		{"s36_spot", "S36_qd_carry_blend_spot"},
+		{"s36_fut", "S36_qd_carry_blend_fut"},
+		{"unknown_selector", "S36_qd_carry_blend_spot"},
+	}
+	for _, tc := range cases {
+		got, ok := SelectBlend(st, nil, nil, tc.sel, nil)
+		if !ok || got.Name != tc.want {
+			t.Fatalf("SelectBlend(%q) = (ok=%v, %q), want %q", tc.sel, ok, got.Name, tc.want)
+		}
+	}
+}
+
+func TestComputeWeightedBlendMultiLeg(t *testing.T) {
+	st := NewState("2025-12-31")
+	// Two different trend variants with different returns
+	seqBTC1 := rising(30, 100, 1.0)
+	seqBTC2 := rising(30, 100, 1.5) // different trajectory
+	st.Advance(days("2026-01-01", seqBTC1...))
+	st.AdvanceETH(days("2026-01-01", seqBTC2...))
+	// Manually create a second ledger with different returns
+	st.Ledgers["TEST_LEG2"] = &Ledger{
+		Variant: Variant{Name: "TEST_LEG2", Lev: 1, FeeBps: 2, SlipBps: 1, SMA: 50, Pair: true, Coherence: true},
+		Equity:  1, Peak: 1,
+	}
+	// Simulate different returns for leg2
+	for i, d := range seqBTC2 {
+		bar := 0.0
+		if i > 0 {
+			bar = d/seqBTC2[i-1] - 1
+		}
+		st.Ledgers["TEST_LEG2"].step(fmt.Sprintf("2026-01-%02d", i+1), bar, st.History[:i+1])
+	}
+
+	legs := []BlendLeg{
+		{Variant: "S36_safe_qd_spot_1x", Weight: 0.5},
+		{Variant: "TEST_LEG2", Weight: 0.3},
+	}
+	b, ok := ComputeWeightedBlend(st, nil, nil, legs, 0.2, "TEST_MULTI", "", nil)
+	if !ok {
+		t.Fatal("ComputeWeightedBlend multi-leg failed")
+	}
+	if b.Days != 29 {
+		t.Fatalf("expected 29 days, got %d", b.Days)
+	}
+	if b.CarrySleevePct != 20.0 {
+		t.Fatalf("expected carry sleeve 20%%, got %v", b.CarrySleevePct)
+	}
+	// Idle cash should be non-negative
+	if b.IdleTrendCashPct < 0 {
+		t.Fatalf("idle cash negative: %v", b.IdleTrendCashPct)
+	}
+	// Sharpe should be finite
+	if math.IsNaN(b.Sharpe) || math.IsInf(b.Sharpe, 0) {
+		t.Fatalf("Sharpe not finite: %v", b.Sharpe)
+	}
+}
+
+func TestComputeWeightedBlendEdgeCases(t *testing.T) {
+	// Test with zero-variance returns (should not explode Sharpe)
+	st := NewState("2026-01-01")
+	flat := make([]float64, 20)
+	for i := range flat {
+		flat[i] = 100.0
+	}
+	st.Advance(days("2026-01-01", flat...))
+	b, ok := ComputeS36Blend(st, nil, nil, "S36_safe_qd_spot_1x", "TEST_FLAT", nil)
+	if !ok {
+		t.Fatal("ComputeS36Blend flat failed")
+	}
+	// With flat prices, position should be 0 (below SMA), equity stays 1, Sharpe should be 0
+	if b.Equity != 1.0 {
+		t.Fatalf("flat equity = %v, want 1.0", b.Equity)
+	}
+	if b.Sharpe != 0.0 {
+		t.Fatalf("flat Sharpe = %v, want 0", b.Sharpe)
+	}
+	if b.IdleTrendCashPct != 70.0 {
+		t.Fatalf("flat idle cash = %v, want 70", b.IdleTrendCashPct)
+	}
+}
+
+func TestComputeWeightedBlendSingleLegNoCarryFastPath(t *testing.T) {
+	st := NewState("2025-12-31")
+	st.Advance(days("2026-01-01", rising(10, 100, 1.0)...))
+	st.AdvanceETH(days("2026-01-01", rising(10, 50, 0.5)...))
+	// This should hit the singleLegNoCarry fast path (stack buffers)
+	b, ok := ComputeS36Blend(st, nil, nil, "S36_safe_qd_spot_1x", "TEST_FAST", nil)
+	if !ok {
+		t.Fatal("ComputeS36Blend fast path failed")
+	}
+	if b.Days != 9 {
+		t.Fatalf("expected 9 days, got %d", b.Days)
+	}
+	if b.Sharpe != 0 && (math.IsNaN(b.Sharpe) || math.IsInf(b.Sharpe, 0)) {
+		t.Fatalf("fast path Sharpe not finite: %v", b.Sharpe)
+	}
+}
+
+func TestLoadDTB3RatesMalformedCSV(t *testing.T) {
+	dir := t.TempDir()
+	
+	// Empty file
+	emptyPath := filepath.Join(dir, "empty.csv")
+	if err := os.WriteFile(emptyPath, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rates, err := LoadDTB3Rates(emptyPath)
+	if err != nil {
+		t.Fatalf("empty file error: %v", err)
+	}
+	if len(rates) != 0 {
+		t.Fatalf("empty file rates = %v, want empty", rates)
+	}
+	
+	// Header only
+	headerPath := filepath.Join(dir, "header.csv")
+	if err := os.WriteFile(headerPath, []byte("date,rate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rates, err = LoadDTB3Rates(headerPath)
+	if err != nil {
+		t.Fatalf("header only error: %v", err)
+	}
+	if len(rates) != 0 {
+		t.Fatalf("header only rates = %v, want empty", rates)
+	}
+	
+	// Malformed rows (empty rate, non-numeric rate)
+	malformedPath := filepath.Join(dir, "malformed.csv")
+	malformedContent := "date,rate\n2024-01-01,5.0\n2024-01-02,not_a_number\n2024-01-03,\n2024-01-04,4.5\n"
+	if err := os.WriteFile(malformedPath, []byte(malformedContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rates, err = LoadDTB3Rates(malformedPath)
+	if err != nil {
+		t.Fatalf("malformed error: %v", err)
+	}
+	if rates["2024-01-01"] != 5.0 || rates["2024-01-04"] != 4.5 {
+		t.Fatalf("malformed rates = %v", rates)
+	}
+	if _, ok := rates["2024-01-02"]; ok {
+		t.Fatalf("expected malformed row 2024-01-02 to be skipped")
+	}
+	if _, ok := rates["2024-01-03"]; ok {
+		t.Fatalf("expected incomplete row 2024-01-03 to be skipped")
+	}
+	
+	// Non-existent file
+	rates, err = LoadDTB3Rates(filepath.Join(dir, "nonexistent.csv"))
+	if err != nil {
+		t.Fatalf("nonexistent error: %v", err)
+	}
+	if len(rates) != 0 {
+		t.Fatalf("nonexistent rates = %v, want empty", rates)
+	}
+}
+
 func BenchmarkTrendAdvance500Days(b *testing.B) {
 	btcSeq := rising(500, 100, 1.5)
 	ethSeq := rising(500, 50, 0.75)
@@ -186,5 +364,29 @@ func BenchmarkTrendAdvance500Days(b *testing.B) {
 		st := NewState("2022-01-01")
 		st.Advance(btcDays)
 		st.AdvanceETH(ethDays)
+	}
+}
+
+func BenchmarkSelectBlendQ57(b *testing.B) {
+	st := NewState("2022-01-01")
+	btcSeed := days("2021-10-01", rising(90, 100, 1.0)...)
+	ethSeed := days("2021-10-01", rising(90, 50, 0.5)...)
+	solSeed := days("2021-10-01", rising(90, 20, 0.2)...)
+	st.Seed(btcSeed)
+	st.SeedETH(ethSeed)
+	st.SeedSOL(solSeed)
+	btcFwd := days("2022-01-02", rising(500, 200, 1.0)...)
+	ethFwd := days("2022-01-02", rising(500, 100, 0.5)...)
+	solFwd := days("2022-01-02", rising(500, 40, 0.2)...)
+	st.Advance(btcFwd)
+	st.AdvanceETH(ethFwd)
+	st.AdvanceSOL(solFwd)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		res, ok := SelectBlend(st, nil, nil, "q57_hrp_hurst", nil)
+		if !ok || res.Name != "Q57_hrp_hurst_conformal_carry_spot" {
+			b.Fatalf("SelectBlend failed: ok=%v res=%+v", ok, res)
+		}
 	}
 }

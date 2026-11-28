@@ -1,7 +1,7 @@
 package trend
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/csv"
 	"io"
 	"math"
@@ -10,10 +10,19 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"piquant-live/internal/carry"
 	"piquant-live/internal/execution"
 )
+
+var coherenceExpLUT [201]float64
+
+func init() {
+	for a := 0; a < len(coherenceExpLUT); a++ {
+		coherenceExpLUT[a] = 1.0 - math.Exp(-float64(a)/5.0)
+	}
+}
 
 // MacroEquityTickers is the 12-asset US equities, treasuries, commodities, and USD macro universe
 // paired with the crypto Q57 ledger in hrp_hurst_alpha.py (SPY, QQQ, IWM, TLT, GLD, NVDA, AAPL, MSFT, AMZN, META, DBC, UUP).
@@ -102,6 +111,48 @@ func macroAssetRole(sym string) string {
 	}
 }
 
+const (
+	maxStackHRPAssets = 16
+	maxStackHRPNodes  = 2*maxStackHRPAssets - 1
+	maxStackHRPLen    = 64
+)
+
+type hrpClusterSpan struct{ l, r int }
+
+func hrpClusterVar(items []int, cov []float64, m int, ivpBuf []float64) float64 {
+	var sumMean, ivpSum float64
+	for k, idx := range items {
+		dv := cov[idx*m+idx]
+		if dv < 1e-18 {
+			dv = 1e-18
+		}
+		sumMean += dv
+		iv := 1.0 / dv
+		ivpBuf[k] = iv
+		ivpSum += iv
+	}
+	for k := range items {
+		ivpBuf[k] /= ivpSum
+	}
+	var qv float64
+	for a, ia := range items {
+		wa := ivpBuf[a]
+		rowOff := ia * m
+		for b, ib := range items {
+			qv += wa * cov[rowOff+ib] * ivpBuf[b]
+		}
+	}
+	meanDiag := sumMean / float64(len(items))
+	if meanDiag < 1e-12 {
+		meanDiag = 1e-12
+	}
+	scaleFloor := 1e-12 * meanDiag
+	if qv < scaleFloor {
+		return scaleFloor
+	}
+	return qv
+}
+
 // hrpWeightsN computes López de Prado (2016) single-linkage Hierarchical Risk Parity weights
 // for N assets from column-major returns `rets[asset][bar]` (all columns sharing the same length T).
 // Handles zero-variance/degenerate columns cleanly and matches SciPy single-linkage + leaves_list.
@@ -110,22 +161,66 @@ func hrpWeightsN(rets [][]float64) []float64 {
 	if nAssets == 0 {
 		return nil
 	}
+	out := make([]float64, nAssets)
+	hrpWeightsNInto(rets, out)
+	return out
+}
+
+// hrpWeightsNInto writes López de Prado (2016) HRP weights into out with zero heap allocations
+// whenever len(rets) <= maxStackHRPAssets and len(rets[0]) <= maxStackHRPLen.
+func hrpWeightsNInto(rets [][]float64, out []float64) {
+	nAssets := len(rets)
+	if nAssets == 0 || len(out) < nAssets {
+		return
+	}
+	clear(out[:nAssets])
 	if nAssets == 1 {
-		return []float64{1.0}
+		out[0] = 1.0
+		return
 	}
 	tLen := len(rets[0])
 	if tLen < 2 {
-		w := make([]float64, nAssets)
 		u := 1.0 / float64(nAssets)
-		for i := range w {
-			w[i] = u
+		for i := 0; i < nAssets; i++ {
+			out[i] = u
 		}
-		return w
+		return
+	}
+
+	var (
+		validIdxStack   [maxStackHRPAssets]int
+		meansStack      [maxStackHRPAssets]float64
+		sumSqStack      [maxStackHRPAssets]float64
+		covStack        [maxStackHRPAssets * maxStackHRPAssets]float64
+		diagSDStack     [maxStackHRPAssets]float64
+		leftChildStack  [maxStackHRPNodes]int
+		rightChildStack [maxStackHRPNodes]int
+		activeStack     [maxStackHRPNodes]bool
+		distMatStack    [maxStackHRPNodes * maxStackHRPNodes]float64
+		sortOrderStack  [maxStackHRPAssets]int
+		dfsStackBuf     [maxStackHRPNodes]int
+		wSubStack       [maxStackHRPAssets]float64
+		ivpStack        [maxStackHRPAssets]float64
+		qStackA         [maxStackHRPAssets]hrpClusterSpan
+		qStackB         [maxStackHRPAssets]hrpClusterSpan
+		centeredStack   [maxStackHRPAssets * maxStackHRPLen]float64
+	)
+
+	var validIdx []int
+	var means, sumSqValid []float64
+	if nAssets <= maxStackHRPAssets {
+		validIdx = validIdxStack[:0]
+		means = meansStack[:nAssets]
+		sumSqValid = sumSqStack[:nAssets]
+	} else {
+		validIdx = make([]int, 0, nAssets)
+		means = make([]float64, nAssets)
+		sumSqValid = make([]float64, nAssets)
 	}
 
 	const minStd = 1e-12
-	validIdx := make([]int, 0, nAssets)
-	means := make([]float64, nAssets)
+	denom := float64(tLen - 1)
+	ft := float64(tLen)
 	for j := 0; j < nAssets; j++ {
 		col := rets[j]
 		if len(col) != tLen {
@@ -143,7 +238,7 @@ func hrpWeightsN(rets [][]float64) []float64 {
 		if fin < 2 {
 			continue
 		}
-		mu := sum / float64(tLen)
+		mu := sum / ft
 		var sumSq float64
 		for t := 0; t < tLen; t++ {
 			v := col[t]
@@ -153,48 +248,92 @@ func hrpWeightsN(rets [][]float64) []float64 {
 			d := v - mu
 			sumSq += d * d
 		}
-		std := math.Sqrt(sumSq / float64(tLen-1))
+		std := math.Sqrt(sumSq / denom)
 		if std > minStd {
+			idx := len(validIdx)
 			validIdx = append(validIdx, j)
 			means[j] = mu
+			sumSqValid[idx] = sumSq
 		}
 	}
 
-	out := make([]float64, nAssets)
 	m := len(validIdx)
 	if m == 0 {
 		u := 1.0 / float64(nAssets)
-		for i := range out {
+		for i := 0; i < nAssets; i++ {
 			out[i] = u
 		}
-		return out
+		return
 	}
 	if m == 1 {
 		out[validIdx[0]] = 1.0
-		return out
+		return
 	}
 
-	// Build M x M sample covariance matrix on active columns (matching np.cov(r_clean, rowvar=False, ddof=1)).
-	cov := make([]float64, m*m)
-	denom := float64(tLen - 1)
+	totalNodes := 2*m - 1
+	var (
+		cov, diagSD, distMat, wSub, ivpBuf, centered []float64
+		leftChild, rightChild, sortOrder, dfsStack   []int
+		active                                       []bool
+		qCur, qNext                                  []hrpClusterSpan
+	)
+	if nAssets <= maxStackHRPAssets {
+		cov = covStack[:m*m]
+		diagSD = diagSDStack[:m]
+		leftChild = leftChildStack[:totalNodes]
+		rightChild = rightChildStack[:totalNodes]
+		active = activeStack[:totalNodes]
+		distMat = distMatStack[:totalNodes*totalNodes]
+		clear(distMat)
+		sortOrder = sortOrderStack[:0]
+		dfsStack = dfsStackBuf[:1]
+		wSub = wSubStack[:m]
+		ivpBuf = ivpStack[:m]
+		qCur = qStackA[:1]
+		qNext = qStackB[:0]
+	} else {
+		cov = make([]float64, m*m)
+		diagSD = make([]float64, m)
+		leftChild = make([]int, totalNodes)
+		rightChild = make([]int, totalNodes)
+		active = make([]bool, totalNodes)
+		distMat = make([]float64, totalNodes*totalNodes)
+		sortOrder = make([]int, 0, m)
+		dfsStack = make([]int, 1, totalNodes)
+		wSub = make([]float64, m)
+		ivpBuf = make([]float64, m)
+		qCur = make([]hrpClusterSpan, 1, m)
+		qNext = make([]hrpClusterSpan, 0, m)
+	}
+	if m*tLen <= len(centeredStack) {
+		centered = centeredStack[:m*tLen]
+	} else {
+		centered = make([]float64, m*tLen)
+	}
+
 	for a := 0; a < m; a++ {
 		ja := validIdx[a]
 		ca := rets[ja]
 		muA := means[ja]
-		for b := a; b < m; b++ {
-			jb := validIdx[b]
-			cb := rets[jb]
-			muB := means[jb]
+		dst := centered[a*tLen : (a+1)*tLen]
+		for t := 0; t < tLen; t++ {
+			v := ca[t]
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				v = 0
+			}
+			dst[t] = v - muA
+		}
+		cov[a*m+a] = sumSqValid[a] / denom
+	}
+
+	// Build symmetric off-diagonal covariance matrix using demeaned rows.
+	for a := 0; a < m; a++ {
+		ca := centered[a*tLen : (a+1)*tLen]
+		for b := a + 1; b < m; b++ {
+			cb := centered[b*tLen : (b+1)*tLen]
 			var dot float64
 			for t := 0; t < tLen; t++ {
-				va, vb := ca[t], cb[t]
-				if math.IsNaN(va) || math.IsInf(va, 0) {
-					va = 0
-				}
-				if math.IsNaN(vb) || math.IsInf(vb, 0) {
-					vb = 0
-				}
-				dot += (va - muA) * (vb - muB)
+				dot += ca[t] * cb[t]
 			}
 			v := dot / denom
 			cov[a*m+b] = v
@@ -202,7 +341,6 @@ func hrpWeightsN(rets [][]float64) []float64 {
 		}
 	}
 
-	diagSD := make([]float64, m)
 	for a := 0; a < m; a++ {
 		v := cov[a*m+a]
 		if v < 1e-24 {
@@ -212,12 +350,6 @@ func hrpWeightsN(rets [][]float64) []float64 {
 	}
 
 	// Single-linkage agglomerative tree over 2*m - 1 nodes.
-	// Cluster nodes are numbered 0..m-1 for singletons and m..2*m-2 for merges.
-	totalNodes := 2*m - 1
-	leftChild := make([]int, totalNodes)
-	rightChild := make([]int, totalNodes)
-	active := make([]bool, totalNodes)
-	distMat := make([]float64, totalNodes*totalNodes)
 	for i := 0; i < m; i++ {
 		leftChild[i], rightChild[i] = -1, -1
 		active[i] = true
@@ -279,8 +411,6 @@ func hrpWeightsN(rets [][]float64) []float64 {
 	}
 
 	// Quasi-diagonal leaf seriation via iterative pre-order DFS from root (2*m - 2).
-	sortOrder := make([]int, 0, m)
-	dfsStack := make([]int, 1, totalNodes)
 	dfsStack[0] = totalNodes - 1
 	for len(dfsStack) > 0 {
 		node := dfsStack[len(dfsStack)-1]
@@ -288,65 +418,26 @@ func hrpWeightsN(rets [][]float64) []float64 {
 		if node < m {
 			sortOrder = append(sortOrder, node)
 		} else {
-			// Push right first so left is popped first.
 			dfsStack = append(dfsStack, rightChild[node], leftChild[node])
 		}
 	}
 
-	// Recursive top-down inverse-variance bisection (iterative BFS queue over index slices).
-	wSub := make([]float64, m)
+	// Recursive top-down inverse-variance bisection using ping-pong BFS queues.
 	for i := range wSub {
 		wSub[i] = 1.0
 	}
-	ivpBuf := make([]float64, m)
-	clusterVar := func(items []int) float64 {
-		var sumMean, ivpSum float64
-		for k, idx := range items {
-			dv := cov[idx*m+idx]
-			if dv < 1e-18 {
-				dv = 1e-18
-			}
-			sumMean += dv
-			iv := 1.0 / dv
-			ivpBuf[k] = iv
-			ivpSum += iv
-		}
-		for k := range items {
-			ivpBuf[k] /= ivpSum
-		}
-		var qv float64
-		for a, ia := range items {
-			wa := ivpBuf[a]
-			rowOff := ia * m
-			for b, ib := range items {
-				qv += wa * cov[rowOff+ib] * ivpBuf[b]
-			}
-		}
-		meanDiag := sumMean / float64(len(items))
-		if meanDiag < 1e-12 {
-			meanDiag = 1e-12
-		}
-		scaleFloor := 1e-12 * meanDiag
-		if qv < scaleFloor {
-			return scaleFloor
-		}
-		return qv
-	}
-
-	type clusterSpan struct{ l, r int }
-	queue := []clusterSpan{{0, m}}
-	for len(queue) > 0 {
-		nextQ := queue[:0]
-		var expanded []clusterSpan
-		for _, sp := range queue {
+	qCur[0] = hrpClusterSpan{0, m}
+	for len(qCur) > 0 {
+		qNext = qNext[:0]
+		for _, sp := range qCur {
 			if sp.r-sp.l <= 1 {
 				continue
 			}
 			mid := sp.l + (sp.r-sp.l)/2
 			left := sortOrder[sp.l:mid]
 			right := sortOrder[mid:sp.r]
-			varL := clusterVar(left)
-			varR := clusterVar(right)
+			varL := hrpClusterVar(left, cov, m, ivpBuf)
+			varR := hrpClusterVar(right, cov, m, ivpBuf)
 			denomV := varL + varR
 			alpha := 0.5
 			if denomV > 0 {
@@ -359,14 +450,13 @@ func hrpWeightsN(rets [][]float64) []float64 {
 				wSub[idx] *= 1.0 - alpha
 			}
 			if mid-sp.l > 1 {
-				expanded = append(expanded, clusterSpan{sp.l, mid})
+				qNext = append(qNext, hrpClusterSpan{sp.l, mid})
 			}
 			if sp.r-mid > 1 {
-				expanded = append(expanded, clusterSpan{mid, sp.r})
+				qNext = append(qNext, hrpClusterSpan{mid, sp.r})
 			}
 		}
-		_ = nextQ
-		queue = expanded
+		qCur, qNext = qNext, qCur
 	}
 
 	var totW float64
@@ -375,111 +465,416 @@ func hrpWeightsN(rets [][]float64) []float64 {
 	}
 	if totW <= 0 {
 		u := 1.0 / float64(nAssets)
-		for i := range out {
+		for i := 0; i < nAssets; i++ {
 			out[i] = u
 		}
-		return out
+		return
 	}
 	for a, origIdx := range validIdx {
 		out[origIdx] = wSub[a] / totW
 	}
-	return out
+}
+
+func trimSpaceBytes(b []byte) []byte {
+	start := 0
+	for start < len(b) && (b[start] == ' ' || b[start] == '\t' || b[start] == '\r' || b[start] == '\n') {
+		start++
+	}
+	end := len(b)
+	for end > start && (b[end-1] == ' ' || b[end-1] == '\t' || b[end-1] == '\r' || b[end-1] == '\n') {
+		end--
+	}
+	return b[start:end]
+}
+
+func parseEquityCSV(path string) ([]Day, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if bytes.IndexByte(raw, '"') >= 0 {
+		return parseEquityCSVReader(raw)
+	}
+	return parseEquityCSVFast(raw)
+}
+
+func parseEquityCSVReader(raw []byte) ([]Day, error) {
+	r := csv.NewReader(bytes.NewReader(raw))
+	hdr, herr := r.Read()
+	if herr != nil {
+		if herr == io.EOF {
+			return nil, nil
+		}
+		return nil, herr
+	}
+	colIdx := map[string]int{"date": 0, "open": 1, "high": 2, "low": 3, "close": 4}
+	for i, h := range hdr {
+		k := strings.ToLower(strings.TrimSpace(h))
+		if _, ok := colIdx[k]; ok {
+			colIdx[k] = i
+		}
+	}
+	dCol, oCol, hCol, lCol, cCol := colIdx["date"], colIdx["open"], colIdx["high"], colIdx["low"], colIdx["close"]
+	days := make([]Day, 0, bytes.Count(raw, []byte{'\n'}))
+	for {
+		rec, rerr := r.Read()
+		if rerr != nil {
+			if rerr == io.EOF {
+				break
+			}
+			return nil, rerr
+		}
+		if len(rec) <= cCol || len(rec) <= dCol {
+			continue
+		}
+		dateStr := strings.TrimSpace(rec[dCol])
+		if len(dateStr) >= 10 {
+			dateStr = dateStr[:10]
+		}
+		if len(dateStr) != 10 {
+			continue
+		}
+		cVal, perr := strconv.ParseFloat(strings.TrimSpace(rec[cCol]), 64)
+		if perr != nil || math.IsNaN(cVal) || math.IsInf(cVal, 0) || cVal <= 0 {
+			continue
+		}
+		d := Day{Date: dateStr, Close: cVal}
+		if oCol < len(rec) {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(rec[oCol]), 64); err == nil && v > 0 {
+				d.Open = v
+			}
+		}
+		if hCol < len(rec) {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(rec[hCol]), 64); err == nil && v > 0 {
+				d.High = v
+			}
+		}
+		if lCol < len(rec) {
+			if v, err := strconv.ParseFloat(strings.TrimSpace(rec[lCol]), 64); err == nil && v > 0 {
+				d.Low = v
+			}
+		}
+		days = append(days, d)
+	}
+	return normalizeEquityDays(days, false), nil
+}
+
+func parseEquityCSVFast(raw []byte) ([]Day, error) {
+	nl := bytes.IndexByte(raw, '\n')
+	var hdrLine []byte
+	var rest []byte
+	if nl < 0 {
+		hdrLine = raw
+	} else {
+		hdrLine = raw[:nl]
+		rest = raw[nl+1:]
+	}
+	if len(hdrLine) > 0 && hdrLine[len(hdrLine)-1] == '\r' {
+		hdrLine = hdrLine[:len(hdrLine)-1]
+	}
+	if len(trimSpaceBytes(hdrLine)) == 0 {
+		return nil, nil
+	}
+
+	dCol, oCol, hCol, lCol, cCol := 0, 1, 2, 3, 4
+	{
+		cur := hdrLine
+		for col := 0; ; col++ {
+			comma := bytes.IndexByte(cur, ',')
+			var tok []byte
+			if comma < 0 {
+				tok = cur
+			} else {
+				tok = cur[:comma]
+			}
+			k := trimSpaceBytes(tok)
+			switch strings.ToLower(string(k)) {
+			case "date":
+				dCol = col
+			case "open":
+				oCol = col
+			case "high":
+				hCol = col
+			case "low":
+				lCol = col
+			case "close":
+				cCol = col
+			}
+			if comma < 0 {
+				break
+			}
+			cur = cur[comma+1:]
+		}
+	}
+
+	maxNeeded := dCol
+	if oCol > maxNeeded {
+		maxNeeded = oCol
+	}
+	if hCol > maxNeeded {
+		maxNeeded = hCol
+	}
+	if lCol > maxNeeded {
+		maxNeeded = lCol
+	}
+	if cCol > maxNeeded {
+		maxNeeded = cCol
+	}
+	reqCols := dCol
+	if cCol > reqCols {
+		reqCols = cCol
+	}
+
+	days := make([]Day, 0, bytes.Count(rest, []byte{'\n'})+1)
+	var prevDate string
+	strictlyAscending := true
+
+	for len(rest) > 0 {
+		nl = bytes.IndexByte(rest, '\n')
+		var line []byte
+		if nl < 0 {
+			line = rest
+			rest = nil
+		} else {
+			line = rest[:nl]
+			rest = rest[nl+1:]
+		}
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		if len(line) == 0 {
+			continue
+		}
+
+		var tokD, tokO, tokH, tokL, tokC []byte
+		cur := line
+		colsSeen := 0
+		for col := 0; col <= maxNeeded; col++ {
+			comma := bytes.IndexByte(cur, ',')
+			var tok []byte
+			if comma < 0 {
+				tok = cur
+			} else {
+				tok = cur[:comma]
+			}
+			if col == dCol {
+				tokD = tok
+			}
+			if col == oCol {
+				tokO = tok
+			}
+			if col == hCol {
+				tokH = tok
+			}
+			if col == lCol {
+				tokL = tok
+			}
+			if col == cCol {
+				tokC = tok
+			}
+			colsSeen = col
+			if comma < 0 {
+				break
+			}
+			cur = cur[comma+1:]
+		}
+		if colsSeen < reqCols {
+			continue
+		}
+		tokD = trimSpaceBytes(tokD)
+		if len(tokD) >= 10 {
+			tokD = tokD[:10]
+		}
+		if len(tokD) != 10 {
+			continue
+		}
+		tokC = trimSpaceBytes(tokC)
+		cVal, perr := strconv.ParseFloat(string(tokC), 64)
+		if perr != nil || math.IsNaN(cVal) || math.IsInf(cVal, 0) || cVal <= 0 {
+			continue
+		}
+		dateStr := string(tokD)
+		if prevDate != "" && dateStr <= prevDate {
+			strictlyAscending = false
+		}
+		prevDate = dateStr
+
+		d := Day{Date: dateStr, Close: cVal}
+		if len(tokO) > 0 {
+			if v, err := strconv.ParseFloat(string(trimSpaceBytes(tokO)), 64); err == nil && v > 0 {
+				d.Open = v
+			}
+		}
+		if len(tokH) > 0 {
+			if v, err := strconv.ParseFloat(string(trimSpaceBytes(tokH)), 64); err == nil && v > 0 {
+				d.High = v
+			}
+		}
+		if len(tokL) > 0 {
+			if v, err := strconv.ParseFloat(string(trimSpaceBytes(tokL)), 64); err == nil && v > 0 {
+				d.Low = v
+			}
+		}
+		days = append(days, d)
+	}
+	return normalizeEquityDays(days, strictlyAscending), nil
+}
+
+func normalizeEquityDays(days []Day, strictlyAscending bool) []Day {
+	if len(days) == 0 {
+		return nil
+	}
+	if strictlyAscending {
+		return days
+	}
+	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
+	k := 0
+	for i := 0; i < len(days); i++ {
+		if k > 0 && days[k-1].Date == days[i].Date {
+			days[k-1] = days[i]
+		} else {
+			days[k] = days[i]
+			k++
+		}
+	}
+	return days[:k]
 }
 
 // LoadEquityCSVs reads daily OHLC CSVs (<dir>/<TICKER>.csv) into per-ticker Day slices sorted by YYYY-MM-DD.
 // Missing ticker files are skipped without failing the remaining tickers.
 func LoadEquityCSVs(dir string, tickers []string) (map[string][]Day, error) {
 	out := make(map[string][]Day, len(tickers))
-	if strings.TrimSpace(dir) == "" {
+	if strings.TrimSpace(dir) == "" || len(tickers) == 0 {
 		return out, nil
 	}
+
+	syms := make([]string, 0, len(tickers))
+	seen := make(map[string]struct{}, len(tickers))
 	for _, rawSym := range tickers {
 		sym := strings.ToUpper(strings.TrimSpace(rawSym))
 		if sym == "" {
 			continue
 		}
-		path := filepath.Join(dir, sym+".csv")
-		f, err := os.Open(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return out, err
-		}
-		r := csv.NewReader(bufio.NewReaderSize(f, 32<<10))
-		hdr, herr := r.Read()
-		if herr != nil {
-			_ = f.Close()
-			if herr == io.EOF {
-				continue
-			}
-			return out, herr
-		}
-		colIdx := map[string]int{"date": 0, "open": 1, "high": 2, "low": 3, "close": 4}
-		for i, h := range hdr {
-			k := strings.ToLower(strings.TrimSpace(h))
-			if _, ok := colIdx[k]; ok {
-				colIdx[k] = i
-			}
-		}
-		dCol, oCol, hCol, lCol, cCol := colIdx["date"], colIdx["open"], colIdx["high"], colIdx["low"], colIdx["close"]
-		var days []Day
-		for {
-			rec, rerr := r.Read()
-			if rerr == io.EOF {
-				break
-			}
-			if rerr != nil {
-				break
-			}
-			if len(rec) <= cCol || len(rec) <= dCol {
-				continue
-			}
-			dateStr := strings.TrimSpace(rec[dCol])
-			if len(dateStr) >= 10 {
-				dateStr = dateStr[:10]
-			}
-			if len(dateStr) != 10 {
-				continue
-			}
-			cVal, perr := strconv.ParseFloat(strings.TrimSpace(rec[cCol]), 64)
-			if perr != nil || math.IsNaN(cVal) || math.IsInf(cVal, 0) || cVal <= 0 {
-				continue
-			}
-			d := Day{Date: dateStr, Close: cVal}
-			if oCol < len(rec) {
-				if v, err := strconv.ParseFloat(strings.TrimSpace(rec[oCol]), 64); err == nil && v > 0 {
-					d.Open = v
-				}
-			}
-			if hCol < len(rec) {
-				if v, err := strconv.ParseFloat(strings.TrimSpace(rec[hCol]), 64); err == nil && v > 0 {
-					d.High = v
-				}
-			}
-			if lCol < len(rec) {
-				if v, err := strconv.ParseFloat(strings.TrimSpace(rec[lCol]), 64); err == nil && v > 0 {
-					d.Low = v
-				}
-			}
-			days = append(days, d)
-		}
-		_ = f.Close()
-		if len(days) == 0 {
+		if _, dup := seen[sym]; dup {
 			continue
 		}
-		sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
-		dedup := make([]Day, 0, len(days))
-		for _, d := range days {
-			if len(dedup) > 0 && dedup[len(dedup)-1].Date == d.Date {
-				dedup[len(dedup)-1] = d
-			} else {
-				dedup = append(dedup, d)
+		seen[sym] = struct{}{}
+		syms = append(syms, sym)
+	}
+	if len(syms) == 0 {
+		return out, nil
+	}
+
+	type csvResult struct {
+		days []Day
+		err  error
+	}
+	results := make([]csvResult, len(syms))
+	workers := 4
+	if len(syms) < workers {
+		workers = len(syms)
+	}
+	jobs := make(chan int, len(syms))
+	for i := range syms {
+		jobs <- i
+	}
+	close(jobs)
+
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for w := 0; w < workers; w++ {
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				path := filepath.Join(dir, syms[i]+".csv")
+				days, err := parseEquityCSV(path)
+				if err != nil && os.IsNotExist(err) {
+					err = nil
+				}
+				results[i] = csvResult{days: days, err: err}
 			}
+		}()
+	}
+	wg.Wait()
+
+	for i, sym := range syms {
+		if results[i].err != nil {
+			return out, results[i].err
 		}
-		out[sym] = dedup
+		if len(results[i].days) > 0 {
+			out[sym] = results[i].days
+		}
 	}
 	return out, nil
+}
+
+// fastDualCoherenceSeries computes 0.5*(coherenceShare(sub, 50) + r3CoherenceShare(sub, 50, 20))
+// for every prefix sub = arr[:k+1] in O(len(arr)) time with periodic 64-bar window re-anchoring.
+func fastDualCoherenceSeries(arr []Day, dst []float64) {
+	n := len(arr)
+	if n == 0 || len(dst) < n {
+		return
+	}
+	const maxAge = 200
+	var sum50, sum20 float64
+	var age50, ageR3 int
+	for k := 0; k < n; k++ {
+		if k < 49 {
+			dst[k] = 0
+			continue
+		}
+		c := arr[k].Close
+		if k == 49 || k&63 == 0 {
+			sum50 = 0
+			for i := k - 49; i <= k; i++ {
+				sum50 += arr[i].Close
+			}
+			sum20 = 0
+			for i := k - 19; i <= k; i++ {
+				sum20 += arr[i].Close
+			}
+		} else {
+			sum50 += c - arr[k-50].Close
+			sum20 += c - arr[k-20].Close
+		}
+		above50 := c > sum50/50.0
+		if above50 {
+			if age50 < maxAge {
+				age50++
+			}
+		} else {
+			age50 = 0
+		}
+		if above50 && c >= sum20/20.0 {
+			if ageR3 < maxAge {
+				ageR3++
+			}
+		} else {
+			ageR3 = 0
+		}
+		dst[k] = 0.5 * (coherenceExpLUT[age50] + coherenceExpLUT[ageR3])
+	}
+}
+
+func isDaysAscending(arr []Day) bool {
+	for i := 1; i < len(arr); i++ {
+		if arr[i].Date < arr[i-1].Date {
+			return false
+		}
+	}
+	return true
+}
+
+func isDatesStrictlyAscending(dates []string) bool {
+	for i := 1; i < len(dates); i++ {
+		if dates[i] <= dates[i-1] {
+			return false
+		}
+	}
+	return true
 }
 
 // SimulateMacroHRPSleeve evaluates the causal 12-asset Macro/Equities HRP + Cross-Sectional + MR
@@ -530,6 +925,7 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 		return MacroSleeveSummary{}, false
 	}
 	nAssets := len(syms)
+	datesStrictlyAsc := isDatesStrictlyAscending(dates)
 
 	px := make([][]float64, nAssets)
 	rets := make([][]float64, nAssets)
@@ -537,37 +933,62 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 	mom := make([][]float64, nAssets)
 	trPos := make([][]float64, nAssets)
 	r5z := make([][]float64, nAssets)
+	r5Buf := make([]float64, nBars)
+	var dualBuf []float64
 	sqrt252 := math.Sqrt(252.0)
 
 	for a, sym := range syms {
 		arr := series[sym]
-		byDate := make(map[string]float64, len(arr))
-		for _, d := range arr {
-			byDate[d.Date] = d.Close
+		if !isDaysAscending(arr) {
+			cp := append([]Day(nil), arr...)
+			sort.Slice(cp, func(i, j int) bool { return cp[i].Date < cp[j].Date })
+			arr = cp
 		}
+		if cap(dualBuf) < len(arr) {
+			dualBuf = make([]float64, len(arr))
+		} else {
+			dualBuf = dualBuf[:len(arr)]
+		}
+		fastDualCoherenceSeries(arr, dualBuf)
+
 		p := make([]float64, nBars)
-		for t, dt := range dates {
-			if v, ok := byDate[dt]; ok {
-				p[t] = v
-			} else {
-				p[t] = math.NaN()
+		tp := make([]float64, nBars)
+		if datesStrictlyAsc {
+			j := 0
+			mLen := len(arr)
+			for t, dt := range dates {
+				for j < mLen && arr[j].Date < dt {
+					j++
+				}
+				for j+1 < mLen && arr[j+1].Date == dt {
+					j++
+				}
+				if j < mLen && arr[j].Date == dt {
+					p[t] = arr[j].Close
+					tp[t] = dualBuf[j]
+				} else {
+					p[t] = math.NaN()
+				}
+			}
+		} else {
+			byDate := make(map[string]float64, len(arr))
+			nativeByDate := make(map[string]float64, len(arr))
+			for k, d := range arr {
+				byDate[d.Date] = d.Close
+				nativeByDate[d.Date] = dualBuf[k]
+			}
+			for t, dt := range dates {
+				if v, ok := byDate[dt]; ok {
+					p[t] = v
+				} else {
+					p[t] = math.NaN()
+				}
+				if v, ok := nativeByDate[dt]; ok {
+					tp[t] = v
+				}
 			}
 		}
 		px[a] = p
-
-		// Causal trend position computed on each ticker's own native daily closes (matching precompute_signals).
-		nativeByDate := make(map[string]float64, len(arr))
-		for k := range arr {
-			sub := arr[:k+1]
-			dual := 0.5 * (coherenceShare(sub, 50) + r3CoherenceShare(sub, 50, 20))
-			nativeByDate[arr[k].Date] = dual
-		}
-		tp := make([]float64, nBars)
-		for t, dt := range dates {
-			if v, ok := nativeByDate[dt]; ok {
-				tp[t] = v
-			}
-		}
 		trPos[a] = tp
 
 		r := make([]float64, nBars)
@@ -578,29 +999,42 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 		}
 		rets[a] = r
 
-		// Rolling 20d vol (min_periods=10) * sqrt(252).
+		// Rolling 20d vol (min_periods=10) * sqrt(252) in O(N) with 64-bar re-anchoring.
 		v20 := make([]float64, nBars)
+		var vS1, vS2 float64
 		for t := 0; t < nBars; t++ {
-			v20[t] = math.NaN()
+			if t&63 == 0 {
+				wStart := t - 19
+				if wStart < 0 {
+					wStart = 0
+				}
+				vS1, vS2 = 0, 0
+				for k := wStart; k <= t; k++ {
+					rv := r[k]
+					vS1 += rv
+					vS2 += rv * rv
+				}
+			} else {
+				rv := r[t]
+				vS1 += rv
+				vS2 += rv * rv
+				if t >= 20 {
+					old := r[t-20]
+					vS1 -= old
+					vS2 -= old * old
+				}
+			}
 			if t < 9 {
+				v20[t] = math.NaN()
 				continue
 			}
-			wStart := t - 19
-			if wStart < 0 {
-				wStart = 0
-			}
-			cnt := t - wStart + 1
-			if cnt < 10 {
-				continue
-			}
-			var s1, s2 float64
-			for k := wStart; k <= t; k++ {
-				s1 += r[k]
-				s2 += r[k] * r[k]
+			cnt := 20
+			if t < 19 {
+				cnt = t + 1
 			}
 			fc := float64(cnt)
-			mu := s1 / fc
-			vr := (s2 - fc*mu*mu) / (fc - 1.0)
+			mu := vS1 / fc
+			vr := (vS2 - fc*mu*mu) / (fc - 1.0)
 			if vr < 0 {
 				vr = 0
 			}
@@ -608,16 +1042,14 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 		}
 		vol20[a] = v20
 
-		// Blended momentum ((m7 + m28 + m60)/3) / clip(vol20, 0.10).
+		// Blended momentum ((m7 + m28 + m60)/3) / clip(vol20, 0.10) and 5d returns.
 		mm := make([]float64, nBars)
-		r5 := make([]float64, nBars)
 		rz := make([]float64, nBars)
 		for t := 0; t < nBars; t++ {
 			mm[t] = math.NaN()
-			r5[t] = math.NaN()
-			rz[t] = math.NaN()
+			r5Buf[t] = math.NaN()
 			if t >= 5 && p[t] > 0 && p[t-5] > 0 {
-				r5[t] = p[t]/p[t-5] - 1.0
+				r5Buf[t] = p[t]/p[t-5] - 1.0
 			}
 			if t >= 60 && p[t] > 0 && p[t-7] > 0 && p[t-28] > 0 && p[t-60] > 0 && !math.IsNaN(v20[t]) {
 				m7 := p[t]/p[t-7] - 1.0
@@ -630,28 +1062,42 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 				mm[t] = ((m7 + m28 + m60) / 3.0) / vd
 			}
 		}
-		// 60d rolling z-score of r5 (min_periods=20).
+		// 60d rolling z-score of r5 (min_periods=20) in O(N) with 64-bar re-anchoring.
+		var zS1, zS2 float64
+		var zCnt int
 		for t := 0; t < nBars; t++ {
-			if math.IsNaN(r5[t]) {
-				continue
-			}
-			wStart := t - 59
-			if wStart < 0 {
-				wStart = 0
-			}
-			var s1, s2 float64
-			var cnt int
-			for k := wStart; k <= t; k++ {
-				if !math.IsNaN(r5[k]) {
-					s1 += r5[k]
-					s2 += r5[k] * r5[k]
-					cnt++
+			if t&63 == 0 {
+				wStart := t - 59
+				if wStart < 0 {
+					wStart = 0
+				}
+				zS1, zS2, zCnt = 0, 0, 0
+				for k := wStart; k <= t; k++ {
+					rv := r5Buf[k]
+					if !math.IsNaN(rv) {
+						zS1 += rv
+						zS2 += rv * rv
+						zCnt++
+					}
+				}
+			} else {
+				if rv := r5Buf[t]; !math.IsNaN(rv) {
+					zS1 += rv
+					zS2 += rv * rv
+					zCnt++
+				}
+				if t >= 60 {
+					if old := r5Buf[t-60]; !math.IsNaN(old) {
+						zS1 -= old
+						zS2 -= old * old
+						zCnt--
+					}
 				}
 			}
-			if cnt >= 20 {
-				fc := float64(cnt)
-				mu := s1 / fc
-				vr := (s2 - fc*mu*mu) / (fc - 1.0)
+			if !math.IsNaN(r5Buf[t]) && zCnt >= 20 {
+				fc := float64(zCnt)
+				mu := zS1 / fc
+				vr := (zS2 - fc*mu*mu) / (fc - 1.0)
 				if vr < 0 {
 					vr = 0
 				}
@@ -659,7 +1105,9 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 				if sd < 1e-4 {
 					sd = 1e-4
 				}
-				rz[t] = (r5[t] - mu) / sd
+				rz[t] = (r5Buf[t] - mu) / sd
+			} else {
+				rz[t] = math.NaN()
 			}
 		}
 		mom[a] = mm
@@ -708,6 +1156,13 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 	}
 	scored := make([]scoreItem, 0, nAssets)
 	targetW := make([]float64, nAssets)
+	invV := make([]float64, nAssets)
+	isActive := make([]bool, nAssets)
+	whBuf := make([]float64, nAssets)
+	wHRP := make([]float64, nAssets)
+	wLFT := make([]float64, nAssets)
+	wXS := make([]float64, nAssets)
+	wMR := make([]float64, nAssets)
 	lastMom := make([]float64, nAssets)
 	lastVol := make([]float64, nAssets)
 	lastTr := make([]float64, nAssets)
@@ -753,17 +1208,25 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 				scored = append(scored, scoreItem{mom: mVal, idx: a, vol: vVal})
 			}
 		}
-		sort.SliceStable(scored, func(i, j int) bool {
-			return scored[i].mom > scored[j].mom
-		})
-
-		for a := 0; a < nAssets; a++ {
-			targetW[a] = 0
+		for i := 1; i < len(scored); i++ {
+			cur := scored[i]
+			j := i - 1
+			for j >= 0 && scored[j].mom < cur.mom {
+				scored[j+1] = scored[j]
+				j--
+			}
+			scored[j+1] = cur
 		}
+
+		clear(targetW)
 		if len(scored) > 0 {
 			var totIV float64
-			invV := make([]float64, nAssets)
-			isActive := make([]bool, nAssets)
+			clear(invV)
+			clear(isActive)
+			clear(wHRP)
+			clear(wLFT)
+			clear(wXS)
+			clear(wMR)
 			for _, sc := range scored {
 				vd := sc.vol
 				if vd < 0.15 {
@@ -775,7 +1238,6 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 				isActive[sc.idx] = true
 			}
 
-			wHRP := make([]float64, nAssets)
 			if t >= 20 {
 				wStart := t - hrpWindow + 1
 				if wStart < 0 {
@@ -784,17 +1246,17 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 				for a := 0; a < nAssets; a++ {
 					hrpWinBuf[a] = rets[a][wStart : t+1]
 				}
-				wh := hrpWeightsN(hrpWinBuf)
+				hrpWeightsNInto(hrpWinBuf, whBuf)
 				var sAct float64
 				for a := 0; a < nAssets; a++ {
 					if isActive[a] {
-						sAct += wh[a]
+						sAct += whBuf[a]
 					}
 				}
 				if sAct > 1e-12 {
 					for a := 0; a < nAssets; a++ {
 						if isActive[a] {
-							wHRP[a] = wh[a] / sAct
+							wHRP[a] = whBuf[a] / sAct
 						}
 					}
 				} else {
@@ -812,7 +1274,6 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 				}
 			}
 
-			wLFT := make([]float64, nAssets)
 			var lftG float64
 			for _, sc := range scored {
 				if sc.mom > 0.0 {
@@ -827,7 +1288,6 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 				}
 			}
 
-			wXS := make([]float64, nAssets)
 			var ivTop float64
 			lim := topK
 			if len(scored) < lim {
@@ -846,7 +1306,6 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 				}
 			}
 
-			wMR := make([]float64, nAssets)
 			mrCount := 0
 			for _, sc := range scored {
 				rzv := r5z[sc.idx][t]
@@ -909,21 +1368,35 @@ func SimulateMacroHRPSleeve(series map[string][]Day, dtb3ByDate map[string]float
 		wPct := heldW[a] * 100.0
 		investedSum += wPct
 		mVal := lastMom[a]
-		if math.IsNaN(mVal) {
+		if math.IsNaN(mVal) || math.IsInf(mVal, 0) {
 			mVal = 0
 		}
 		vVal := lastVol[a]
-		if math.IsNaN(vVal) {
+		if math.IsNaN(vVal) || math.IsInf(vVal, 0) {
 			vVal = 0
+		}
+		trVal := lastTr[a]
+		if math.IsNaN(trVal) || math.IsInf(trVal, 0) {
+			trVal = 0
+		}
+		lastClose := px[a][nBars-1]
+		if math.IsNaN(lastClose) || math.IsInf(lastClose, 0) || lastClose <= 0 {
+			lastClose = 0
+			for b := nBars - 2; b >= 0; b-- {
+				if pv := px[a][b]; !math.IsNaN(pv) && !math.IsInf(pv, 0) && pv > 0 {
+					lastClose = pv
+					break
+				}
+			}
 		}
 		targets = append(targets, MacroAssetTarget{
 			Symbol:    sym,
 			Role:      macroAssetRole(sym),
 			TargetPct: round2(wPct),
-			LastClose: math.Round(px[a][nBars-1]*100) / 100,
+			LastClose: math.Round(lastClose*100) / 100,
 			Momentum:  math.Round(mVal*1000) / 1000,
 			Vol20Pct:  round2(vVal * 100.0),
-			TrendPos:  round2(lastTr[a]),
+			TrendPos:  round2(trVal),
 		})
 	}
 	sort.Slice(targets, func(i, j int) bool {
@@ -993,29 +1466,34 @@ func ComputeQ57FullFund(st *State, carryState *carry.State, dtb3ByDate map[strin
 	if !ok {
 		return FullFundSummary{}, false
 	}
+	return ComputeQ57FullFundWithMacro(st, carryState, dtb3ByDate, macroSum, plan)
+}
 
-	var cryptoBlend BlendSummary
-	if st != nil {
-		if cb, okB := SelectBlend(st, carryState, dtb3ByDate, "q57_hrp_hurst", plan); okB {
-			cryptoBlend = cb
-		}
+// ComputeQ57FullFundWithMacro combines the live Q57 crypto blend with a precomputed Macro HRP sleeve
+// via PREREG53 asymmetric fast-risk-off inverse-volatility weighting.
+func ComputeQ57FullFundWithMacro(st *State, carryState *carry.State, dtb3ByDate map[string]float64, macroSum MacroSleeveSummary, plan *execution.PingExecutionPlan) (FullFundSummary, bool) {
+	if st == nil || macroSum.Days == 0 || macroSum.TickersLoaded == 0 {
+		return FullFundSummary{}, false
+	}
+
+	cryptoBlend, okB := SelectBlend(st, carryState, dtb3ByDate, "q57_hrp_hurst", plan)
+	if !okB {
+		return FullFundSummary{}, false
 	}
 
 	// Causal PREREG53 asymmetric fast-risk-off inverse-vol weight between Crypto Q57 and Macro HRP.
 	wCrypto := 0.35
-	if st != nil {
-		if l57 := st.Ledgers["Q57_hrp_hurst_conformal_spot_1x"]; l57 != nil && len(l57.Days) >= 10 {
-			cRets := make([]float64, len(l57.Days))
-			for i, d := range l57.Days {
-				cRets[i] = d.Ret
-			}
-			vC, okC := trailingAsymmetricVol(cRets)
-			vM, okM := trailingAsymmetricVol(macroSum.DailyRets)
-			if okC && okM {
-				invC := 1.0 / math.Max(vC, 1e-4)
-				invM := 1.0 / math.Max(vM, 1e-4)
-				wCrypto = math.Max(0.20, math.Min(0.80, invC/(invC+invM)))
-			}
+	if l57 := st.Ledgers["Q57_hrp_hurst_conformal_spot_1x"]; l57 != nil && len(l57.Days) >= 10 {
+		cRets := make([]float64, len(l57.Days))
+		for i, d := range l57.Days {
+			cRets[i] = d.Ret
+		}
+		vC, okC := trailingAsymmetricVol(cRets)
+		vM, okM := trailingAsymmetricVol(macroSum.DailyRets)
+		if okC && okM {
+			invC := 1.0 / math.Max(vC, 1e-4)
+			invM := 1.0 / math.Max(vM, 1e-4)
+			wCrypto = math.Max(0.20, math.Min(0.80, invC/(invC+invM)))
 		}
 	}
 	wMacro := 1.0 - wCrypto

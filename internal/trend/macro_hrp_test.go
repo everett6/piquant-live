@@ -143,6 +143,34 @@ func TestMacroHRPSleeveAndFullFundOnRealData(t *testing.T) {
 	}
 }
 
+func TestFastDualCoherenceParity(t *testing.T) {
+	const n = 300
+	arr := make([]Day, n)
+	px := 100.0
+	for i := 0; i < n; i++ {
+		switch {
+		case i < 80:
+			px = 100.0 + 0.4*float64(i)
+		case i < 140:
+			px = 132.0
+		case i < 200:
+			px = 132.0 - 0.5*float64(i-140)
+		default:
+			px = 102.0 + 8.0*math.Sin(float64(i)*0.22) + 0.25*float64(i-200)
+		}
+		arr[i] = Day{Date: "2026-01-01", Close: px}
+	}
+	got := make([]float64, n)
+	fastDualCoherenceSeries(arr, got)
+	for k := 0; k < n; k++ {
+		sub := arr[:k+1]
+		want := 0.5 * (coherenceShare(sub, 50) + r3CoherenceShare(sub, 50, 20))
+		if math.Abs(got[k]-want) > 1e-12 {
+			t.Fatalf("bar %d: fastDualCoherenceSeries=%0.15f want=%0.15f", k, got[k], want)
+		}
+	}
+}
+
 func BenchmarkHRPWeights12x60(b *testing.B) {
 	const nAssets, nBars = 12, 60
 	rets := make([][]float64, nAssets)
@@ -161,6 +189,68 @@ func BenchmarkHRPWeights12x60(b *testing.B) {
 		w := hrpWeightsN(rets)
 		if len(w) != nAssets {
 			b.Fatal("bad len")
+		}
+	}
+}
+
+func BenchmarkHRPWeights12x60Into(b *testing.B) {
+	const nAssets, nBars = 12, 60
+	rets := make([][]float64, nAssets)
+	for j := 0; j < nAssets; j++ {
+		rets[j] = make([]float64, nBars)
+	}
+	for t := 0; t < nBars; t++ {
+		f := float64(t)
+		for j := 0; j < nAssets; j++ {
+			rets[j][t] = 0.01*math.Sin(f*(0.2+0.05*float64(j))) + 0.003*math.Cos(f*0.3)
+		}
+	}
+	out := make([]float64, nAssets)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		hrpWeightsNInto(rets, out)
+		if out[0] <= 0 {
+			b.Fatal("bad weight")
+		}
+	}
+}
+
+func BenchmarkLoadEquityCSVs(b *testing.B) {
+	eqDir := DefaultEquitiesDir()
+	if info, err := os.Stat(eqDir); err != nil || !info.IsDir() {
+		b.Skipf("equities dir %s absent: %v", eqDir, err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		series, err := LoadEquityCSVs(eqDir, MacroEquityTickers)
+		if err != nil || len(series) == 0 {
+			b.Fatalf("LoadEquityCSVs: %v len=%d", err, len(series))
+		}
+	}
+}
+
+func BenchmarkSimulateMacroHRPSleeve(b *testing.B) {
+	eqDir := DefaultEquitiesDir()
+	if info, err := os.Stat(eqDir); err != nil || !info.IsDir() {
+		b.Skipf("equities dir %s absent: %v", eqDir, err)
+	}
+	series, err := LoadEquityCSVs(eqDir, MacroEquityTickers)
+	if err != nil || len(series) < 6 {
+		b.Skipf("insufficient equity CSVs: err=%v len=%d", err, len(series))
+	}
+	home, _ := os.UserHomeDir()
+	rates, err := LoadDTB3Rates(filepath.Join(home, "piquant-data", "macro", "DTB3.csv"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sum, ok := SimulateMacroHRPSleeve(series, rates)
+		if !ok || sum.Days == 0 {
+			b.Fatal("SimulateMacroHRPSleeve failed")
 		}
 	}
 }

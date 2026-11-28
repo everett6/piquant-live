@@ -50,7 +50,7 @@ func (st *State) EmergencyCheckAll(pxB, pxE, pxS float64, now time.Time) []strin
 	var fired []string
 	for _, name := range sortedKeys(st.Ledgers) {
 		l := st.Ledgers[name]
-		if len(l.Days) == 0 || (l.Pos == 0 && l.PosAlt == 0 && l.PosSOL == 0) || l.Killed || pxB <= 0 {
+		if len(l.Days) == 0 || (l.Pos == 0 && l.PosAlt == 0 && l.PosSOL == 0) || l.Killed || !validPrice(pxB) {
 			continue
 		}
 		last := l.Days[len(l.Days)-1]
@@ -61,22 +61,28 @@ func (st *State) EmergencyCheckAll(pxB, pxE, pxS float64, now time.Time) []strin
 		tri := l.Variant.TriAsset
 		move := l.Pos * (pxB/last.CloseB - 1)
 		if tri {
-			if last.CloseE <= 0 || pxE <= 0 || last.CloseS <= 0 || pxS <= 0 {
+			if last.CloseE <= 0 || !validPrice(pxE) || last.CloseS <= 0 || !validPrice(pxS) {
 				continue
 			}
 			move = l.Pos*(pxB/last.CloseB-1) + l.PosAlt*(pxE/last.CloseE-1) + l.PosSOL*(pxS/last.CloseS-1)
 		} else if pair {
-			if last.CloseE <= 0 || pxE <= 0 {
+			if last.CloseE <= 0 || !validPrice(pxE) {
 				continue
 			}
 			move = 0.5*l.Pos*(pxB/last.CloseB-1) + 0.5*l.PosAlt*(pxE/last.CloseE-1)
 		}
 		eq := l.Equity * (1 + move)
 		peak := math.Max(l.Peak, eq)
-		dd := 1 - eq/peak
+		dd := 0.0
+		if peak > 0 {
+			dd = 1 - eq/peak
+		}
 		level := l.EmergencyArm
-		if level == 0 || l.Equity >= l.Peak {
+		if l.Equity >= l.Peak {
+			l.EmergencyArm = 0
 			level = EmergencyDD // re-armed at the base level once the ledger is back at a peak
+		} else if level == 0 {
+			level = EmergencyDD
 		}
 		if dd < level {
 			continue
@@ -90,8 +96,10 @@ func (st *State) EmergencyCheckAll(pxB, pxE, pxS float64, now time.Time) []strin
 		}
 		ret := (1+move)*(1-exit) - 1
 		l.Equity *= 1 + ret
-		if d := 1 - l.Equity/l.Peak; d > l.MaxDD {
-			l.MaxDD = d
+		if l.Peak > 0 {
+			if d := 1 - l.Equity/l.Peak; d > l.MaxDD {
+				l.MaxDD = d
+			}
 		}
 		l.Pos, l.PosAlt, l.PosSOL = 0, 0, 0
 		l.EmergencyArm = dd + EmergencyStep

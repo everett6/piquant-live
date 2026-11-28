@@ -93,8 +93,28 @@ func TestEmergencySkipsSingleLedgersCorrectlyAndOldRecords(t *testing.T) {
 	old := pairLedger(2)
 	old.Days[0].CloseB = 0 // record from before closes were stored
 	st := &State{Ledgers: map[string]*Ledger{"s": single, "o": old}}
-	f := st.EmergencyCheck(84, 1, time.Now()) // single: 2 x -16% = -32%; ETH price is ignored for it
-	if len(f) != 1 || !strings.HasPrefix(f[0], "s:") || old.Pos != 2 {
+	if f := st.EmergencyCheck(84, 1, time.Now()); len(f) != 1 || !strings.HasPrefix(f[0], "s:") || old.Pos != 2 {
 		t.Fatalf("fired %v, old pos %v", f, old.Pos)
+	}
+}
+
+func TestEmergencyResetArmOnNewPeak(t *testing.T) {
+	l := pairLedger(1)
+	l.Peak, l.Equity, l.EmergencyArm = 1.0, 1.0, 0.45
+	st := &State{Ledgers: map[string]*Ledger{"p": l}}
+	now := time.Date(2026, 11, 19, 14, 5, 0, 0, time.UTC)
+
+	// Small intraday move while at peak: does not fire, but resets EmergencyArm to 0.
+	if f := st.EmergencyCheck(95, 9.5, now); len(f) != 0 {
+		t.Fatalf("unexpected fire: %v", f)
+	}
+	if l.EmergencyArm != 0 {
+		t.Fatalf("EmergencyArm = %v, want 0 after equity >= peak", l.EmergencyArm)
+	}
+
+	// Next close leaves equity slightly below peak; a 31% drawdown must fire at EmergencyDD (30%), not 45%.
+	l.Equity = 0.99
+	if f := st.EmergencyCheck(69, 6.9, now); len(f) != 1 {
+		t.Fatalf("expected emergency stop at 30%% threshold, fired=%v", f)
 	}
 }

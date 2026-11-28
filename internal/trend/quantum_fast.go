@@ -58,6 +58,98 @@ const (
 	maxEntropyHistBuf   = 192
 )
 
+var invLn3 = 1.0 / math.Log(3.0)
+
+// quantumSpectralEntropyFromMoments computes S(rho) = -Tr(rho * ln(rho)) / ln(3) in [0, 1]
+// directly from uncentered window sums and cross-products with zero heap allocations.
+func quantumSpectralEntropyFromMoments(w, sumB, sumE, sumS, sumBB, sumEE, sumSS, sumBE, sumBS, sumES float64) (float64, bool) {
+	if w < 5 {
+		return 0, false
+	}
+	invW := 1.0 / w
+	vBB := sumBB - sumB*sumB*invW
+	vEE := sumEE - sumE*sumE*invW
+	vSS := sumSS - sumS*sumS*invW
+	if vBB <= 1e-18 || vEE <= 1e-18 || vSS <= 1e-18 {
+		return 0, false
+	}
+	cBE := sumBE - sumB*sumE*invW
+	cBS := sumBS - sumB*sumS*invW
+	cES := sumES - sumE*sumS*invW
+
+	clampCorr := func(x float64) float64 {
+		if x > 0.999999 {
+			return 0.999999
+		}
+		if x < -0.999999 {
+			return -0.999999
+		}
+		return x
+	}
+	c01 := clampCorr(cBE / math.Sqrt(vBB*vEE))
+	c02 := clampCorr(cBS / math.Sqrt(vBB*vSS))
+	c12 := clampCorr(cES / math.Sqrt(vEE*vSS))
+
+	// Rescaled quantum density matrix rho = C / 3.0.
+	const inv3 = 1.0 / 3.0
+	a00, a11, a22 := inv3, inv3, inv3
+	a01, a02, a12 := c01*inv3, c02*inv3, c12*inv3
+
+	// Closed-form eigenvalues of a 3x3 real symmetric matrix (Smith 1961 / Kopp 2008).
+	p1 := a01*a01 + a02*a02 + a12*a12
+	var eig [3]float64
+	if p1 < 1e-16 {
+		eig = [3]float64{a00, a11, a22}
+	} else {
+		q := (a00 + a11 + a22) * inv3
+		p2 := (a00-q)*(a00-q) + (a11-q)*(a11-q) + (a22-q)*(a22-q) + 2.0*p1
+		// Guard against negative p2 due to floating-point error
+		if p2 < 0 {
+			p2 = 0
+		}
+		p := math.Sqrt(p2 / 6.0)
+		b00, b11, b22 := (a00-q)/p, (a11-q)/p, (a22-q)/p
+		b01, b02, b12 := a01/p, a02/p, a12/p
+		detB := b00*(b11*b22-b12*b12) - b01*(b01*b22-b12*b02) + b02*(b01*b12-b11*b02)
+		r := detB * 0.5
+		if r > 1.0 {
+			r = 1.0
+		} else if r < -1.0 {
+			r = -1.0
+		}
+		phi := math.Acos(r) * inv3
+		eig[0] = q + 2.0*p*math.Cos(phi)
+		eig[2] = q + 2.0*p*math.Cos(phi+2.0*math.Pi*inv3)
+		eig[1] = 3.0*q - eig[0] - eig[2]
+	}
+
+	var sumEig float64
+	for i := range eig {
+		if eig[i] < 0 {
+			eig[i] = 0
+		}
+		sumEig += eig[i]
+	}
+	if sumEig <= 0 {
+		return 0, false
+	}
+
+	var h float64
+	for _, ev := range eig {
+		lam := ev / sumEig
+		if lam > 1e-15 {
+			h -= lam * math.Log(lam)
+		}
+	}
+	s := h * invLn3
+	if s < 0 {
+		s = 0
+	} else if s > 1 {
+		s = 1
+	}
+	return s, true
+}
+
 // quantumSpectralEntropyFromReturns computes S(rho) = -Tr(rho * ln(rho)) / ln(3) in [0, 1]
 // for three aligned return slices without heap allocations.
 func quantumSpectralEntropyFromReturns(rb, re, rs []float64) (float64, bool) {
@@ -86,76 +178,7 @@ func quantumSpectralEntropyFromReturns(rb, re, rs []float64) (float64, bool) {
 		cBS += db * ds
 		cES += de * ds
 	}
-	if vBB <= 1e-18 || vEE <= 1e-18 || vSS <= 1e-18 {
-		return 0, false
-	}
-	clampCorr := func(x float64) float64 {
-		if x > 0.999999 {
-			return 0.999999
-		}
-		if x < -0.999999 {
-			return -0.999999
-		}
-		return x
-	}
-	c01 := clampCorr(cBE / math.Sqrt(vBB*vEE))
-	c02 := clampCorr(cBS / math.Sqrt(vBB*vSS))
-	c12 := clampCorr(cES / math.Sqrt(vEE*vSS))
-
-	// Rescaled quantum density matrix rho = C / 3.0.
-	const inv3 = 1.0 / 3.0
-	a00, a11, a22 := inv3, inv3, inv3
-	a01, a02, a12 := c01*inv3, c02*inv3, c12*inv3
-
-	// Closed-form eigenvalues of a 3x3 real symmetric matrix (Smith 1961 / Kopp 2008).
-	p1 := a01*a01 + a02*a02 + a12*a12
-	var eig [3]float64
-	if p1 < 1e-16 {
-		eig = [3]float64{a00, a11, a22}
-	} else {
-		q := (a00 + a11 + a22) / 3.0
-		p2 := (a00-q)*(a00-q) + (a11-q)*(a11-q) + (a22-q)*(a22-q) + 2.0*p1
-		p := math.Sqrt(p2 / 6.0)
-		b00, b11, b22 := (a00-q)/p, (a11-q)/p, (a22-q)/p
-		b01, b02, b12 := a01/p, a02/p, a12/p
-		detB := b00*(b11*b22-b12*b12) - b01*(b01*b22-b12*b02) + b02*(b01*b12-b11*b02)
-		r := detB * 0.5
-		if r > 1.0 {
-			r = 1.0
-		} else if r < -1.0 {
-			r = -1.0
-		}
-		phi := math.Acos(r) / 3.0
-		eig[0] = q + 2.0*p*math.Cos(phi)
-		eig[2] = q + 2.0*p*math.Cos(phi+2.0*math.Pi/3.0)
-		eig[1] = 3.0*q - eig[0] - eig[2]
-	}
-
-	var sumEig float64
-	for i := range eig {
-		if eig[i] < 0 {
-			eig[i] = 0
-		}
-		sumEig += eig[i]
-	}
-	if sumEig <= 0 {
-		return 0, false
-	}
-
-	var h float64
-	for _, ev := range eig {
-		lam := ev / sumEig
-		if lam > 1e-15 {
-			h -= lam * math.Log(lam)
-		}
-	}
-	s := h / math.Log(3.0)
-	if s < 0 {
-		s = 0
-	} else if s > 1 {
-		s = 1
-	}
-	return s, true
+	return quantumSpectralEntropyFromMoments(fn, 0, 0, 0, vBB, vEE, vSS, cBE, cBS, cES)
 }
 
 // quantumSpectralEntropy3x3 computes the threshold-free Von Neumann spectral entropy
@@ -242,40 +265,83 @@ func quantumSpectralEntropyStats3x3(histB, histE, histS []Day, window, zWin int)
 		}
 	}
 
-	// Verify latest window returns are valid.
-	startNow := nRet - window
-	for i := startNow; i < nRet; i++ {
-		if !valid[i] {
-			return 0, 0, false
-		}
-	}
-	sNow, ok = quantumSpectralEntropyFromReturns(rb[startNow:nRet], re[startNow:nRet], rs[startNow:nRet])
-	if !ok {
-		return 0, 0, false
-	}
-
 	var sum, sum2 float64
 	var cnt int
-	for k := 0; k < maxSteps; k++ {
-		end := nRet - k
-		start := end - window
-		allValid := true
-		for i := start; i < end; i++ {
-			if !valid[i] {
-				allValid = false
-				break
+	var sumB, sumE, sumS, sumBB, sumEE, sumSS, sumBE, sumBS, sumES float64
+	var validCnt int
+	fw := float64(window)
+	lastStart := maxSteps - 1
+	latestValid := false
+
+	for start := 0; start < maxSteps; start++ {
+		if start == 0 || start&31 == 0 {
+			sumB, sumE, sumS = 0, 0, 0
+			sumBB, sumEE, sumSS = 0, 0, 0
+			sumBE, sumBS, sumES = 0, 0, 0
+			validCnt = 0
+			end := start + window
+			for i := start; i < end; i++ {
+				if !valid[i] {
+					continue
+				}
+				b, e, sVal := rb[i], re[i], rs[i]
+				sumB += b
+				sumE += e
+				sumS += sVal
+				sumBB += b * b
+				sumEE += e * e
+				sumSS += sVal * sVal
+				sumBE += b * e
+				sumBS += b * sVal
+				sumES += e * sVal
+				validCnt++
+			}
+		} else {
+			out := start - 1
+			if valid[out] {
+				b, e, sVal := rb[out], re[out], rs[out]
+				sumB -= b
+				sumE -= e
+				sumS -= sVal
+				sumBB -= b * b
+				sumEE -= e * e
+				sumSS -= sVal * sVal
+				sumBE -= b * e
+				sumBS -= b * sVal
+				sumES -= e * sVal
+				validCnt--
+			}
+			in := start + window - 1
+			if valid[in] {
+				b, e, sVal := rb[in], re[in], rs[in]
+				sumB += b
+				sumE += e
+				sumS += sVal
+				sumBB += b * b
+				sumEE += e * e
+				sumSS += sVal * sVal
+				sumBE += b * e
+				sumBS += b * sVal
+				sumES += e * sVal
+				validCnt++
 			}
 		}
-		if !allValid {
+		if validCnt != window {
 			continue
 		}
-		if s, sok := quantumSpectralEntropyFromReturns(rb[start:end], re[start:end], rs[start:end]); sok {
-			sum += s
-			sum2 += s * s
-			cnt++
+		s, sok := quantumSpectralEntropyFromMoments(fw, sumB, sumE, sumS, sumBB, sumEE, sumSS, sumBE, sumBS, sumES)
+		if !sok {
+			continue
 		}
+		if start == lastStart {
+			sNow = s
+			latestValid = true
+		}
+		sum += s
+		sum2 += s * s
+		cnt++
 	}
-	if cnt < 20 {
+	if !latestValid || cnt < 20 {
 		return 0, 0, false
 	}
 	fn := float64(cnt)
@@ -309,8 +375,14 @@ func quantumRegimeScale(histB, histE, histS []Day, window, zWin int, floor float
 		}
 	}
 	if scale < floor {
-		return floor
+		scale = floor
 	}
+
+	// Instrumentation: record gate decision for later labeling
+	if RegimeMetrics != nil && len(histB) > 0 {
+		RegimeMetrics.RecordQuantumGate(scale, histB[len(histB)-1].Date)
+	}
+
 	return scale
 }
 

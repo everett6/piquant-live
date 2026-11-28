@@ -18,6 +18,7 @@ import (
 	"piquant-live/internal/execution"
 	"piquant-live/internal/paper"
 	"piquant-live/internal/trend"
+	"piquant-live/internal/trendcache"
 )
 
 // prereg6Date is the PREREG6 registration date: days up to and including it only seed the SMA.
@@ -36,12 +37,28 @@ func runTrend(args []string) error {
 	blend := fs.Bool("blend", false, "include S36_qd_carry_blend composite scorecard + ping execution plan")
 	pingSample := fs.Bool("ping", false, "measure live exchange ping for S36 execution guidance (only with --blend)")
 	reset := fs.String("reset", "", "restart one variant flat at equity 1 (e.g. after its kill switch) and exit")
+	metrics := fs.Bool("metrics", false, "print regime gate precision/recall metrics and exit")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+
+	// Single TrendCache instance for the entire invocation
+	trendCache := trendcache.NewTrendCache()
+
+	if *metrics {
+		trendPath := filepath.Join(*dir, "trend_state.json")
+		st, err := trendCache.GetTrendState(trendPath)
+		if err != nil {
+			return err
+		}
+		if st == nil {
+			return fmt.Errorf("no state in %s", *dir)
+		}
+		return printRegimeMetrics(st, regimeMetricsPath(trendPath))
+	}
 	if *reset != "" {
 		path := filepath.Join(*dir, "trend_state.json")
-		st, err := trend.Load(path)
+		st, err := trendCache.GetTrendState(path)
 		if err != nil || st == nil {
 			return fmt.Errorf("no state in %s: %v", *dir, err)
 		}
@@ -49,10 +66,14 @@ func runTrend(args []string) error {
 			return err
 		}
 		fmt.Printf("[TREND] %s reset to flat, equity 1\n", *reset)
-		return st.Save(path)
+		if err := st.Save(path); err != nil {
+			return err
+		}
+		trendCache.InvalidateTrend()
+		return nil
 	}
 	if *report {
-		st, err := trend.Load(filepath.Join(*dir, "trend_state.json"))
+		st, err := trendCache.GetTrendState(filepath.Join(*dir, "trend_state.json"))
 		if err != nil {
 			return err
 		}
@@ -65,15 +86,18 @@ func runTrend(args []string) error {
 		return printTrend(st)
 	}
 	path := filepath.Join(*dir, "trend_state.json")
-	st, err := trend.Load(path)
+	st, err := trendCache.GetTrendState(path)
 	if err != nil {
 		return err
+	}
+	if merr := trend.RegimeMetrics.Load(regimeMetricsPath(path)); merr != nil {
+		fmt.Fprintln(os.Stderr, "[TREND] load regime metrics:", merr)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	client := execution.NewOptimizedHTTPClient(20 * time.Second)
 	for {
-		st, err = advanceTrend(ctx, client, st, path)
+		st, err = advanceTrend(ctx, client, st, path, trendCache)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "[TREND]", err)
 		} else if *blend {
@@ -98,7 +122,7 @@ func runTrend(args []string) error {
 	}
 }
 
-func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, path string) (*trend.State, error) {
+func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, path string, trendCache *trendcache.TrendCache) (*trend.State, error) {
 	now := time.Now().UTC()
 	dailyStart := now.AddDate(0, 0, -299)
 	g0 := now.Add(-299 * 6 * time.Hour)
@@ -177,9 +201,15 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 			rcancel()
 		}
 	}
+	// Label pending regime gate observations with forward returns (30-day horizon)
+	trend.RegimeMetrics.LabelPending(st.History, st.ETHHistory, st.SOLHistory, 30)
+	if err := trend.RegimeMetrics.Save(regimeMetricsPath(path)); err != nil {
+		return st, err
+	}
 	if err := st.Save(path); err != nil {
 		return st, err
 	}
+	trendCache.InvalidateTrend()
 	fmt.Printf("[TREND] %s advanced %d day(s), last %s (eth last %s, sol last %s)\n", now.Format(time.RFC3339), n, st.LastDate, st.ETHLast, st.SOLLast)
 	if ethErr != nil {
 		return st, fmt.Errorf("fetch ETH daily candles: %w", ethErr)
@@ -225,16 +255,20 @@ func splitDays(rows []collect.CandleRow, now time.Time) (pre, post []trend.Day) 
 func runTrendCore(ctx context.Context, dir string, gate *paper.TrendGate) {
 	client := execution.NewOptimizedHTTPClient(20 * time.Second)
 	path := filepath.Join(dir, "trend_state.json")
-	st, err := trend.Load(path)
+	trendCache := trendcache.NewTrendCache()
+	st, err := trendCache.GetTrendState(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[TREND] load:", err)
+	}
+	if merr := trend.RegimeMetrics.Load(regimeMetricsPath(path)); merr != nil {
+		fmt.Fprintln(os.Stderr, "[TREND] load regime metrics:", merr)
 	}
 	for {
 		trendMu.Lock() // the emergency watch writes the same file
 		if fresh, lerr := trend.Load(path); lerr == nil && fresh != nil {
 			st = fresh // pick up manual edits such as `piquant trend --reset`
 		}
-		st, err = advanceTrend(ctx, client, st, path)
+		st, err = advanceTrend(ctx, client, st, path, trendCache)
 		trendMu.Unlock()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "[TREND]", err)
@@ -304,5 +338,23 @@ func printTrendWithBlend(ctx context.Context, st *trend.State, carryDir, dtb3Pat
 		return err
 	}
 	fmt.Println(string(b))
+	return nil
+}
+
+func regimeMetricsPath(trendStatePath string) string {
+	return filepath.Join(filepath.Dir(trendStatePath), "regime_metrics.json")
+}
+
+func printRegimeMetrics(st *trend.State, metricsPath string) error {
+	if err := trend.RegimeMetrics.Load(metricsPath); err != nil {
+		return err
+	}
+	// Trigger labeling of pending observations using 30-day forward returns
+	trend.RegimeMetrics.LabelPending(st.History, st.ETHHistory, st.SOLHistory, 30)
+	if err := trend.RegimeMetrics.Save(metricsPath); err != nil {
+		return err
+	}
+	snap := trend.RegimeMetrics.Snapshot()
+	fmt.Println(snap.String())
 	return nil
 }

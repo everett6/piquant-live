@@ -51,6 +51,15 @@ var (
 		0.66049329, 0.66877881, 0.67449262, 0.67682117, 0.68277913, 0.6865047, 0.69135502, 0.69610527, 0.70583929,
 		0.71598949, 0.7305622, 0.74365993, 0.7803219, 0.81948642, 0.90944531,
 	}
+	ss15C1, ss15C2, ss15C3, sqrt5 = func() (float64, float64, float64, float64) {
+		const period = 15.0
+		arg := math.Sqrt(2.0) * math.Pi / period
+		a1 := math.Exp(-arg)
+		b1 := 2.0 * a1 * math.Cos(arg)
+		c2 := b1
+		c3 := -a1 * a1
+		return 1.0 - c2 - c3, c2, c3, math.Sqrt(5.0)
+	}()
 )
 
 // hrpWeights3x3Matrix computes single-linkage Hierarchical Risk Parity (López de Prado 2016)
@@ -375,13 +384,7 @@ func supersmootherTrendFromSlice(px []float64) float64 {
 	if n < 6 {
 		return 0.5
 	}
-	const period = 15.0
-	arg := math.Sqrt(2.0) * math.Pi / period
-	a1 := math.Exp(-arg)
-	b1 := 2.0 * a1 * math.Cos(arg)
-	c2 := b1
-	c3 := -a1 * a1
-	c1 := 1.0 - c2 - c3
+	c1, c2, c3 := ss15C1, ss15C2, ss15C3
 
 	const maxSSBuf = 128
 	var ssBuf [maxSSBuf]float64
@@ -430,7 +433,7 @@ func supersmootherTrendFromSlice(px []float64) float64 {
 	if volD < 1e-4 {
 		volD = 1e-4
 	}
-	tr := 0.5 + 0.5*math.Tanh(vel5/(volD*math.Sqrt(5.0)))
+	tr := 0.5 + 0.5*math.Tanh(vel5/(volD*sqrt5))
 	if math.IsNaN(tr) {
 		return 0.5
 	}
@@ -485,10 +488,15 @@ func basketSupersmootherTrendStrength(histB, histE, histS []Day) float64 {
 	const inv3 = 1.0 / 3.0
 	var buf [win]float64
 	for i := 0; i < n; i++ {
-		if subB[i].Close <= 0 || subE[i].Close <= 0 || subS[i].Close <= 0 {
+		cB, cE, cS := subB[i].Close, subE[i].Close, subS[i].Close
+		if cB <= 0 || cE <= 0 || cS <= 0 {
 			return 0.5
 		}
-		buf[i] = math.Exp((math.Log(subB[i].Close) + math.Log(subE[i].Close) + math.Log(subS[i].Close)) * inv3)
+		if p := cB * cE * cS; p > 0 && !math.IsInf(p, 0) {
+			buf[i] = math.Cbrt(p)
+		} else {
+			buf[i] = math.Exp((math.Log(cB) + math.Log(cE) + math.Log(cS)) * inv3)
+		}
 	}
 	return supersmootherTrendFromSlice(buf[:n])
 }
@@ -586,5 +594,12 @@ func conformalRegimeGate(histB, histE, histS []Day) float64 {
 	trBTC := supersmootherTrendStrength(histB)
 	trBask := basketSupersmootherTrendStrength(histB, histE, histS)
 	trendStrength := 0.5*trBTC + 0.5*trBask
-	return conformalConvictionGateScore(hurst, entZ, trendStrength)
+	scale := conformalConvictionGateScore(hurst, entZ, trendStrength)
+
+	// Instrumentation: record gate decision for later labeling
+	if RegimeMetrics != nil && len(histB) > 0 {
+		RegimeMetrics.RecordConformalGate(scale, histB[len(histB)-1].Date)
+	}
+
+	return scale
 }

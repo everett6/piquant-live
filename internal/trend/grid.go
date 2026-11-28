@@ -32,7 +32,7 @@ func mergeBars(h, bars []Bar) []Bar {
 		seen[b.T] = true
 	}
 	for _, b := range bars {
-		if b.Close > 0 && b.T%gridSec == 0 && !seen[b.T] {
+		if validPrice(b.Close) && b.T%gridSec == 0 && !seen[b.T] {
 			seen[b.T] = true
 			h = append(h, b)
 		}
@@ -103,13 +103,14 @@ func (st *State) AdvanceGrid(btc, eth []Bar) int {
 		if b.T <= st.GridLast || bi < 1 || ei < 1 {
 			continue
 		}
-		hours := float64(b.T-st.GridB[bi-1].T) / 3600
+		hoursB := float64(b.T-st.GridB[bi-1].T) / 3600
+		hoursE := float64(st.GridE[ei].T-st.GridE[ei-1].T) / 3600
 		barB := b.Close/st.GridB[bi-1].Close - 1
 		barE := st.GridE[ei].Close/st.GridE[ei-1].Close - 1
 		date := time.Unix(b.T, 0).UTC().Format("2006-01-02T15")
 		for _, name := range sortedKeys(st.Ledgers) {
 			if l := st.Ledgers[name]; l.Variant.Clocks {
-				l.stepGrid(date, hours, barB, barE, st.GridB[:bi+1], st.GridE[:ei+1])
+				l.stepGrid(date, hoursB, hoursE, barB, barE, st.GridB[:bi+1], st.GridE[:ei+1])
 			}
 		}
 		st.GridLast = b.T
@@ -118,19 +119,22 @@ func (st *State) AdvanceGrid(btc, eth []Bar) int {
 	return n
 }
 
-func (l *Ledger) stepGrid(date string, hours, barB, barE float64, histB, histE []Bar) {
+func (l *Ledger) stepGrid(date string, hoursB, hoursE, barB, barE float64, histB, histE []Bar) {
 	v := l.Variant
 	c := (v.FeeBps + v.SlipBps) * 1e-4
-	f := v.FundingBpsH * hours * 1e-4
+	fB := v.FundingBpsH * hoursB * 1e-4
+	fE := v.FundingBpsH * hoursE * 1e-4
 	tb, te := clockTarget(histB, v.Lev, v.SMA), clockTarget(histE, v.Lev, v.SMA)
-	ret := 0.5*(l.Pos*barB-math.Abs(l.Pos)*f) + 0.5*(l.PosAlt*barE-math.Abs(l.PosAlt)*f) -
+	ret := 0.5*(l.Pos*barB-math.Abs(l.Pos)*fB) + 0.5*(l.PosAlt*barE-math.Abs(l.PosAlt)*fE) -
 		0.5*math.Abs(tb-l.Pos)*c - 0.5*math.Abs(te-l.PosAlt)*c
 	l.Equity *= 1 + ret
 	if l.Equity > l.Peak {
 		l.Peak = l.Equity
 	}
-	if dd := 1 - l.Equity/l.Peak; dd > l.MaxDD {
-		l.MaxDD = dd
+	if l.Peak > 0 {
+		if dd := 1 - l.Equity/l.Peak; dd > l.MaxDD {
+			l.MaxDD = dd
+		}
 	}
 	l.Pos, l.PosAlt = tb, te
 	l.Days = append(l.Days, DayRec{Date: date, Ret: ret, PosOut: 0.5*tb + 0.5*te, Equity: l.Equity,
