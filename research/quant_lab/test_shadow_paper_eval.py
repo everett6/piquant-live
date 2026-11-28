@@ -231,3 +231,17 @@ def test_dry_run_synth_evaluates_forward_oos(tmp_path):
     assert c["health"] in ("HEALTHY", "DECAYING", "KILLED")
     assert c["venue"] == "spot"
     assert os.path.exists(out_p)
+
+
+def test_dry_run_synth_writes_cusum_from_pre_admission_reference(tmp_path):
+    shadow_p = str(tmp_path / "shadow_candidates.json")
+    out_p = str(tmp_path / "shadow_paper_state.json")
+    with open(shadow_p, "w", encoding="utf-8") as fh:
+        json.dump([{"expr": "ema(btc_sma50_dist, 10) * 3.0", "role": "overlay", "venue": "spot",
+                    "source": "symbolic", "status": "SHADOW_PAPER_ONLY",
+                    "timestamp_utc": "2026-11-18T00:00:00+00:00"}], fh)
+    c = SPE.evaluate_shadow_candidates(shadow_path=shadow_p, out_path=out_p, dry_run_synth=True)["candidates"][0]
+    cu = c["cusum"]
+    assert cu is not None and cu["h"] > 0 and cu["ref_days"] >= 180 and cu["s"] >= 0
+    with open(out_p, encoding="utf-8") as fh:
+        assert json.load(fh)["candidates"][0]["cusum"] == cu

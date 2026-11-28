@@ -22,6 +22,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import auto_discover as AD
+import decay_cusum as DC
 import feature_store as FS
 import lab
 import multimodal_features as MF
@@ -31,6 +32,8 @@ import strategies40 as S40
 DEFAULT_DAILY_CSV_DIR = os.path.expanduser("~/piquant-collect/daily_csv")
 DEFAULT_SHADOW_PATH = os.path.join(HERE, "results", "shadow_candidates.json")
 DEFAULT_OUT_PATH = os.path.join(HERE, "results", "shadow_paper_state.json")
+# PREREG60: the CUSUM decides health only if its synthetic calibration passed; otherwise informational.
+USE_CUSUM_HEALTH = False
 
 
 def _to_utc_day(ts_val: Any) -> pd.Timestamp:
@@ -243,6 +246,12 @@ def evaluate_shadow_candidates(
                 oos_mask = bar_days > entry_day
                 oos_ret = net_ret[oos_mask]
                 metrics = compute_live_metrics(oos_ret)
+                cusum = DC.cusum_decay(net_ret[~oos_mask].to_numpy(), oos_ret.to_numpy())
+                metrics["cusum"] = cusum
+                if USE_CUSUM_HEALTH and cusum is not None:
+                    metrics["health"] = DC.classify_health_cusum(
+                        metrics["live_days"], metrics["live_max_dd_pct"], cusum
+                    )
                 rec.update(metrics)
                 if metrics["live_days"] > 0:
                     rec["first_oos_day_utc"] = oos_ret.index.min().strftime("%Y-%m-%d")
@@ -287,6 +296,12 @@ def evaluate_shadow_candidates(
     return state
 
 
+def _cusum_text(c: dict[str, Any] | None) -> str:
+    if not c:
+        return "n/a"
+    return f"{c['s']:.1f}/{c['h']:.1f}" + (" ALARM" if c["alarm"] else "")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Evaluate SHADOW_PAPER_ONLY alpha candidates strictly forward OOS.")
     p.add_argument("--dry-run-synth", action="store_true")
@@ -309,7 +324,7 @@ def main() -> None:
         print(
             f"  [{c['venue']}/{c['role']}] {c['health']} | days={c['live_days']} "
             f"ret={c['live_return_pct']:+.2f}% maxDD={c['live_max_dd_pct']:.2f}% "
-            f"sharpe={c['live_sharpe']:.3f} | expr={c['expr']}"
+            f"sharpe={c['live_sharpe']:.3f} cusum={_cusum_text(c.get('cusum'))} | expr={c['expr']}"
         )
 
 
