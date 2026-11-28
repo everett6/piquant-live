@@ -30,3 +30,10 @@ graphify-out/
 antigravity-add-model/
 
 __pycache__/
+
+# Local agent configs, runtime databases and build output
+.claude/
+.codex/
+chiplab_experiments.db*
+/piquant
+internal/dashboard/data/
