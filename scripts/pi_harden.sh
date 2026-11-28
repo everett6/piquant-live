@@ -45,14 +45,19 @@ for s in piquant piquant-collect; do
 CPUSchedulingPolicy=other
 CPUSchedulingPriority=0
 CPUAffinity=$core"
+  # time-sync.target: no RTC battery, so never record or trade on the stale boot clock (needs
+  # systemd-time-wait-sync enabled, checked below).
   put /etc/systemd/system/$s.service.d/zz-piquant-resilience.conf "[Unit]
 StartLimitIntervalSec=0
+Wants=time-sync.target
+After=time-sync.target
 
 [Service]
 Restart=always
 RestartSec=10$extra"
 done
 if [ "$APPLY" = 1 ]; then
+  sudo systemctl enable systemd-time-wait-sync.service
   sudo mkdir -p /var/log/journal && sudo systemd-tmpfiles --create --prefix /var/log/journal
   sudo systemctl restart systemd-journald
   sudo systemctl daemon-reexec    # picks up the watchdog setting

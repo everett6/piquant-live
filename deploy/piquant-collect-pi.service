@@ -1,7 +1,9 @@
 [Unit]
 Description=PiQuant tick + top-10 book recorder (Pi copy, wired Ethernet; desktop recorder keeps running)
-Wants=network-online.target
-After=network-online.target
+# time-sync.target: the Pi has no RTC battery, so after a power loss it boots with an old clock; recording
+# before NTP corrects it stamps rows hours early (11-17: 42.6 h). systemd-time-wait-sync makes this wait.
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
 
 [Service]
 User=everett
