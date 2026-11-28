@@ -1515,7 +1515,9 @@ func (e *DryRunEngine) maybeReloadCloudParams() {
 	if e.cfg.DisableCloudParams {
 		return
 	}
-	candidates := []string{"/home/everett/piquant-data/config/optimal_params.json"}
+	// Only the engine's own data and state directories: a hard-coded home path made tests on the Pi
+	// load the Pi's live parameters (DataDir already defaults to ~/piquant-data).
+	var candidates []string
 	if e.cfg.DataDir != "" {
 		candidates = append(candidates,
 			filepath.Join(e.cfg.DataDir, "config/optimal_params.json"),
