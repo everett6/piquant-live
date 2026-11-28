@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily PiQuant 30-Day Dry Run Monitor Timer
+Requires=piquant-dryrun-30d-monitor.service
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+AccuracySec=1h
+
+[Install]
+WantedBy=timers.target

@@ -52,8 +52,14 @@ REMOTE
 echo "Desktop"
 m=~/piquant-backups/pi-collect
 if [[ -d $m ]]; then
-  newest=$(find "$m" -type f -printf '%T@\n' | sort -n | tail -1)
-  ok "tick-data mirror" "$(du -sh "$m" | cut -f1), newest file $(( ( $(date +%s) - ${newest%.*} ) / 3600 )) h old"
+  newest=$(find "$m" -type f -printf '%T@\n' 2>/dev/null | sort -n | tail -1)
+  if [[ -n $newest ]]; then
+    newest_epoch=${newest%.*}
+    age_hours=$(( ($(date +%s) - newest_epoch) / 3600 ))
+    ok "tick-data mirror" "$(du -sh "$m" | cut -f1), newest file ${age_hours} h old"
+  else
+    ok "tick-data mirror" "NO FILES ($m)"
+  fi
 else
   ok "tick-data mirror" "MISSING ($m)"
 fi

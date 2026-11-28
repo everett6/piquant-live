@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily PiQuant 30-Day Dry Run Health Check & Report
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=piquant
+Group=piquant
+ExecStart=/home/everett/PiQuant/piquant-live/scripts/monitor_30d_dryrun.sh monitor
+WorkingDirectory=/home/everett/PiQuant/piquant-live
+
+[Install]
+WantedBy=multi-user.target
