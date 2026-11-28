@@ -48,3 +48,19 @@ Same synthetic setup as PREREG60: reference 1095 days, live 730 days, iid Studen
 
 Results to `results/round61.json` (written by the script) and a "Result" section appended here.
 No variants (other percentiles, horizons, clamps) under any number if it fails.
+
+## Result (run once 2026-11-28, `results/round61.json`): FAIL
+
+| Scenario (live Sharpe) | Old: killed <=365 d | New: killed <=365 d | New: killed <=730 d | New: median days | Limit alone: killed <=730 d |
+|---|---|---|---|---|---|
+| H (0.75, healthy) | 74.6% | 10.7% | 28.5% | >730 | 7.7% |
+| Z (0.0) | 87.4% | 30.8% | 64.2% | 539 | 26.7% |
+| N (-1.0) | 97.7% | 68.2% | 95.7% | 282 | 74.6% |
+| C (-3.0) | 100% | 99.2% | 100% | 139.5 | 100% |
+
+Median limit about -32%. Rules: 1 pass (10.7% <= 20%), 2 FAIL (7.7% > 7%), 3 pass (95.7% >= 70%),
+4 FAIL (139.5 > 120 days).
+
+Verdict: FAIL. `USE_DD_V2_HEALTH` stays False; the limit is written for information only and
+`classify_health` is unchanged. No variants. Observation: a looser limit cuts healthy false kills from
+74.6% to 10.7% but catches a crash about 50 days later than the fixed -15% did in PREREG60.
