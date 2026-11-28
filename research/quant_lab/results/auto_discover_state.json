@@ -1,0 +1,14 @@
+{
+  "n_trials": 842,
+  "runs": 3,
+  "accepted": 0,
+  "rejected": 32,
+  "last_run_utc": "2026-11-27T21:28:16.891115+00:00",
+  "latency_profile": {
+    "measured_rtt_ms": 160.98,
+    "regime": "high_rtt_daily_swing",
+    "compete_against": "Q42_dualspeed_60_40_carry_spot (daily/6h patient post-only Spot+Carry; NEVER sub-second HFT)",
+    "max_daily_turnover": 0.35,
+    "min_hold_days": 3.0
+  }
+}
