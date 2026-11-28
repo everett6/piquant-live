@@ -173,7 +173,11 @@ def _extract_ohlcv_from_price_row(row: dict[str, Any]) -> tuple[float, float, fl
 
 
 def _iter_price_rows_gz(gz_path: str):
-    """Yield decoded JSON dict rows from a `.jsonl.gz` snapshot, tolerating truncated tails."""
+    """Yield decoded JSON dict rows from a `.jsonl.gz` snapshot, tolerating truncated tails.
+
+    Rows the collector marked `"stale": true` are skipped: during a network outage it keeps writing the last
+    known quote every second (flagged stale), and those frozen prices would read as a flat, zero-volatility
+    market."""
     try:
         with gzip.open(gz_path, "rt", encoding="utf-8", errors="replace") as fh:
             try:
@@ -185,7 +189,7 @@ def _iter_price_rows_gz(gz_path: str):
                         row = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if isinstance(row, dict):
+                    if isinstance(row, dict) and row.get("stale") is not True:
                         yield row
             except (EOFError, OSError, gzip.BadGzipFile, zlib.error):
                 # Preserve rows decoded before a truncated trailing gzip member

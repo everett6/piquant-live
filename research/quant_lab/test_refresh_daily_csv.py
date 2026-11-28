@@ -577,3 +577,14 @@ def test_main_threads_prices_dir_and_fetch_public(tmp_path, monkeypatch, capsys)
     assert "prices_1m=" in stdout
     assert "dvol=" in stdout
     assert "stable=" in stdout
+
+
+def test_iter_price_rows_skips_stale_outage_rows(tmp_path):
+    p = tmp_path / "2026-01-02.jsonl.gz"
+    t0 = 1767312000000
+    rows = [{"t": t0, "sym": "BTCUSDT", "cb": 100.0},
+            {"t": t0 + 1000, "sym": "BTCUSDT", "cb": 100.0, "stale": True},
+            {"t": t0 + 2000, "sym": "BTCUSDT", "cb": 101.0, "stale": False}]
+    _write_gz_rows(p, rows)
+    got = list(RDC._iter_price_rows_gz(str(p)))
+    assert [r["t"] for r in got] == [t0, t0 + 2000]
