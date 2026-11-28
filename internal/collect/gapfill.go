@@ -484,6 +484,13 @@ func BackfillTradeGaps(ctx context.Context, cfg GapFillConfig) (*GapFillReport, 
 	if cfg.MaxGap <= 0 {
 		cfg.MaxGap = 3_000_000
 	}
+	if !cfg.DryRun {
+		unlock, err := lockBackfillDir(out)
+		if err != nil {
+			return nil, err
+		}
+		defer unlock()
+	}
 	if cfg.Client == nil {
 		cfg.Client = &http.Client{Timeout: 30 * time.Second}
 	}

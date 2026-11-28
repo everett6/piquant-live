@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -341,5 +342,31 @@ func TestFindTradeGapsSurvivesDamagedMembers(t *testing.T) {
 	}
 	if len(warn) != 1 {
 		t.Errorf("warnings = %v, want one", warn)
+	}
+}
+
+func TestBackfillRefusesConcurrentRun(t *testing.T) {
+	dir := t.TempDir()
+	writeLive(t, dir, "BTC-USD", []int64{1000, 1005})
+	out := filepath.Join(dir, "ticks_backfill")
+	unlock, err := lockBackfillDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hits int64
+	pointAt(t, fakeVenues(t, 2000, 1000, &hits, nil))
+	if _, err := BackfillTradeGaps(context.Background(), GapFillConfig{Dir: dir}); !errors.Is(err, ErrBackfillRunning) {
+		t.Fatalf("second run err = %v, want ErrBackfillRunning", err)
+	}
+	if hits != 0 {
+		t.Errorf("locked-out run still fetched %d pages", hits)
+	}
+	if _, err := BackfillTradeGaps(context.Background(), GapFillConfig{Dir: dir, DryRun: true}); err != nil {
+		t.Errorf("dry run should not need the lock: %v", err)
+	}
+	unlock()
+	rep, err := BackfillTradeGaps(context.Background(), GapFillConfig{Dir: dir})
+	if err != nil || rep.Streams["BTC-USD"].Filled != 4 {
+		t.Fatalf("after unlock: rep=%+v err=%v", rep, err)
 	}
 }
