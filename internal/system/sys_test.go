@@ -212,6 +212,24 @@ func TestWatchdogRunStopsFeedingStaleLoop(t *testing.T) {
 		t.Fatalf("status = %+v, want stale", st)
 	}
 	(Watchdog{}).Stop(true)
+	if err := (Watchdog{}).Kick(); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("Kick after Stop err = %v, want ErrUnsupported", err)
+	}
+}
+
+func TestWatchdogRunStopDisarmNoRace(t *testing.T) {
+	dev := fakeWatchdog(t, 50*time.Millisecond)
+	(Watchdog{}).Run(2*time.Millisecond, 50*time.Millisecond)
+	for i := 0; i < 5; i++ {
+		(Watchdog{}).Beat()
+		time.Sleep(2 * time.Millisecond)
+	}
+	if err := (Watchdog{}).Stop(true); err != nil {
+		t.Fatalf("Stop(true): %v", err)
+	}
+	if dev.n.Load() == 0 {
+		t.Fatal("expected at least one write including disarm 'V'")
+	}
 }
 
 func TestRuntimeInfo(t *testing.T) {

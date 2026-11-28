@@ -30,6 +30,11 @@ func newSessionStore(ttl time.Duration) *sessionStore {
 	return &sessionStore{ttl: ttl, m: make(map[string]time.Time)}
 }
 
+const (
+	maxSessions            = 256
+	maxLoginLimiterEntries = 1024
+)
+
 // issue creates a session and returns its id.
 func (s *sessionStore) issue(now time.Time) (string, error) {
 	var buf [32]byte
@@ -40,12 +45,28 @@ func (s *sessionStore) issue(now time.Time) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Opportunistic cleanup keeps the map bounded without a goroutine.
-	if len(s.m) > 64 {
+	if len(s.m) >= 64 {
 		for k, exp := range s.m {
 			if now.After(exp) {
 				delete(s.m, k)
 			}
 		}
+	}
+	for len(s.m) >= maxSessions {
+		var oldestKey string
+		var oldestExp time.Time
+		first := true
+		for k, exp := range s.m {
+			if first || exp.Before(oldestExp) {
+				oldestKey = k
+				oldestExp = exp
+				first = false
+			}
+		}
+		if oldestKey == "" {
+			break
+		}
+		delete(s.m, oldestKey)
 	}
 	s.m[id] = now.Add(s.ttl)
 	return id, nil
@@ -120,7 +141,7 @@ func (l *loginLimiter) fail(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
-	if len(l.m) > 256 {
+	if len(l.m) >= 256 {
 		for k, v := range l.m {
 			if now.After(v.until) {
 				delete(l.m, k)
@@ -128,6 +149,24 @@ func (l *loginLimiter) fail(ip string) {
 		}
 	}
 	a := l.m[ip]
+	if a == nil {
+		for len(l.m) >= maxLoginLimiterEntries {
+			var oldestKey string
+			var oldestUntil time.Time
+			first := true
+			for k, v := range l.m {
+				if first || v.until.Before(oldestUntil) {
+					oldestKey = k
+					oldestUntil = v.until
+					first = false
+				}
+			}
+			if oldestKey == "" {
+				break
+			}
+			delete(l.m, oldestKey)
+		}
+	}
 	if a == nil || now.After(a.until) {
 		a = &attempts{until: now.Add(l.window)}
 		l.m[ip] = a

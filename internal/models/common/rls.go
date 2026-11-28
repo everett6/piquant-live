@@ -33,10 +33,21 @@ func NewAdaptiveRLS(forgettingFactor float64) *AdaptiveRLS {
 
 // Fit processes sequential chronological samples with recursive matrix updates.
 func (r *AdaptiveRLS) Fit(samples []Sample, idx []int) error {
+	r.Weights = [FeatureCount]float64{}
+	r.Bias = 0
+	r.Fitted = false
 	n := len(samples)
 	if n == 0 || len(idx) == 0 {
 		return ErrNotFitted
 	}
+
+	// Dimensions: bias + k features (clamped to FeatureCount).
+	k := len(idx)
+	if k > FeatureCount {
+		k = FeatureCount
+	}
+	idx = idx[:k]
+	d := k + 1
 
 	// 1. Compute standardization statistics over the window
 	var meanX, stdX [FeatureCount]float64
@@ -61,13 +72,6 @@ func (r *AdaptiveRLS) Fit(samples []Sample, idx []int) error {
 	}
 	r.Mean = meanX
 	r.Std = stdX
-
-	// Dimensions: bias + k features
-	k := len(idx)
-	if k > FeatureCount {
-		k = FeatureCount
-	}
-	d := k + 1
 
 	// Weights, intermediate vectors, and covariance matrix are stack-allocated for 0 allocations.
 	var w, u, pu, gain [FeatureCount + 1]float64

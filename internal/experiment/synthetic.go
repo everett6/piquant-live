@@ -147,16 +147,12 @@ func GenerateSynthetic(path string, opts SyntheticOptions) error {
 
 		levels := make([]dataset.Level, numLevels)
 		if isBuy {
-			// Bids strictly below touch: mid - 2*tick, mid - 3*tick...
+			// Bids strictly below touch in descending (best-first) order: mid - 2*tick, mid - 3*tick...
 			for l := 0; l < numLevels; l++ {
 				offset := float64(l + 2)
 				p := math.Round((mid-offset*opts.TickSize)/opts.TickSize) * opts.TickSize
 				q := math.Round((0.1+rng.Float64()*1.8)*1000) / 1000
 				levels[l] = dataset.Level{Price: p, Qty: q}
-			}
-			// Sort ascending for dataset.Record validation
-			for j := 0; j < len(levels)/2; j++ {
-				levels[j], levels[len(levels)-1-j] = levels[len(levels)-1-j], levels[j]
 			}
 		} else {
 			// Asks strictly above touch: mid + 2*tick, mid + 3*tick...

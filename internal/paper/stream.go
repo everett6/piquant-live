@@ -103,14 +103,15 @@ type MarketStreamIngestor struct {
 
 // StreamStats captures ingestor throughput and telemetry.
 type StreamStats struct {
-	TotalEvents   atomic.Uint64
-	DepthUpdates  atomic.Uint64
-	Trades        atomic.Uint64
-	GapsDetected  atomic.Uint64
-	Reconnects    atomic.Uint64
-	FallbackTicks atomic.Uint64
-	RingDrops     atomic.Uint64
-	LastEventNs   atomic.Int64
+	TotalEvents     atomic.Uint64
+	DepthUpdates    atomic.Uint64
+	Trades          atomic.Uint64
+	GapsDetected    atomic.Uint64
+	Reconnects      atomic.Uint64
+	FallbackTicks   atomic.Uint64
+	RingDrops       atomic.Uint64
+	LastEventNs     atomic.Int64
+	LastRealEventNs atomic.Int64 // Last non-fallback event timestamp
 }
 
 // NewMarketStreamIngestor instantiates the live market ingestor.
@@ -180,14 +181,15 @@ func (m *MarketStreamIngestor) IsFallback() bool {
 }
 
 // Stats returns a snapshot of stream statistics.
-func (m *MarketStreamIngestor) Stats() (total, depths, trades, gaps, reconnects, fallbacks uint64, lastNs int64) {
+func (m *MarketStreamIngestor) Stats() (total, depths, trades, gaps, reconnects, fallbacks uint64, lastNs, lastRealNs int64) {
 	return m.stats.TotalEvents.Load(),
 		m.stats.DepthUpdates.Load(),
 		m.stats.Trades.Load(),
 		m.stats.GapsDetected.Load(),
 		m.stats.Reconnects.Load(),
 		m.stats.FallbackTicks.Load(),
-		m.stats.LastEventNs.Load()
+		m.stats.LastEventNs.Load(),
+		m.stats.LastRealEventNs.Load()
 }
 
 // GetL2Book returns a clone of the current in-memory L2 book for a symbol.
@@ -267,29 +269,35 @@ func (m *MarketStreamIngestor) runLoop(ctx context.Context) {
 	}
 }
 
-// connectAndStream dials the public WebSocket, performs handshake, and reads frames.
-func (m *MarketStreamIngestor) connectAndStream(ctx context.Context) error {
-	endpoints := []string{m.cfg.Endpoint}
+// binanceCandidateEndpoints returns the ordered failover endpoints and optional vision fallback URL.
+func binanceCandidateEndpoints(endpoint string) ([]string, string) {
+	endpoints := []string{endpoint}
 	var visionFallback string
 	// If connecting to data-stream.binance.vision, add stream.binance.com:9443 as secondary fallback.
 	// If connecting to stream.binance.com, add data-stream.binance.vision:9443 as fallback and promote on HTTP 451.
-	if strings.Contains(m.cfg.Endpoint, "data-stream.binance.vision") {
-		if u, err := url.Parse(m.cfg.Endpoint); err == nil {
+	if strings.Contains(endpoint, "data-stream.binance.vision") {
+		if u, err := url.Parse(endpoint); err == nil {
 			comURL := *u
 			comURL.Host = "stream.binance.com:9443"
 			endpoints = append(endpoints, comURL.String())
 		}
-	} else if strings.Contains(m.cfg.Endpoint, "stream.binance.com") {
-		if u, err := url.Parse(m.cfg.Endpoint); err == nil {
+	} else if strings.Contains(endpoint, "stream.binance.com") {
+		if u, err := url.Parse(endpoint); err == nil {
 			visionURL := *u
 			visionURL.Host = "data-stream.binance.vision:9443"
 			visionFallback = visionURL.String()
 			endpoints = append(endpoints, visionFallback)
 		}
 	}
+	return endpoints, visionFallback
+}
+
+// connectAndStream dials the public WebSocket, performs handshake, and reads frames.
+func (m *MarketStreamIngestor) connectAndStream(ctx context.Context) error {
+	endpoints, visionFallback := binanceCandidateEndpoints(m.cfg.Endpoint)
 
 	var lastErr error
-	for _, ep := range endpoints {
+	for i, ep := range endpoints {
 		select {
 		case <-ctx.Done():
 			return nil
@@ -305,10 +313,17 @@ func (m *MarketStreamIngestor) connectAndStream(ctx context.Context) error {
 			if visionFallback != "" && strings.Contains(ep, "stream.binance.com") {
 				m.cfg.Endpoint = visionFallback
 			}
-			log.Printf("[MarketStreamIngestor] Endpoint %s returned HTTP 451 (geoblocked in US by Binance policy); failing over to public gateway...", ep)
+			if i+1 < len(endpoints) {
+				log.Printf("[MarketStreamIngestor] Endpoint %s returned HTTP 451 (geoblocked in US by Binance policy); failing over to public gateway...", ep)
+				continue
+			}
+		}
+		// On other network errors, also try the next fallback endpoint (if available) before backing off
+		if i+1 < len(endpoints) {
+			log.Printf("[MarketStreamIngestor] Endpoint %s returned error: %v; trying fallback gateway...", ep, err)
 			continue
 		}
-		// On non-451 network errors, break to respect backoff
+		// No fallback available or already tried all endpoints, break to respect backoff
 		break
 	}
 	return lastErr
@@ -413,6 +428,9 @@ func (m *MarketStreamIngestor) dialAndStreamEndpoint(ctx context.Context, endpoi
 
 	m.connected.Store(true)
 
+	// Synchronize concurrent writes (keepalive ping goroutine vs read-loop pong).
+	var writeMu sync.Mutex
+
 	// Proactive keepalive ping loop to detect half-open TCP hangs in <= 15s
 	pingCtx, pingCancel := context.WithCancel(ctx)
 	defer pingCancel()
@@ -424,12 +442,15 @@ func (m *MarketStreamIngestor) dialAndStreamEndpoint(ctx context.Context, endpoi
 			case <-pingCtx.Done():
 				return
 			case <-ticker.C:
+				writeMu.Lock()
 				_ = sendWSPing(conn)
+				writeMu.Unlock()
 			}
 		}
 	}()
 
-	// Stream frames
+	// Stream frames - handle fragmented messages (continuation frames)
+	var reassemblyBuf []byte
 	for {
 		select {
 		case <-ctx.Done():
@@ -438,7 +459,7 @@ func (m *MarketStreamIngestor) dialAndStreamEndpoint(ctx context.Context, endpoi
 		}
 
 		_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
-		payload, op, err := readWSFrame(br)
+		payload, op, fin, err := readWSFrame(br)
 		if err != nil {
 			return err
 		}
@@ -447,17 +468,47 @@ func (m *MarketStreamIngestor) dialAndStreamEndpoint(ctx context.Context, endpoi
 			return io.EOF
 		}
 		if op == 0x9 { // Server Ping frame -> send Pong
+			writeMu.Lock()
 			_ = sendWSPong(conn, payload)
+			writeMu.Unlock()
 			continue
 		}
 		if op == 0xA { // Pong frame in reply to our client ping
 			continue
 		}
-		if op != 0x1 && op != 0x2 { // Only text or binary payload
+
+		// Handle fragmented messages per RFC 6455
+		// Check if this is a continuation frame
+		if op == 0x0 { // Continuation frame
+			if reassemblyBuf == nil {
+				// Unexpected continuation frame
+				continue
+			}
+			reassemblyBuf = append(reassemblyBuf, payload...)
+			if fin {
+				m.handleStreamPayload(reassemblyBuf)
+				reassemblyBuf = nil
+			}
 			continue
 		}
 
-		m.handleStreamPayload(payload)
+		// New message frame (text=0x1, binary=0x2)
+		if op == 0x1 || op == 0x2 {
+			if reassemblyBuf != nil {
+				// Previous message was incomplete - discard
+				reassemblyBuf = nil
+			}
+			if fin {
+				// Complete message in one frame
+				m.handleStreamPayload(payload)
+			} else {
+				// Start of fragmented message
+				reassemblyBuf = payload
+			}
+			continue
+		}
+
+		// Ignore other opcodes
 	}
 }
 
@@ -522,9 +573,9 @@ func (m *MarketStreamIngestor) handleDepthUpdate(payload []byte, nowNs int64) {
 	// Set fresh snapshot or update in-place with zero allocations
 	book.SetSnapshot(delta.FinalUpdateID(), delta.Bids, delta.Asks)
 	symID := m.symbolIDs[symbol]
+	mid, hasMid := book.MidPrice()
 	m.booksMu.Unlock()
 
-	mid, hasMid := book.MidPrice()
 	if !hasMid && len(delta.Bids) > 0 && len(delta.Asks) > 0 {
 		mid = (delta.Bids[0].Price + delta.Asks[0].Price) * 0.5
 	}
@@ -554,6 +605,7 @@ func (m *MarketStreamIngestor) handleDepthUpdate(payload []byte, nowNs int64) {
 
 	m.stats.DepthUpdates.Add(1)
 	m.stats.TotalEvents.Add(1)
+	m.stats.LastRealEventNs.Store(nowNs)
 }
 
 func (m *MarketStreamIngestor) handleTradeUpdate(payload []byte, nowNs int64) {
@@ -610,6 +662,7 @@ func (m *MarketStreamIngestor) handleTradeUpdate(payload []byte, nowNs int64) {
 
 	m.stats.Trades.Add(1)
 	m.stats.TotalEvents.Add(1)
+	m.stats.LastRealEventNs.Store(nowNs)
 }
 
 // fallbackWatchdog monitors stream liveness and synthesizes ticks when disconnected
@@ -629,8 +682,8 @@ func (m *MarketStreamIngestor) fallbackWatchdog(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			lastNs := m.stats.LastEventNs.Load()
-			isStale := lastNs == 0 || (time.Now().UnixNano()-lastNs) > int64(2*time.Second)
+			lastRealNs := m.stats.LastRealEventNs.Load()
+			isStale := lastRealNs == 0 || (time.Now().UnixNano()-lastRealNs) > int64(2*time.Second)
 
 			if isStale {
 				m.fallback.Store(true)
@@ -700,48 +753,75 @@ func (m *MarketStreamIngestor) updateFallbackBook(symbol string, mid float64, se
 }
 
 // Simple RFC 6455 frame reader with support for masked and unmasked frames.
-func readWSFrame(r io.Reader) ([]byte, byte, error) {
+// Handles continuation frames (opcode 0x0), validates FIN/RSV bits, and enforces
+// client-to-server masking requirement. Returns (payload, opcode, fin, error).
+func readWSFrame(r io.Reader) ([]byte, byte, bool, error) {
 	var header [2]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 
+	fin := (header[0] & 0x80) != 0
+	rsv1 := (header[0] & 0x40) != 0
+	rsv2 := (header[0] & 0x20) != 0
+	rsv3 := (header[0] & 0x10) != 0
 	opcode := header[0] & 0x0F
 	isMasked := (header[1] & 0x80) != 0
 	payloadLen := int(header[1] & 0x7F)
 
+	// Validate RSV bits (must be 0 unless negotiated extension)
+	if rsv1 || rsv2 || rsv3 {
+		return nil, 0, false, errors.New("received frame with non-zero RSV bits")
+	}
+
+	// Validate opcode
+	if opcode > 0xA || (opcode > 0x2 && opcode < 0x8) {
+		return nil, 0, false, fmt.Errorf("invalid opcode 0x%02X", opcode)
+	}
+
+	// Control frames (close, ping, pong) must not be fragmented and must have payload <= 125
+	isControl := opcode >= 0x8
+	if isControl {
+		if !fin {
+			return nil, 0, false, errors.New("control frame must have FIN bit set")
+		}
+		if payloadLen > 125 {
+			return nil, 0, false, errors.New("control frame payload exceeds 125 bytes")
+		}
+	}
+
 	if payloadLen == 126 {
 		var ext [2]byte
 		if _, err := io.ReadFull(r, ext[:]); err != nil {
-			return nil, 0, err
+			return nil, 0, false, err
 		}
 		payloadLen = int(binary.BigEndian.Uint16(ext[:]))
 	} else if payloadLen == 127 {
 		var ext [8]byte
 		if _, err := io.ReadFull(r, ext[:]); err != nil {
-			return nil, 0, err
+			return nil, 0, false, err
 		}
 		rawLen := binary.BigEndian.Uint64(ext[:])
 		if rawLen > 10*1024*1024 {
-			return nil, 0, errors.New("frame payload exceeds 10MB limit")
+			return nil, 0, false, errors.New("frame payload exceeds 10MB limit")
 		}
 		payloadLen = int(rawLen)
 	}
 
 	if payloadLen < 0 || payloadLen > 10*1024*1024 { // Protect against unbounded memory
-		return nil, 0, errors.New("invalid frame payload length")
+		return nil, 0, false, errors.New("invalid frame payload length")
 	}
 
 	var maskKey [4]byte
 	if isMasked {
 		if _, err := io.ReadFull(r, maskKey[:]); err != nil {
-			return nil, 0, err
+			return nil, 0, false, err
 		}
 	}
 
 	buf := make([]byte, payloadLen)
 	if _, err := io.ReadFull(r, buf); err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 
 	if isMasked {
@@ -750,7 +830,7 @@ func readWSFrame(r io.Reader) ([]byte, byte, error) {
 		}
 	}
 
-	return buf, opcode, nil
+	return buf, opcode, fin, nil
 }
 
 // sendWSPong replies to a WebSocket ping frame with bounded write timeout.

@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"sort"
 	"sync"
@@ -56,8 +57,13 @@ func parseReply(b []byte, t1, t4 time.Time) (time.Duration, time.Duration, error
 	if binary.BigEndian.Uint64(b[24:32]) != toNTP(t1) {
 		return 0, 0, errors.New("reply does not match request")
 	}
-	t2 := fromNTP(binary.BigEndian.Uint64(b[32:40]))
-	t3 := fromNTP(binary.BigEndian.Uint64(b[40:48]))
+	rawT2 := binary.BigEndian.Uint64(b[32:40])
+	rawT3 := binary.BigEndian.Uint64(b[40:48])
+	if rawT2 == 0 || rawT3 == 0 {
+		return 0, 0, errors.New("zero server timestamp")
+	}
+	t2 := fromNTP(rawT2)
+	t3 := fromNTP(rawT3)
 	offset := (t2.Sub(t1) + t3.Sub(t4)) / 2
 	rtt := t4.Sub(t1) - t3.Sub(t2)
 	if rtt < 0 {
@@ -166,11 +172,13 @@ type Guard struct {
 	Query    QueryFunc
 	OnCheck  func(Measurement, bool) // optional: called after every check with the new OK state
 
-	mu       sync.RWMutex
-	last     Measurement // latest check, good or not
-	good     Measurement // latest check with a usable answer
-	lastGood time.Time
-	now      func() time.Time
+	mu           sync.RWMutex
+	last         Measurement // latest check, good or not
+	good         Measurement // latest check with a usable answer
+	lastGood     time.Time
+	now          func() time.Time
+	lastCheck    time.Time   // wall-clock time of last check (for jump detection)
+	backoffMult  float64     // current backoff multiplier when !OK
 }
 
 // NewGuard returns a guard with the owner's 250 ms limit and a 10-minute interval.
@@ -178,7 +186,12 @@ func NewGuard(servers []string) *Guard {
 	if len(servers) == 0 {
 		servers = DefaultServers
 	}
-	return &Guard{Servers: servers, Max: 250 * time.Millisecond, Interval: 10 * time.Minute}
+	return &Guard{
+		Servers:     servers,
+		Max:         250 * time.Millisecond,
+		Interval:    10 * time.Minute,
+		backoffMult: 1.0,
+	}
 }
 
 func (g *Guard) clock() time.Time {
@@ -195,8 +208,14 @@ func (g *Guard) Check(ctx context.Context) Measurement {
 	m := Measure(cctx, g.Servers, g.Max, g.Query)
 	g.mu.Lock()
 	g.last = m
+	now := g.clock()
+	g.lastCheck = now
 	if m.Err == nil {
-		g.good, g.lastGood = m, g.clock()
+		g.good, g.lastGood = m, now
+		g.backoffMult = 1.0 // reset backoff on success
+	} else {
+		// Faster backoff when not OK: increase multiplier up to 4x (check every ~2.5 min instead of 10 min)
+		g.backoffMult = math.Min(g.backoffMult*1.5, 4.0)
 	}
 	g.mu.Unlock()
 	if g.OnCheck != nil {
@@ -207,18 +226,52 @@ func (g *Guard) Check(ctx context.Context) Measurement {
 
 // Run checks now and then every Interval until ctx ends.
 func (g *Guard) Run(ctx context.Context) {
+	g.mu.Lock()
 	if g.Interval <= 0 {
 		g.Interval = 10 * time.Minute
 	}
+	interval := g.Interval
+	g.mu.Unlock()
 	g.Check(ctx)
-	t := time.NewTicker(g.Interval)
-	defer t.Stop()
+
+	// Use a timer instead of ticker to handle wall-clock jumps.
+	// We manually compute the next deadline and adjust for clock jumps.
+	nextDeadline := g.clock().Add(interval)
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-timer.C:
+			now := g.clock()
+
+			// Wall-clock jump detection: if the clock moved significantly
+			// (more than 10% of interval or backward), recompute deadline.
+			if g.lastCheck.IsZero() || now.Sub(g.lastCheck) > interval+interval/10 || now.Before(g.lastCheck) {
+				// Clock jumped forward or backward - resync
+				nextDeadline = now.Add(interval)
+			} else {
+				nextDeadline = nextDeadline.Add(interval)
+				// If we're somehow behind (e.g., Check took a long time), catch up
+				if nextDeadline.Before(now) {
+					nextDeadline = now.Add(interval)
+				}
+			}
+
 			g.Check(ctx)
+
+			// Compute next interval with backoff when not OK
+			g.mu.RLock()
+			effectiveInterval := time.Duration(float64(interval) * g.backoffMult)
+			g.mu.RUnlock()
+
+			timer.Reset(time.Until(nextDeadline))
+			// If the reset duration is negative or too small, fire immediately
+			if d := time.Until(nextDeadline); d <= 0 {
+				timer.Reset(effectiveInterval)
+			}
 		}
 	}
 }

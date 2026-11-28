@@ -48,6 +48,8 @@ type backupRunner struct {
 	lastAttempt time.Time
 	mirrorTry   time.Time
 	mirrorDay   string // local date of the last successful mirror
+	ledgerTry   time.Time
+	ledgerDay   string // local date of the last successful ledger push
 }
 
 // RunBackups blocks until ctx ends.
@@ -87,30 +89,43 @@ func (b *backupRunner) due(now time.Time) bool {
 	return errors.Is(err, os.ErrNotExist)
 }
 
+func (b *backupRunner) ledgerDue(now time.Time) bool {
+	if b.cfg.GitDir == "" || now.Hour() < b.cfg.Hour || now.Sub(b.ledgerTry) < 30*time.Minute {
+		return false
+	}
+	if b.ledgerDay == now.Format("2006-01-02") {
+		return false
+	}
+	_, err := os.Stat(b.archivePath(now))
+	return err == nil
+}
+
 func (b *backupRunner) tick(ctx context.Context, now time.Time) {
 	b.mirrorTick(ctx, now)
-	if !b.due(now) {
-		return
-	}
-	b.lastAttempt = now
-	n, err := b.fetch(ctx, now)
-	if err != nil {
-		b.logf("[BACKUP] Pi backup failed: %v", err)
-		if b.cfg.Alert != nil {
-			b.cfg.Alert("backup", "Pi backup failed", fmt.Sprintf("%v\n\nIt retries every 30 minutes.", err))
+	if b.due(now) {
+		b.lastAttempt = now
+		n, err := b.fetch(ctx, now)
+		if err != nil {
+			b.logf("[BACKUP] Pi backup failed: %v", err)
+			if b.cfg.Alert != nil {
+				b.cfg.Alert("backup", "Pi backup failed", fmt.Sprintf("%v\n\nIt retries every 30 minutes.", err))
+			}
+			return
 		}
-		return
+		b.logf("[BACKUP] saved %s (%d KB)", b.archivePath(now), n>>10)
+		if err := pruneArchives(b.cfg.Dest, b.cfg.Keep); err != nil {
+			b.logf("[BACKUP] prune: %v", err)
+		}
 	}
-	b.logf("[BACKUP] saved %s (%d KB)", b.archivePath(now), n>>10)
-	if err := pruneArchives(b.cfg.Dest, b.cfg.Keep); err != nil {
-		b.logf("[BACKUP] prune: %v", err)
-	}
-	if b.cfg.GitDir != "" {
+	if b.ledgerDue(now) {
+		b.ledgerTry = now
 		if err := b.pushLedgers(ctx, b.archivePath(now), now); err != nil {
 			b.logf("[BACKUP] ledger push failed: %v", err)
 			if b.cfg.Alert != nil {
 				b.cfg.Alert("ledger-push", "Ledger push to the private repo failed", err.Error())
 			}
+		} else {
+			b.ledgerDay = now.Format("2006-01-02")
 		}
 	}
 }
@@ -121,7 +136,8 @@ func (b *backupRunner) cmd(ctx context.Context) *exec.Cmd {
 	}
 	remote := fmt.Sprintf("cd %s && tar czf - --ignore-failed-read %s", shellQuote(b.cfg.RemoteDir),
 		strings.Join(quoteAll(b.cfg.Paths), " "))
-	return exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", b.cfg.Host, remote)
+	return exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", b.cfg.Host, remote)
 }
 
 func (b *backupRunner) mirrorDue(now time.Time) bool {
@@ -133,7 +149,7 @@ func (b *backupRunner) mirrorCmd(ctx context.Context) *exec.Cmd {
 	if b.cfg.mirrorCommand != nil {
 		return b.cfg.mirrorCommand(ctx)
 	}
-	args := []string{"-a", "--partial", "--ignore-missing-args", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=15"}
+	args := []string{"-a", "--partial", "--ignore-missing-args", "--timeout=60", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"}
 	for _, p := range b.cfg.MirrorPaths {
 		args = append(args, b.cfg.Host+":"+filepath.Join(b.cfg.MirrorRemote, p))
 	}
@@ -236,13 +252,16 @@ func pruneArchives(dir string, keep int) error {
 // pushLedgers unpacks the archive's ledgers into GitDir/pi and commits and pushes them. It refuses a repo whose
 // remote is the public piquant-live code repo.
 func (b *backupRunner) pushLedgers(ctx context.Context, archive string, now time.Time) error {
-	git := func(args ...string) (string, error) {
-		c := exec.CommandContext(ctx, "git", append([]string{"-C", b.cfg.GitDir}, args...)...)
+	gitCtx := func(gctx context.Context, args ...string) (string, error) {
+		c := exec.CommandContext(gctx, "git", append([]string{"-C", b.cfg.GitDir}, args...)...)
 		out, err := c.CombinedOutput()
 		if err != nil {
 			return "", fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(string(out)))
 		}
 		return string(out), nil
+	}
+	git := func(args ...string) (string, error) {
+		return gitCtx(ctx, args...)
 	}
 	remote, err := git("remote", "get-url", "origin")
 	if err != nil {
@@ -286,7 +305,9 @@ func (b *backupRunner) pushLedgers(ctx context.Context, archive string, now time
 	if _, err := git("commit", "-q", "-m", "Pi ledgers "+now.Format("2006-01-02")); err != nil {
 		return err
 	}
-	_, err = git("push", "-q")
+	pctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	_, err = gitCtx(pctx, "push", "-q")
 	return err
 }
 

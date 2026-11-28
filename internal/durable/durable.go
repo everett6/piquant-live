@@ -18,34 +18,50 @@ import (
 // BackupPath is the previous good copy of path.
 func BackupPath(path string) string { return path + ".bak" }
 
-// WriteFile replaces path with data. Order: write path.tmp and fsync it; move the current file aside (to path.bak
-// when it holds valid JSON, otherwise to path.corrupt-<unix time> so a broken file is never thrown away or kept as
-// the backup); rename path.tmp to path; fsync the directory.
+// WriteFile replaces path with data without assuming JSON format. Order: write a temp file via os.CreateTemp
+// and fsync it; move any non-empty current file aside to path.bak (empty files go to path.corrupt-<unix nano>);
+// rename the temp file to path; fsync the directory.
 func WriteFile(path string, data []byte, perm os.FileMode) error {
+	return writeFile(path, data, perm, func(old []byte) bool {
+		return len(old) > 0
+	})
+}
+
+func writeFile(path string, data []byte, perm os.FileMode, isValidBackup func([]byte) bool) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
+	tmp := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmp)
+		}
+	}()
+
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
+	if err := os.Chmod(tmp, perm); err != nil {
+		return err
+	}
 	if old, err := os.ReadFile(path); err == nil {
 		aside := BackupPath(path)
-		if len(old) == 0 || !json.Valid(old) {
-			aside = fmt.Sprintf("%s.corrupt-%d", path, time.Now().Unix())
+		if isValidBackup != nil && !isValidBackup(old) {
+			aside = fmt.Sprintf("%s.corrupt-%d", path, time.Now().UnixNano())
 		}
 		if err := os.Rename(path, aside); err != nil {
 			return err
@@ -56,16 +72,20 @@ func WriteFile(path string, data []byte, perm os.FileMode) error {
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
+	cleanup = false
 	return syncDir(dir)
 }
 
-// WriteJSON marshals v with the given indent and writes it with WriteFile.
+// WriteJSON marshals v with the given indent and writes it atomically, moving any invalid-JSON or empty
+// existing file to path.corrupt-<unix nano> rather than overwriting path.bak.
 func WriteJSON(path string, v any, indent string) error {
 	b, err := json.MarshalIndent(v, "", indent)
 	if err != nil {
 		return err
 	}
-	return WriteFile(path, b, 0o644)
+	return writeFile(path, b, 0o644, func(old []byte) bool {
+		return len(old) > 0 && json.Valid(old)
+	})
 }
 
 // ReadJSON returns the contents of path when it holds valid JSON, otherwise those of path.bak. It returns an error

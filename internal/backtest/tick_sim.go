@@ -206,6 +206,8 @@ type TickSimulator struct {
 	makerRebatesUSD     float64
 	takerFeesUSD        float64
 	hawkesCascadesSeen  int
+	circuitBreakerTrips int
+	prevCBState         paper.RiskState
 	sumDynamicLeverage  float64
 	leverageSamples     int64
 
@@ -216,6 +218,7 @@ type TickSimulator struct {
 	lastMonthRebates float64
 	lastMonthTaker   float64
 	lastMonthTicks   int64
+	lastMonthCBTrips int
 
 	// Daily returns for Sharpe/Sortino
 	dailyReturns []float64
@@ -319,7 +322,12 @@ func (s *TickSimulator) ProcessTick(tick *AggTradeTick) {
 	isBuyerMaker := tick.IsBuyerMaker
 
 	// 0. Online Realized Volatility Variance (EMA of squared price tick returns)
-	if s.lastMidPrice > 0 && price > 0 {
+	// Validate price before use to prevent NaN/Inf propagation
+	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+		// Skip this tick if price is invalid
+		return
+	}
+	if s.lastMidPrice > 0 {
 		tickRetBps := math.Abs(price-s.lastMidPrice) / s.lastMidPrice * 1e4
 		s.volVarBps = math.Sqrt(0.98*s.volVarBps*s.volVarBps + 0.02*tickRetBps*tickRetBps)
 		if s.volVarBps < 0.25 {
@@ -374,7 +382,7 @@ func (s *TickSimulator) ProcessTick(tick *AggTradeTick) {
 
 	// Dynamic capacity cap based on current equity and mid price
 	maxPosBase := (s.currentEquity * s.cfg.MaxLeverage) / price
-	if maxPosBase < 0.0001 {
+	if maxPosBase < 0.0001 || math.IsNaN(maxPosBase) || math.IsInf(maxPosBase, 0) {
 		maxPosBase = 0.0001
 	}
 
@@ -384,6 +392,7 @@ func (s *TickSimulator) ProcessTick(tick *AggTradeTick) {
 		s.lastDayMs = dayMs
 		s.dayStartEq = s.currentEquity
 		s.circuitBreaker.Reset(s.currentEquity)
+		s.prevCBState = paper.StateNormal
 	} else if dayMs > s.lastDayMs {
 		if s.dayStartEq > 0 {
 			dayRet := (s.currentEquity - s.dayStartEq) / s.dayStartEq
@@ -393,10 +402,15 @@ func (s *TickSimulator) ProcessTick(tick *AggTradeTick) {
 		s.lastDayMs = dayMs
 		// Daily session reset: re-anchor peak equity for new trading day
 		s.circuitBreaker.Reset(s.currentEquity)
+		s.prevCBState = paper.StateNormal
 	}
 
 	spreadEstBps := s.cfg.BaseSpreadBps + math.Abs(s.hawkes.FlowImbalance())*1.5
 	cbState, _ := s.circuitBreaker.OnTick(s.currentEquity, spreadEstBps, s.vpin.VPIN(), time.Unix(0, tNs))
+	if cbState == paper.StateTripped && s.prevCBState != paper.StateTripped {
+		s.circuitBreakerTrips++
+	}
+	s.prevCBState = cbState
 
 	// 6. Check Execution of Resting Quotes Against Incoming Market Order
 	s.evaluateFill(tick, price, qty, isBuyerMaker, tNs, maxPosBase)
@@ -442,13 +456,15 @@ func (s *TickSimulator) executeFill(fillPrice, fillQty float64, isBid bool, tNs 
 				s.avgEntryPrice = (s.inventoryBase*s.avgEntryPrice + fillQty*fillPrice) / newTotal
 			}
 		}
+		wasShort := s.inventoryBase < -1e-6
 		wasZero := math.Abs(s.inventoryBase) < 1e-6
 		s.inventoryBase += fillQty
 		if math.Abs(s.inventoryBase) < 1e-6 {
 			s.inventoryBase = 0
 			s.avgEntryPrice = 0
 			s.entryTimeNs = 0
-		} else if wasZero {
+		} else if wasZero || (wasShort && s.inventoryBase > 0) {
+			s.avgEntryPrice = fillPrice
 			s.entryTimeNs = tNs
 		}
 
@@ -473,13 +489,15 @@ func (s *TickSimulator) executeFill(fillPrice, fillQty float64, isBid bool, tNs 
 				s.avgEntryPrice = (-s.inventoryBase*s.avgEntryPrice + fillQty*fillPrice) / newTotal
 			}
 		}
+		wasLong := s.inventoryBase > 1e-6
 		wasZero := math.Abs(s.inventoryBase) < 1e-6
 		s.inventoryBase -= fillQty
 		if math.Abs(s.inventoryBase) < 1e-6 {
 			s.inventoryBase = 0
 			s.avgEntryPrice = 0
 			s.entryTimeNs = 0
-		} else if wasZero {
+		} else if wasZero || (wasLong && s.inventoryBase < 0) {
+			s.avgEntryPrice = fillPrice
 			s.entryTimeNs = tNs
 		}
 
@@ -514,6 +532,10 @@ func (s *TickSimulator) evaluateFill(tick *AggTradeTick, price, qty float64, isB
 				fillQty := math.Min(s.staleBidSize, qty)
 				s.executeFill(s.staleBidPrice, fillQty, true, tNs)
 				s.staleBidCancelAt = 0
+				qty -= fillQty
+				if qty <= 0 {
+					return
+				}
 			}
 		}
 
@@ -543,6 +565,10 @@ func (s *TickSimulator) evaluateFill(tick *AggTradeTick, price, qty float64, isB
 				fillQty := math.Min(s.staleAskSize, qty)
 				s.executeFill(s.staleAskPrice, fillQty, false, tNs)
 				s.staleAskCancelAt = 0
+				qty -= fillQty
+				if qty <= 0 {
+					return
+				}
 			}
 		}
 
@@ -681,6 +707,9 @@ func (s *TickSimulator) refreshQuotes(midPrice float64, tNs int64, maxPosBase fl
 
 	// 3. GLFT Reservation Price & Inventory Skew
 	qNorm := s.inventoryBase / maxPosBase
+	if math.IsNaN(qNorm) || math.IsInf(qNorm, 0) {
+		qNorm = 0
+	}
 	if qNorm > 1.0 {
 		qNorm = 1.0
 	} else if qNorm < -1.0 {
@@ -934,6 +963,7 @@ func (s *TickSimulator) ResetCapitalTo(capUSD float64) {
 	s.avgEntryPrice = 0
 	s.entryTimeNs = 0
 	s.circuitBreaker = paper.NewCircuitBreaker(s.cbCfg)
+	s.prevCBState = paper.StateNormal
 }
 
 // MonthlySnapshot takes a snapshot of performance metrics for the current calendar month.
@@ -951,6 +981,7 @@ func (s *TickSimulator) MonthlySnapshot(month string, startEq float64) MonthlyTi
 	monthRebates := s.makerRebatesUSD - s.lastMonthRebates
 	monthTaker := s.takerFeesUSD - s.lastMonthTaker
 	monthTicks := s.totalTicksProcessed - s.lastMonthTicks
+	monthCBTrips := s.circuitBreakerTrips - s.lastMonthCBTrips
 
 	s.lastMonthFills = s.totalFillsCount
 	s.lastMonthQuotes = s.totalQuotesPlaced
@@ -958,6 +989,7 @@ func (s *TickSimulator) MonthlySnapshot(month string, startEq float64) MonthlyTi
 	s.lastMonthRebates = s.makerRebatesUSD
 	s.lastMonthTaker = s.takerFeesUSD
 	s.lastMonthTicks = s.totalTicksProcessed
+	s.lastMonthCBTrips = s.circuitBreakerTrips
 
 	fillRate := 0.0
 	if monthQuotes > 0 {
@@ -995,7 +1027,7 @@ func (s *TickSimulator) MonthlySnapshot(month string, startEq float64) MonthlyTi
 		MeanVPIN:            s.vpin.VPIN(),
 		HawkesCascades:      s.hawkesCascadesSeen,
 		MeanLeverage:        meanLev,
-		CircuitBreakerTrips: 0,
+		CircuitBreakerTrips: monthCBTrips,
 	}
 }
 
@@ -1003,7 +1035,7 @@ func (s *TickSimulator) MonthlySnapshot(month string, startEq float64) MonthlyTi
 func computeSharpeRatio(returns []float64) float64 {
 	n := len(returns)
 	if n < 5 {
-		return 3.45 // Standard baseline
+		return 0.0
 	}
 	var sum, sumSq float64
 	for _, r := range returns {
@@ -1013,7 +1045,7 @@ func computeSharpeRatio(returns []float64) float64 {
 	mean := sum / float64(n)
 	variance := (sumSq / float64(n)) - (mean * mean)
 	if variance <= 1e-12 {
-		return 3.45
+		return 0.0
 	}
 	stdDev := math.Sqrt(variance)
 	dailySharpe := mean / stdDev
@@ -1112,7 +1144,7 @@ func (s *TickSimulator) FinalizeResult(monthlyMetrics []MonthlyTickMetric) TickS
 		TCAMarkout5sBps:       tcaSnap.MeanMarkout5sBps,
 		TCAMarkout10sBps:      tcaSnap.MeanMarkout10sBps,
 		AdverseSelectionBps:   tcaSnap.AdverseSelectionBps,
-		CircuitBreakerTrips:   0,
+		CircuitBreakerTrips:   s.circuitBreakerTrips,
 		HawkesCascadeEvents:   s.hawkesCascadesSeen,
 		AvgDynamicLeverage:    meanLev,
 		MacroEventsEvaded:     s.macroEventsEvaded,

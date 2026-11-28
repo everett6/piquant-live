@@ -3,6 +3,7 @@ package alpha
 import (
 	"math"
 	"testing"
+	"time"
 )
 
 func TestAlphaDecayHealthAndSelfImprovingLoop(t *testing.T) {
@@ -59,5 +60,45 @@ func TestAlphaDecayHealthAndSelfImprovingLoop(t *testing.T) {
 	}
 	if math.Abs(sum-1.0) > 1e-3 {
 		t.Fatalf("weights must sum to 1.0, got %v (%+v)", sum, alloc.Weights)
+	}
+}
+
+func TestAlphaNaNAndInfGuards(t *testing.T) {
+	rets := make([]float64, 30)
+	for i := range rets {
+		rets[i] = 0.001
+	}
+	rets[5] = math.NaN()
+	rets[10] = math.Inf(1)
+	rets[15] = math.Inf(-1)
+
+	h := ComputeAlphaHealth("qd", rets, 0.35)
+	if math.IsNaN(h.EWMA20dNetBps) || math.IsNaN(h.Rolling30dSharpe) || math.IsNaN(h.Rolling60dSharpe) || math.IsNaN(h.Lag1Autocorr) || math.IsNaN(h.ThrottleMult) {
+		t.Fatalf("ComputeAlphaHealth produced NaN: %+v", h)
+	}
+
+	alloc := RunSelfImprovingLoop(map[string][]float64{
+		"qd":    rets,
+		"r3":    rets,
+		"carry": rets,
+		"dtb3":  rets,
+	}, 0.15, 0.25, 0.70)
+	for k, v := range alloc.Weights {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			t.Fatalf("RunSelfImprovingLoop produced non-finite weight for %s: %v", k, v)
+		}
+	}
+
+	ae := NewAlphaEngine("BTC", "ETH")
+	now := time.Now()
+	for _, badMid := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		sig := ae.Evaluate("ETH", badMid, 100, 1, 101, 1, 50000, now)
+		if sig.RecommendedAction != "HOLD" || math.IsNaN(sig.DirectionalScore) || math.IsNaN(sig.Conviction) {
+			t.Fatalf("expected safe HOLD signal for bad midPrice %v, got %+v", badMid, sig)
+		}
+	}
+	sig2 := ae.Evaluate("ETH", 3000, math.NaN(), 1, 3001, 1, math.NaN(), now)
+	if math.IsNaN(sig2.DirectionalScore) || math.IsNaN(sig2.Conviction) || math.IsNaN(sig2.ExpectedEdgeBps) {
+		t.Fatalf("expected finite AlphaSignal when book/peer has NaN, got %+v", sig2)
 	}
 }

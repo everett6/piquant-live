@@ -143,3 +143,35 @@ func TestMirrorCommandArgs(t *testing.T) {
 		t.Fatalf("args %q", got)
 	}
 }
+
+func TestBackupLedgerDueRetriesAfterFailure(t *testing.T) {
+	dest := t.TempDir()
+	now := time.Date(2026, 11, 14, 4, 0, 0, 0, time.Local)
+	_ = os.WriteFile(filepath.Join(dest, "2026-11-14.tar.gz"), []byte{0x1f, 0x8b}, 0o644)
+
+	b := &backupRunner{
+		cfg: BackupConfig{Dest: dest, Hour: 3, GitDir: t.TempDir()},
+	}
+	if !b.ledgerDue(now) {
+		t.Fatal("expected ledgerDue=true when archive exists and ledgerDay unset")
+	}
+	// Simulate a failed attempt: ledgerTry is set, ledgerDay remains empty.
+	b.ledgerTry = now
+	if b.ledgerDue(now.Add(10 * time.Minute)) {
+		t.Fatal("expected ledgerDue=false before 30m retry window")
+	}
+	if !b.ledgerDue(now.Add(31 * time.Minute)) {
+		t.Fatal("expected ledgerDue=true after 30m retry window")
+	}
+	// Once succeeded, ledgerDay is set and it should not run again today.
+	b.ledgerDay = now.Format("2006-01-02")
+	if b.ledgerDue(now.Add(2 * time.Hour)) {
+		t.Fatal("expected ledgerDue=false after ledgerDay is recorded for today")
+	}
+	// Next day (with archive present) should be due again.
+	next := now.Add(24 * time.Hour)
+	_ = os.WriteFile(filepath.Join(dest, next.Format("2006-01-02")+".tar.gz"), []byte{0x1f, 0x8b}, 0o644)
+	if !b.ledgerDue(next) {
+		t.Fatal("expected ledgerDue=true on the next day")
+	}
+}

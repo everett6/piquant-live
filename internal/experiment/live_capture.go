@@ -292,7 +292,7 @@ func CapturePublicMarketStream(dataDir, symbol string, durationSec int, ticks in
 			continue
 		}
 
-		// Incremental L2 depth update (strictly ascending price levels per dataset.Validate,
+		// Incremental L2 depth update (descending bids, ascending asks per dataset.Validate,
 		// anchored around bookMid so the order book never crosses)
 		seq++
 		isBuy := rng.Float64() < 0.52
@@ -306,8 +306,8 @@ func CapturePublicMarketStream(dataDir, symbol string, durationSec int, ticks in
 
 		levels := make([]dataset.Level, 2)
 		if isBuy {
-			p0 := math.Round((bookMid-3*tickSize)/tickSize) * tickSize
-			p1 := math.Round((bookMid-2*tickSize)/tickSize) * tickSize
+			p0 := math.Round((bookMid-2*tickSize)/tickSize) * tickSize
+			p1 := math.Round((bookMid-3*tickSize)/tickSize) * tickSize
 			q0 := math.Round((baseQty*(0.3+rng.Float64()*1.4))*1000) / 1000
 			q1 := math.Round((baseQty*(0.3+rng.Float64()*1.4))*1000) / 1000
 			levels[0] = dataset.Level{Price: p0, Qty: math.Max(0.05, q0)}

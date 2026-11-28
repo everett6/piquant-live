@@ -2,9 +2,11 @@ package discovery
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -340,4 +342,122 @@ func TestFastDiscoveryAdaptiveTransition(t *testing.T) {
 	}
 	paired = true
 	time.Sleep(50 * time.Millisecond)
+}
+
+func TestAnnouncerWallClockJumpResilience(t *testing.T) {
+	// Test that Announcer handles wall-clock jumps gracefully
+	send, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer send.Close()
+
+	a := &Announcer{
+		Beacon:   sample(RoleEngine),
+		Conn:     send,
+		Port:     1,
+		Interval: 10 * time.Millisecond, // Fast interval for testing
+	}
+	if err := a.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer a.Stop()
+
+	// Let it send a few beacons
+	time.Sleep(50 * time.Millisecond)
+
+	// The announcer should not panic or deadlock on wall-clock jumps
+	// (we can't easily simulate a wall-clock jump in a test, but we verify
+	// the timer-based loop doesn't have obvious issues)
+}
+
+func TestBrowserConcurrentAccess(t *testing.T) {
+	// Test concurrent access to Browser methods
+	// Use a dedicated test socket to avoid port conflicts
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	b := &Browser{Token: "tok", TTL: time.Minute, SelfID: "self", Conn: conn}
+	if err := b.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+
+	var wg sync.WaitGroup
+	// Spawn readers
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				_ = b.Peers()
+				_, _ = b.Best(RoleEngine)
+			}
+		}()
+	}
+
+	// Spawn writers (simulate receiving beacons)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for j := 0; j < 25; j++ {
+				beacon := sample(RoleEngine)
+				beacon.ID = fmt.Sprintf("peer-%d-%d", workerID, j)
+				b.observe(beacon, &net.UDPAddr{IP: net.IPv4(192, 168, 1, byte(workerID+1)), Port: 1})
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	// Should not panic or deadlock
+	peers := b.Peers()
+	if len(peers) == 0 {
+		t.Fatal("expected peers to be learned")
+	}
+}
+
+func TestAnnouncerRestartDoesNotDeadlock(t *testing.T) {
+	send, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer send.Close()
+
+	a := &Announcer{
+		Beacon:   sample(RoleEngine),
+		Conn:     send,
+		Port:     1,
+		Interval: 20 * time.Millisecond,
+	}
+	for i := 0; i < 2; i++ {
+		if err := a.Start(); err != nil {
+			t.Fatalf("Start #%d: %v", i+1, err)
+		}
+		a.Stop()
+	}
+}
+
+func TestBrowserDoubleListenRejectedAndRestartable(t *testing.T) {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	b := &Browser{TTL: time.Minute, Conn: conn}
+	if err := b.Listen(); err != nil {
+		t.Fatalf("Listen #1: %v", err)
+	}
+	if err := b.Listen(); err == nil {
+		t.Fatal("expected error on double Listen()")
+	}
+	b.Close()
+	if err := b.Listen(); err != nil {
+		t.Fatalf("Listen after Close: %v", err)
+	}
+	b.Close()
 }

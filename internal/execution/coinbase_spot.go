@@ -28,6 +28,8 @@ import (
 	"time"
 )
 
+var defaultCoinbaseHTTPClient = NewOptimizedHTTPClient(10 * time.Second)
+
 // DefaultCoinbaseBaseURL is the production Coinbase Advanced Trade v3 REST base URL.
 const DefaultCoinbaseBaseURL = "https://api.coinbase.com"
 
@@ -263,7 +265,12 @@ func (c *CoinbaseSpotClient) GetBalances(ctx context.Context) (map[string]float6
 	}
 	balances := make(map[string]float64)
 	cursor := ""
-	for {
+	seenCursors := make(map[string]struct{})
+	const maxPages = 50
+	for page := 0; page < maxPages; page++ {
+		if cursor != "" {
+			seenCursors[cursor] = struct{}{}
+		}
 		path := "/api/v3/brokerage/accounts?limit=250"
 		if cursor != "" {
 			path += "&cursor=" + url.QueryEscape(cursor)
@@ -296,10 +303,14 @@ func (c *CoinbaseSpotClient) GetBalances(ctx context.Context) (map[string]float6
 			}
 			balances[ccy] += val
 		}
-		if !resp.HasNext || strings.TrimSpace(resp.Cursor) == "" {
+		nextCursor := strings.TrimSpace(resp.Cursor)
+		if !resp.HasNext || nextCursor == "" {
 			break
 		}
-		cursor = resp.Cursor
+		if _, seen := seenCursors[nextCursor]; seen {
+			break
+		}
+		cursor = nextCursor
 	}
 	return balances, nil
 }
@@ -537,7 +548,10 @@ func (c *CoinbaseSpotClient) PlaceLimitOrder(ctx context.Context, req LimitOrder
 	price := req.Price
 	qty := req.Quantity
 	if c.baseURL() == DefaultCoinbaseBaseURL {
-		spec := c.lookupProductSpec(ctx, sym)
+		spec, err := c.lookupProductSpec(ctx, sym)
+		if err != nil {
+			return OrderReceipt{}, fmt.Errorf("coinbase place order: %w", err)
+		}
 		if spec.quoteIncrement > 0 {
 			price = roundPricePassive(price, spec.quoteIncrement, side)
 		}
@@ -597,6 +611,9 @@ func (c *CoinbaseSpotClient) PlaceLimitOrder(ctx context.Context, req LimitOrder
 				}
 			}
 		}
+		if strings.TrimSpace(msg) == "" {
+			msg = "unknown failure"
+		}
 		return OrderReceipt{}, fmt.Errorf("coinbase place order rejected: %s", msg)
 	}
 
@@ -609,6 +626,9 @@ func (c *CoinbaseSpotClient) PlaceLimitOrder(ctx context.Context, req LimitOrder
 		if strings.TrimSpace(resp.SuccessResponse.ClientOrderID) != "" {
 			clientOrderID = resp.SuccessResponse.ClientOrderID
 		}
+	}
+	if strings.TrimSpace(orderID) == "" {
+		return OrderReceipt{}, errors.New("coinbase place order: empty order_id in success response")
 	}
 	return OrderReceipt{
 		OrderID:       orderID,
@@ -650,9 +670,13 @@ func (c *CoinbaseSpotClient) CancelOrder(ctx context.Context, orderID string) er
 		return fmt.Errorf("coinbase batch_cancel %s: %w", orderID, err)
 	}
 	for _, r := range resp.Results {
-		if r.OrderID == orderID || len(resp.Results) == 1 {
+		if r.OrderID == orderID || (len(resp.Results) == 1 && strings.TrimSpace(r.OrderID) == "") {
 			if !r.Success {
-				return fmt.Errorf("coinbase cancel %s failed: %s", orderID, r.FailureReason)
+				reason := strings.TrimSpace(r.FailureReason)
+				if reason == "" {
+					reason = "unknown failure"
+				}
+				return fmt.Errorf("coinbase cancel %s failed: %s", orderID, reason)
 			}
 			return nil
 		}
@@ -687,12 +711,73 @@ func (c *CoinbaseSpotClient) GetOrder(ctx context.Context, orderID string) (Orde
 		coinbaseHistoricalOrder
 	}
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, true, &raw); err != nil {
+		var statusErr *httpStatusError
+		if errors.As(err, &statusErr) && statusErr.status == http.StatusNotFound {
+			return OrderReceipt{}, fmt.Errorf("coinbase get_order %s: %w: %w", orderID, ErrOrderNotFound, err)
+		}
 		return OrderReceipt{}, fmt.Errorf("coinbase get_order %s: %w", orderID, err)
 	}
 	ord := raw.coinbaseHistoricalOrder
 	if raw.Order != nil {
 		ord = *raw.Order
 	}
+	return parseCoinbaseHistoricalOrder(ord, orderID), nil
+}
+
+// GetOrderByClientOrderID looks up an order by its client_order_id via
+// GET /api/v3/brokerage/orders/historical/batch (used when server order_id is not yet known).
+func (c *CoinbaseSpotClient) GetOrderByClientOrderID(ctx context.Context, symbol, clientOrderID string) (OrderReceipt, error) {
+	if err := c.requireAuth(); err != nil {
+		return OrderReceipt{}, err
+	}
+	clientOrderID = strings.TrimSpace(clientOrderID)
+	if clientOrderID == "" {
+		return OrderReceipt{}, errors.New("coinbase get_order_by_client_id: client_order_id is required")
+	}
+	sym := strings.ToUpper(strings.TrimSpace(symbol))
+
+	const maxPages = 50
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	for page := 0; page < maxPages; page++ {
+		if cursor != "" {
+			seenCursors[cursor] = struct{}{}
+		}
+		q := url.Values{}
+		q.Set("limit", "100")
+		if sym != "" {
+			q.Set("product_ids", sym)
+		}
+		if cursor != "" {
+			q.Set("cursor", cursor)
+		}
+		path := "/api/v3/brokerage/orders/historical/batch?" + q.Encode()
+		var resp struct {
+			Orders  []coinbaseHistoricalOrder `json:"orders"`
+			HasNext bool                      `json:"has_next"`
+			Cursor  string                    `json:"cursor"`
+		}
+		if err := c.doJSON(ctx, http.MethodGet, path, nil, true, &resp); err != nil {
+			return OrderReceipt{}, fmt.Errorf("coinbase get_order_by_client_id %s: %w", clientOrderID, err)
+		}
+		for _, ord := range resp.Orders {
+			if strings.TrimSpace(ord.ClientOrderID) == clientOrderID {
+				return parseCoinbaseHistoricalOrder(ord, ord.OrderID), nil
+			}
+		}
+		nextCursor := strings.TrimSpace(resp.Cursor)
+		if !resp.HasNext || nextCursor == "" {
+			break
+		}
+		if _, seen := seenCursors[nextCursor]; seen {
+			break
+		}
+		cursor = nextCursor
+	}
+	return OrderReceipt{}, fmt.Errorf("coinbase get_order_by_client_id %s: %w", clientOrderID, ErrOrderNotFound)
+}
+
+func parseCoinbaseHistoricalOrder(ord coinbaseHistoricalOrder, fallbackOrderID string) OrderReceipt {
 	receipt := OrderReceipt{
 		OrderID:       ord.OrderID,
 		ClientOrderID: ord.ClientOrderID,
@@ -702,7 +787,7 @@ func (c *CoinbaseSpotClient) GetOrder(ctx context.Context, orderID string) (Orde
 		DryRun:        false,
 	}
 	if receipt.OrderID == "" {
-		receipt.OrderID = orderID
+		receipt.OrderID = fallbackOrderID
 	}
 	if v, err := strconv.ParseFloat(strings.TrimSpace(ord.FilledSize), 64); err == nil && !math.IsNaN(v) {
 		receipt.FilledQty = v
@@ -728,7 +813,7 @@ func (c *CoinbaseSpotClient) GetOrder(ctx context.Context, orderID string) (Orde
 			receipt.SubmittedAt = ts.UTC()
 		}
 	}
-	return receipt, nil
+	return receipt
 }
 
 func (c *CoinbaseSpotClient) requireAuth() error {
@@ -762,39 +847,126 @@ func (e *httpStatusError) Error() string {
 	return fmt.Sprintf("HTTP %d: %s", e.status, e.body)
 }
 
+func isIdempotentCoinbaseRequest(method, pathWithQuery string) bool {
+	if strings.EqualFold(method, http.MethodGet) {
+		return true
+	}
+	if strings.EqualFold(method, http.MethodPost) {
+		pathOnly := strings.SplitN(pathWithQuery, "?", 2)[0]
+		return strings.HasSuffix(pathOnly, "/orders/batch_cancel")
+	}
+	return false
+}
+
+func parseRetryAfter(header string, now time.Time) (time.Duration, bool) {
+	s := strings.TrimSpace(header)
+	if s == "" {
+		return 0, false
+	}
+	if secs, err := strconv.Atoi(s); err == nil {
+		if secs < 0 {
+			secs = 0
+		}
+		return time.Duration(secs) * time.Second, true
+	}
+	if t, err := http.ParseTime(s); err == nil {
+		d := t.Sub(now)
+		if d < 0 {
+			d = 0
+		}
+		return d, true
+	}
+	return 0, false
+}
+
 func (c *CoinbaseSpotClient) doJSON(ctx context.Context, method, pathWithQuery string, bodyObj any, sign bool, out any) error {
 	var bodyBytes []byte
-	var bodyReader io.Reader
 	if bodyObj != nil {
 		var err error
 		bodyBytes, err = json.Marshal(bodyObj)
 		if err != nil {
 			return err
 		}
-		bodyReader = bytes.NewReader(bodyBytes)
 	}
 	fullURL := c.baseURL() + pathWithQuery
+	httpClient := c.HTTPClient
+	if httpClient == nil {
+		httpClient = defaultCoinbaseHTTPClient
+	}
+
+	const maxAttempts = 4
+	const maxRetryAfter = 15 * time.Second
+	retryable := isIdempotentCoinbaseRequest(method, pathWithQuery)
+
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		statusCode, retryAfter, err := c.doJSONAttempt(ctx, httpClient, method, fullURL, bodyBytes, sign, out)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !retryable || attempt == maxAttempts-1 || ctx.Err() != nil {
+			return lastErr
+		}
+		isRetryableStatus := statusCode == 0 || statusCode == http.StatusTooManyRequests || (statusCode >= 500 && statusCode <= 599)
+		if !isRetryableStatus {
+			return lastErr
+		}
+
+		delay := 100 * time.Millisecond << uint(attempt)
+		if statusCode == http.StatusTooManyRequests {
+			if ra, ok := parseRetryAfter(retryAfter, c.clock()); ok {
+				delay = ra
+			}
+		}
+		if delay > maxRetryAfter {
+			delay = maxRetryAfter
+		}
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	return lastErr
+}
+
+func (c *CoinbaseSpotClient) doJSONAttempt(
+	ctx context.Context,
+	httpClient *http.Client,
+	method, fullURL string,
+	bodyBytes []byte,
+	sign bool,
+	out any,
+) (int, string, error) {
+	var bodyReader io.Reader
+	if bodyBytes != nil {
+		bodyReader = bytes.NewReader(bodyBytes)
+	}
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, bodyReader)
 	if err != nil {
-		return err
+		return 0, "", err
 	}
 	req.Header.Set("Accept", "application/json")
-	if bodyObj != nil {
+	if bodyBytes != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if sign && c.creds.Ready() {
 		if err := c.applyAuth(req, bodyBytes, c.clock()); err != nil {
-			return err
+			return 0, "", err
 		}
 	}
 
-	httpClient := c.HTTPClient
-	if httpClient == nil {
-		httpClient = NewOptimizedHTTPClient(10 * time.Second)
-	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return err
+		return 0, "", err
 	}
 	defer resp.Body.Close()
 
@@ -807,18 +979,21 @@ func (c *CoinbaseSpotClient) doJSON(ctx context.Context, method, pathWithQuery s
 		}
 	}()
 	if _, err := buf.ReadFrom(io.LimitReader(resp.Body, 4<<20)); err != nil {
-		return err
+		return 0, "", err
 	}
 	respBytes := buf.Bytes()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &httpStatusError{status: resp.StatusCode, body: strings.TrimSpace(string(respBytes))}
+		return resp.StatusCode, resp.Header.Get("Retry-After"), &httpStatusError{
+			status: resp.StatusCode,
+			body:   strings.TrimSpace(string(respBytes)),
+		}
 	}
 	if out != nil && len(bytes.TrimSpace(respBytes)) > 0 {
 		if err := json.Unmarshal(respBytes, out); err != nil {
-			return fmt.Errorf("decode response: %w", err)
+			return resp.StatusCode, "", fmt.Errorf("decode response: %w", err)
 		}
 	}
-	return nil
+	return resp.StatusCode, "", nil
 }
 
 func (c *CoinbaseSpotClient) applyAuth(req *http.Request, body []byte, now time.Time) error {
@@ -1001,11 +1176,11 @@ func parseECPrivateKey(pemSecret string) (*ecdsa.PrivateKey, error) {
 	return ecKey, nil
 }
 
-func (c *CoinbaseSpotClient) lookupProductSpec(ctx context.Context, sym string) coinbaseProductSpec {
+func (c *CoinbaseSpotClient) lookupProductSpec(ctx context.Context, sym string) (coinbaseProductSpec, error) {
 	c.specMu.RLock()
 	if spec, ok := c.specs[sym]; ok {
 		c.specMu.RUnlock()
-		return spec
+		return spec, nil
 	}
 	c.specMu.RUnlock()
 
@@ -1015,7 +1190,7 @@ func (c *CoinbaseSpotClient) lookupProductSpec(ctx context.Context, sym string) 
 	}
 	path := "/api/v3/brokerage/market/products/" + url.PathEscape(sym)
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, false, &resp); err != nil {
-		return coinbaseProductSpec{}
+		return coinbaseProductSpec{}, fmt.Errorf("coinbase lookup product spec %s: %w", sym, err)
 	}
 	spec := coinbaseProductSpec{}
 	if v, err := strconv.ParseFloat(strings.TrimSpace(resp.BaseIncrement), 64); err == nil && isFinitePositive(v) {
@@ -1027,7 +1202,7 @@ func (c *CoinbaseSpotClient) lookupProductSpec(ctx context.Context, sym string) 
 	c.specMu.Lock()
 	c.specs[sym] = spec
 	c.specMu.Unlock()
-	return spec
+	return spec, nil
 }
 
 func floorToStep(v, step float64) float64 {

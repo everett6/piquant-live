@@ -61,14 +61,18 @@ func dailySummary(st paper.DryRunState, scores []trend.Summary, now time.Time) s
 	return b.String()
 }
 
-// watchEngine sends feed-stall alerts and a daily summary after 00:15 UTC; it also routes kill locks to email.
-func watchEngine(ctx context.Context, eng *paper.DryRunEngine, al *alert.Alerter, trendDir string) {
+// setKillHook registers the alert callback before starting watchEngine or DryRunEngine.
+func setKillHook(al *alert.Alerter) {
 	paper.KillHook = func(kl paper.KillLock) {
 		al.Send("kill", "KILL SWITCH: engine halted and locked", fmt.Sprintf(
 			"Reason: %s\nTrigger: %s\nAt: %s\nEquity $%.2f, peak $%.2f\n\nThe engine stays halted until you run "+
 				"'piquant unlock' with the service stopped.", kl.Reason, kl.Trigger, kl.At.Format(time.RFC3339),
 			kl.Equity, kl.PeakEquity))
 	}
+}
+
+// watchEngine sends feed-stall alerts and a daily summary after 00:15 UTC; it also routes kill locks to email.
+func watchEngine(ctx context.Context, eng *paper.DryRunEngine, al *alert.Alerter, trendDir string) {
 	started := time.Now()
 	lastDaily := ""
 	t := time.NewTicker(time.Minute)

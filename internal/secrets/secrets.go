@@ -234,11 +234,17 @@ func (s *Store) Set(name, value string) error {
 func (s *Store) Delete(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.values[name]; !ok {
+	prev, ok := s.values[name]
+	if !ok {
 		return nil
 	}
 	delete(s.values, name)
-	return s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		// Restore the in-memory view so it agrees with the file on disk.
+		s.values[name] = prev
+		return err
+	}
+	return nil
 }
 
 // saveLocked writes the store atomically. The caller holds s.mu.

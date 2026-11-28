@@ -25,14 +25,24 @@ func NewOptimizedHTTPClient(timeout time.Duration) *http.Client {
 		KeepAlive: 30 * time.Second,
 	}
 	tr := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
-		ForceAttemptHTTP2:     true,
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			if tc, ok := conn.(*net.TCPConn); ok {
+				_ = tc.SetNoDelay(true)
+			}
+			return conn, nil
+		},
+		ForceAttemptHTTP2: true,
 		MaxIdleConns:          64,
 		MaxIdleConnsPerHost:   16,
 		MaxConnsPerHost:       16,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: timeout,
 		ExpectContinueTimeout: 1 * time.Second,
 		WriteBufferSize:       32 << 10,
 		ReadBufferSize:        32 << 10,

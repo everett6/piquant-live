@@ -3,6 +3,7 @@ package dashboard
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -16,7 +17,6 @@ import (
 	"time"
 
 	"piquant-live/internal/backtest"
-	"piquant-live/internal/carry"
 	"piquant-live/internal/cluster"
 	"piquant-live/internal/discovery"
 	"piquant-live/internal/execution"
@@ -152,7 +152,7 @@ func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"peers": s.Status(r.Context()).Peers})
+	writeJSON(w, http.StatusOK, map[string]any{"peers": s.peers(r.Context())})
 }
 
 // handleEvents streams status over Server-Sent Events so the page needs no
@@ -199,6 +199,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-s.shutdownCh:
 			return
 		case <-deadline.C:
 			return
@@ -500,6 +502,55 @@ type runExperimentReq struct {
 	Params     map[string]any `json:"params"`
 }
 
+func isWithinDir(base, target string) bool {
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func (s *Server) resolveDatasetPath(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errors.New("dataset path is required")
+	}
+	dirs := s.opts.DataDirs
+	if len(dirs) == 0 {
+		dirs = []string{"data"}
+	}
+	var candidate string
+	if filepath.IsAbs(raw) {
+		candidate = filepath.Clean(raw)
+	} else {
+		candidate = filepath.Join(dirs[0], raw)
+	}
+	absTarget, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", fmt.Errorf("invalid dataset path: %w", err)
+	}
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		absBase, err := filepath.Abs(filepath.Clean(d))
+		if err != nil {
+			continue
+		}
+		if isWithinDir(absBase, absTarget) {
+			if realTarget, err := filepath.EvalSymlinks(absTarget); err == nil {
+				if realBase, err := filepath.EvalSymlinks(absBase); err == nil {
+					if !isWithinDir(realBase, realTarget) {
+						return "", errors.New("dataset path escapes data directory")
+					}
+				}
+			}
+			return absTarget, nil
+		}
+	}
+	return "", errors.New("dataset path must be within configured data directories")
+}
+
 func (s *Server) handleExperimentRun(w http.ResponseWriter, r *http.Request) {
 	if s.authenticate(r) == authNone {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
@@ -518,6 +569,7 @@ func (s *Server) handleExperimentRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var req runExperimentReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json: " + err.Error()})
@@ -537,10 +589,15 @@ func (s *Server) handleExperimentRun(w http.ResponseWriter, r *http.Request) {
 	if req.Symbol == "" {
 		req.Symbol = "BTCUSDT"
 	}
+	if strings.ContainsAny(req.Symbol, `/\`) || strings.Contains(req.Symbol, "..") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid symbol name"})
+		return
+	}
 
-	datasetPath := req.Dataset
-	if !filepath.IsAbs(datasetPath) && len(s.opts.DataDirs) > 0 {
-		datasetPath = filepath.Join(s.opts.DataDirs[0], datasetPath)
+	datasetPath, err := s.resolveDatasetPath(req.Dataset)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
 
 	feas := s.opts.Manager.ValidateFeasibility(datasetPath, h)
@@ -575,6 +632,10 @@ func (s *Server) handleExperimentRun(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleExperimentCancel(w http.ResponseWriter, r *http.Request) {
 	if s.authenticate(r) == authNone {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
 	if s.opts.Manager == nil {
@@ -634,6 +695,7 @@ func (s *Server) handleSearchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var req runSearchReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json: " + err.Error()})
@@ -644,9 +706,10 @@ func (s *Server) handleSearchRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h = common.H30s
 	}
-	datasetPath := req.Dataset
-	if !filepath.IsAbs(datasetPath) && len(s.opts.DataDirs) > 0 {
-		datasetPath = filepath.Join(s.opts.DataDirs[0], datasetPath)
+	datasetPath, err := s.resolveDatasetPath(req.Dataset)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
 
 	ps := &experiment.ParameterSearch{
@@ -733,6 +796,7 @@ func (s *Server) handleDatasetGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var req genDatasetReq
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if req.Instrument == "" {
@@ -740,6 +804,11 @@ func (s *Server) handleDatasetGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Records <= 0 {
 		req.Records = 3000
+	}
+	const maxDatasetRecords = 250000
+	if req.Records > maxDatasetRecords {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("records exceeds maximum (%d)", maxDatasetRecords)})
+		return
 	}
 	if req.StartPrice <= 0 {
 		if strings.Contains(req.Instrument, "ETH") {
@@ -755,6 +824,10 @@ func (s *Server) handleDatasetGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = os.MkdirAll(dataDir, 0o755)
 
+	if strings.ContainsAny(req.Instrument, `/\`) || strings.Contains(req.Instrument, "..") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid instrument name"})
+		return
+	}
 	filename := fmt.Sprintf("%s_sample_%d.jsonl", strings.ToLower(req.Instrument), time.Now().Unix())
 	targetPath := filepath.Join(dataDir, filename)
 
@@ -803,13 +876,30 @@ func (s *Server) handleDatasetCapture(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var req captureDatasetReq
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	if req.Symbol == "" {
 		req.Symbol = "BTCUSDT"
 	}
+	if strings.ContainsAny(req.Symbol, `/\`) || strings.Contains(req.Symbol, "..") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid symbol name"})
+		return
+	}
 	if req.Ticks <= 0 {
 		req.Ticks = 600
+	}
+	const (
+		maxCaptureTicks       = 50000
+		maxCaptureDurationSec = 3600
+	)
+	if req.Ticks > maxCaptureTicks {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("ticks exceeds maximum (%d)", maxCaptureTicks)})
+		return
+	}
+	if req.DurationSec < 0 || req.DurationSec > maxCaptureDurationSec {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("duration_sec must be between 0 and %d", maxCaptureDurationSec)})
+		return
 	}
 
 	dataDir := "data"
@@ -823,7 +913,11 @@ func (s *Server) handleDatasetCapture(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.opts.Manager.LogActivity(fmt.Sprintf("Recorded public market stream: %s (%d ticks, sha256=%s...).", info.Name, info.Records, info.Checksum[:12]))
+	checksumShort := info.Checksum
+	if len(checksumShort) > 12 {
+		checksumShort = checksumShort[:12]
+	}
+	s.opts.Manager.LogActivity(fmt.Sprintf("Recorded public market stream: %s (%d ticks, sha256=%s...).", info.Name, info.Records, checksumShort))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
 		"filename": info.Name,
@@ -838,6 +932,7 @@ func (s *Server) handleMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost {
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 		var req struct {
 			Mode        string `json:"mode"`
 			ClusterMode string `json:"cluster_mode"`
@@ -862,18 +957,18 @@ func (s *Server) proxyToEngine(w http.ResponseWriter, r *http.Request) bool {
 	if s.opts.Discover == nil {
 		return false
 	}
-	var engineAddr string
+	var engineEndpoint string
 	for _, p := range s.opts.Discover.Peers() {
 		if p.Role == discovery.RoleEngine {
-			engineAddr = p.Addr
+			engineEndpoint = p.Endpoint()
 			break
 		}
 	}
-	if engineAddr == "" {
+	if engineEndpoint == "" {
 		return false
 	}
 
-	targetURL := "http://" + engineAddr + r.URL.Path
+	targetURL := engineEndpoint + r.URL.Path
 	if r.URL.RawQuery != "" {
 		targetURL += "?" + r.URL.RawQuery
 	}
@@ -887,7 +982,11 @@ func (s *Server) proxyToEngine(w http.ResponseWriter, r *http.Request) bool {
 		req.Header.Set("Authorization", "Bearer "+s.opts.PeerToken)
 	}
 
-	resp, err := s.httpClient.Do(req)
+	client := s.proxyClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
@@ -921,6 +1020,7 @@ func (s *Server) handleQuantumSearchRun(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var req runSearchReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json: " + err.Error()})
@@ -931,9 +1031,10 @@ func (s *Server) handleQuantumSearchRun(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		h = common.H30s
 	}
-	datasetPath := req.Dataset
-	if !filepath.IsAbs(datasetPath) && len(s.opts.DataDirs) > 0 {
-		datasetPath = filepath.Join(s.opts.DataDirs[0], datasetPath)
+	datasetPath, err := s.resolveDatasetPath(req.Dataset)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
 
 	ps := &experiment.ParameterSearch{
@@ -1010,6 +1111,7 @@ func (s *Server) handleWorkerEval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req experiment.WorkerEvalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json: " + err.Error()})
@@ -1526,16 +1628,41 @@ func (s *Server) resolveDryRunState() paper.DryRunState {
 		"/var/lib/piquant/data/paper/dryrun_state.json",
 	}
 	for _, dp := range s.opts.DataDirs {
-		statePaths = append(statePaths, dp+"/paper/dryrun_state.json")
+		statePaths = append(statePaths, filepath.Join(dp, "paper", "dryrun_state.json"))
 	}
 	for _, sp := range statePaths {
+		fi, err := os.Stat(sp)
+		if err != nil || fi.IsDir() || fi.Size() <= 0 {
+			continue
+		}
+		s.dryRunMu.Lock()
+		if s.dryRunCache.valid && s.dryRunCache.path == sp && s.dryRunCache.modTime.Equal(fi.ModTime()) && s.dryRunCache.size == fi.Size() {
+			cached := s.dryRunCache.state
+			s.dryRunMu.Unlock()
+			return cached
+		}
+		s.dryRunMu.Unlock()
+
 		if b, err := os.ReadFile(sp); err == nil && len(b) > 0 {
 			var parsed paper.DryRunState
 			if err := json.Unmarshal(b, &parsed); err == nil && parsed.InitialCapital > 0 {
+				s.dryRunMu.Lock()
+				s.dryRunCache = dryRunStateCache{
+					path:    sp,
+					modTime: fi.ModTime(),
+					size:    fi.Size(),
+					state:   parsed,
+					valid:   true,
+				}
+				s.dryRunMu.Unlock()
 				return parsed
 			}
 		}
 	}
+
+	s.dryRunMu.Lock()
+	s.dryRunCache.valid = false
+	s.dryRunMu.Unlock()
 
 	now := time.Now()
 	startTime := now.Add(-3 * time.Hour)
@@ -1667,16 +1794,16 @@ func (s *Server) handlePaperDryRun(w http.ResponseWriter, r *http.Request) {
 	nowNs := time.Now().UnixNano()
 	wd := paper.NewDryRunWatchdog()
 	wdReport := wd.Check(nowNs, nowNs-45_000_000, 64, 1024, tempC, throttled)
-	tearSheet := paper.ComputeDryRunTearSheet(s.resolveDryRunState())
+	drState := s.resolveDryRunState()
+	tearSheet := paper.ComputeDryRunTearSheet(drState)
 
 	// 1. If an active DryRun instance is registered directly on the server:
 	if s.opts.DryRun != nil {
 		if eng, ok := s.opts.DryRun.(*paper.DryRunEngine); ok {
-			st := eng.State()
 			fills := eng.RecentFills()
 			ds := "live"
-			if st.DataSource != "" {
-				ds = st.DataSource
+			if drState.DataSource != "" {
+				ds = drState.DataSource
 			}
 			tot, dep, tr, gaps, reconn, fallb, lastNs := eng.StreamStats()
 			streamStats := map[string]any{
@@ -1691,7 +1818,7 @@ func (s *Server) handlePaperDryRun(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"status":       "active",
 				"data_source":  ds,
-				"state":        st,
+				"state":        drState,
 				"recent_fills": fills,
 				"stream_stats": streamStats,
 				"tearsheet":    tearSheet,
@@ -1702,112 +1829,13 @@ func (s *Server) handlePaperDryRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2. Check if a state file exists on disk (e.g. data/paper/dryrun_state.json)
-	statePaths := []string{
-		"data/paper/dryrun_state.json",
-		"/var/lib/piquant/data/paper/dryrun_state.json",
-	}
-	for _, dp := range s.opts.DataDirs {
-		statePaths = append(statePaths, dp+"/paper/dryrun_state.json")
-	}
-
-	for _, sp := range statePaths {
-		if b, err := os.ReadFile(sp); err == nil && len(b) > 0 {
-			var parsed map[string]any
-			if err := json.Unmarshal(b, &parsed); err == nil {
-				writeJSON(w, http.StatusOK, map[string]any{
-					"status":       "active",
-					"state":        parsed,
-					"tearsheet":    tearSheet,
-					"smart_router": sorDecision,
-					"watchdog":     wdReport,
-				})
-				return
-			}
-		}
-	}
-
-	// 3. Fallback simulated active dry run status for standalone dashboards
-	now := time.Now()
-	startTime := now.Add(-3 * time.Hour)
-	endTime := startTime.Add(7 * 24 * time.Hour)
-	daysElapsed := 1
-	hoursRemaining := endTime.Sub(now).Hours()
-	if hoursRemaining < 0 {
-		hoursRemaining = 0
-	}
-
+	// 2. Reuse the resolved dry-run state (from cached disk checkpoint or simulated baseline).
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":       "active",
+		"state":        drState,
 		"tearsheet":    tearSheet,
 		"smart_router": sorDecision,
 		"watchdog":     wdReport,
-		"state": map[string]any{
-			"start_time":          startTime,
-			"target_end_time":     endTime,
-			"days_elapsed":        daysElapsed,
-			"target_days":         7,
-			"window_preset":       "7d",
-			"hours_remaining":     hoursRemaining,
-			"initial_capital":     1000.00,
-			"cash":                984.50,
-			"equity":              1002.48,
-			"peak_equity":         1002.62,
-			"realized_pnl":        1.85,
-			"unrealized_pnl":      0.63,
-			"total_return_pct":    0.25,
-			"max_drawdown_pct":    0.08,
-			"circuit_halted":      false,
-			"circuit_halt_reason": "",
-			"total_trades":        42,
-			"winning_trades":      27,
-			"losing_trades":       15,
-			"win_rate":            64.29,
-			"sharpe_ratio":        2.45,
-			"leverage": map[string]any{
-				"effective_leverage": 2.45,
-				"target_leverage":    2.50,
-				"max_leverage":       5.00,
-				"min_leverage":       0.50,
-				"vol_factor":         1.00,
-				"toxicity_factor":    0.98,
-				"cascade_factor":     1.00,
-				"drawdown_factor":    0.96,
-				"regime_name":        "CALM_MAKER",
-				"regime_detail":      "Optimal spread capture (2.4x Kelly vol-parity)",
-			},
-			"positions": map[string]any{
-				"BTCUSDT": map[string]any{
-					"symbol":            "BTCUSDT",
-					"size":              0.015,
-					"avg_entry_price":   49980.50,
-					"mark_price":        50000.00,
-					"unrealized_pnl":    0.29,
-					"realized_pnl":      1.24,
-					"total_trades":      26,
-					"maker_trades":      22,
-					"taker_trades":      4,
-					"total_volume_usdt": 1285.00,
-				},
-				"ETHUSDT": map[string]any{
-					"symbol":            "ETHUSDT",
-					"size":              0.050,
-					"avg_entry_price":   3395.00,
-					"mark_price":        3400.12,
-					"unrealized_pnl":    0.26,
-					"realized_pnl":      0.61,
-					"total_trades":      16,
-					"maker_trades":      13,
-					"taker_trades":      3,
-					"total_volume_usdt": 542.00,
-				},
-			},
-		},
-		"recent_fills": []map[string]any{
-			{"time": "00:02s ago", "symbol": "BTCUSDT", "side": "BID (Maker L1)", "price": 49999.62, "qty": 0.015, "edge_bps": 1.18, "adverse_bps": 0.14},
-			{"time": "00:11s ago", "symbol": "BTCUSDT", "side": "ASK (Maker L1)", "price": 50000.44, "qty": 0.019, "edge_bps": 1.32, "adverse_bps": 0.09},
-			{"time": "00:24s ago", "symbol": "ETHUSDT", "side": "BID (Stat-Arb)", "price": 3400.12, "qty": 0.35, "edge_bps": 1.64, "adverse_bps": 0.21},
-		},
 	})
 }
 
@@ -1947,13 +1975,14 @@ func (s *Server) resolvePingPlan(r *http.Request) *execution.PingExecutionPlan {
 
 // handlePaperTrendBlend exposes the PREREG6/35/36 daily trend scorecard, S36_qd_carry_blend
 // composite target weights (70% Safe-QD + idle DTB3 + 30% C1 Carry), and ping execution plan.
+// Optional query parameter: include_macro=true to include q57_full_fund (loads 12 equity CSVs, ~3ms).
 func (s *Server) handlePaperTrendBlend(w http.ResponseWriter, r *http.Request) {
 	if s.authenticate(r) == authNone {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}
 	tPath := filepath.Join(s.resolveTrendDir(), "trend_state.json")
-	st, err := trend.Load(tPath)
+	st, err := s.cachedTrendState(tPath)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -1967,8 +1996,9 @@ func (s *Server) handlePaperTrendBlend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cState, _ := carry.Load(filepath.Join(s.resolveCarryDir(), "carry_state.json"))
-	rates, _ := trend.LoadDTB3Rates(s.resolveDTB3Path())
+	cState, _ := s.cachedCarryState(filepath.Join(s.resolveCarryDir(), "carry_state.json"))
+	dtb3Path := s.resolveDTB3Path()
+	rates, _ := s.cachedDTB3Rates(dtb3Path)
 	plan := s.resolvePingPlan(r)
 
 	scorecard := st.Score(time.Now().UTC())
@@ -1984,7 +2014,17 @@ func (s *Server) handlePaperTrendBlend(w http.ResponseWriter, r *http.Request) {
 	q51Blends := trend.ComputeQ51Blends(st, cState, rates, plan)
 	q56Blends := trend.ComputeQ56Blends(st, cState, rates, plan)
 	q57Blends := trend.ComputeQ57Blends(st, cState, rates, plan)
-	fullFund, hasFullFund := trend.ComputeQ57FullFund(st, cState, rates, s.resolveEquitiesDir(), plan)
+
+	// Lazy-load macro HRP only when explicitly requested (avoids 3ms/5MB equity CSV load)
+	includeMacro := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("include_macro"))) == "true"
+	var fullFund trend.FullFundSummary
+	var hasFullFund bool
+	if includeMacro {
+		macroSum, hasMacro := s.cachedMacroHRP(s.resolveEquitiesDir(), dtb3Path, rates)
+		if hasMacro {
+			fullFund, hasFullFund = trend.ComputeQ57FullFundWithMacro(st, cState, rates, macroSum, plan)
+		}
+	}
 
 	resp := map[string]any{
 		"status":                   "ok",
@@ -2013,7 +2053,7 @@ func (s *Server) handlePaperSchwabPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tPath := filepath.Join(s.resolveTrendDir(), "trend_state.json")
-	st, err := trend.Load(tPath)
+	st, err := s.cachedTrendState(tPath)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -2021,8 +2061,9 @@ func (s *Server) handlePaperSchwabPlan(w http.ResponseWriter, r *http.Request) {
 	if st == nil {
 		st = trend.NewState("")
 	}
-	cState, _ := carry.Load(filepath.Join(s.resolveCarryDir(), "carry_state.json"))
-	rates, _ := trend.LoadDTB3Rates(s.resolveDTB3Path())
+	cState, _ := s.cachedCarryState(filepath.Join(s.resolveCarryDir(), "carry_state.json"))
+	dtb3Path := s.resolveDTB3Path()
+	rates, _ := s.cachedDTB3Rates(dtb3Path)
 
 	selector := r.URL.Query().Get("portfolio")
 	navUSD := 0.0
@@ -2032,10 +2073,18 @@ func (s *Server) handlePaperSchwabPlan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	creds := execution.LoadSchwabCredentials(s.opts.SchwabEnvPath)
-	client := execution.NewOptimizedHTTPClient(8 * time.Second)
+	client := s.schwabHTTPClient
+	if client == nil {
+		client = sharedHTTPClient
+	}
 	selNorm := strings.ToLower(strings.TrimSpace(selector))
 	if selNorm == "q57_full_fund" || selNorm == "q57_full" || selNorm == "q57_macro" {
-		full, ok := trend.ComputeQ57FullFund(st, cState, rates, s.resolveEquitiesDir(), nil)
+		macroSum, hasMacro := s.cachedMacroHRP(s.resolveEquitiesDir(), dtb3Path, rates)
+		var full trend.FullFundSummary
+		var ok bool
+		if hasMacro {
+			full, ok = trend.ComputeQ57FullFundWithMacro(st, cState, rates, macroSum, nil)
+		}
 		if !ok {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q57_full_fund equities data unavailable"})
 			return
@@ -2095,7 +2144,7 @@ func (s *Server) handlePaperAlphaDecay(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}
-	st, err := trend.Load(filepath.Join(s.resolveTrendDir(), "trend_state.json"))
+	st, err := s.cachedTrendState(filepath.Join(s.resolveTrendDir(), "trend_state.json"))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -2103,8 +2152,8 @@ func (s *Server) handlePaperAlphaDecay(w http.ResponseWriter, r *http.Request) {
 	if st == nil {
 		st = trend.NewState("")
 	}
-	cState, _ := carry.Load(filepath.Join(s.resolveCarryDir(), "carry_state.json"))
-	rates, _ := trend.LoadDTB3Rates(s.resolveDTB3Path())
+	cState, _ := s.cachedCarryState(filepath.Join(s.resolveCarryDir(), "carry_state.json"))
+	rates, _ := s.cachedDTB3Rates(s.resolveDTB3Path())
 
 	extractRets := func(name string) []float64 {
 		l := st.Ledgers[name]
@@ -2271,10 +2320,6 @@ func (s *Server) handlePaperReportsLatest(w http.ResponseWriter, r *http.Request
 	gen := paper.NewDailyReportGenerator()
 	now := time.Now()
 	reportContent := gen.GenerateReport(drState, now)
-
-	// Persist to reports dir
-	reportsDir := s.resolveReportsDir()
-	_ = gen.SaveReport(drState, reportsDir, now)
 
 	filename := fmt.Sprintf("report_%s.md", now.Format("2006-01-02"))
 
@@ -2472,21 +2517,55 @@ func (s *Server) handlePaperHistoricalSim(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	capital := 1000.00
+	if cStr := r.URL.Query().Get("capital"); cStr != "" {
+		if c, err := strconv.ParseFloat(cStr, 64); err == nil && !math.IsNaN(c) && !math.IsInf(c, 0) && c > 0 && c <= 1e9 {
+			capital = c
+		}
+	}
+
+	s.histSimMu.Lock()
+	if s.histSimCache != nil {
+		if cached, ok := s.histSimCache[capital]; ok {
+			s.histSimMu.Unlock()
+			writeJSON(w, http.StatusOK, cached)
+			return
+		}
+	}
+	if s.histSimInflight == nil {
+		s.histSimInflight = make(map[float64]*histSimCall)
+	}
+	if call, ok := s.histSimInflight[capital]; ok {
+		s.histSimMu.Unlock()
+		select {
+		case <-call.done:
+		case <-r.Context().Done():
+			return
+		}
+		if call.err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": call.err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, call.payload)
+		return
+	}
+	call := &histSimCall{done: make(chan struct{})}
+	s.histSimInflight[capital] = call
+	s.histSimMu.Unlock()
+
 	btcPath := filepath.Join(histDataDir, "btc_daily_full.csv")
 	ethPath := filepath.Join(histDataDir, "eth_daily_full.csv")
 
 	btcBars, errBtc := backtest.LoadHistoricalCSV(btcPath)
 	ethBars, errEth := backtest.LoadHistoricalCSV(ethPath)
 	if errBtc != nil || errEth != nil || len(btcBars) == 0 {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "historical datasets not ready"})
+		call.err = errors.New("historical datasets not ready")
+		s.histSimMu.Lock()
+		delete(s.histSimInflight, capital)
+		s.histSimMu.Unlock()
+		close(call.done)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": call.err.Error()})
 		return
-	}
-
-	capital := 1000.00
-	if cStr := r.URL.Query().Get("capital"); cStr != "" {
-		if c, err := strconv.ParseFloat(cStr, 64); err == nil && c > 0 {
-			capital = c
-		}
 	}
 
 	cfg := backtest.DefaultSimulationConfig()
@@ -2494,11 +2573,14 @@ func (s *Server) handlePaperHistoricalSim(w http.ResponseWriter, r *http.Request
 	sim := backtest.NewHistoricalSimulator(cfg)
 	res1, res2_2017, res2_2021, res3, err := sim.RunAllModes(btcBars, ethBars)
 	if err != nil {
+		call.err = err
+		s.histSimMu.Lock()
+		delete(s.histSimInflight, capital)
+		s.histSimMu.Unlock()
+		close(call.done)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-
-	_, _, _ = backtest.GenerateFullReport("data/reports", res1, res2_2017, res2_2021, res3)
 
 	payload := map[string]any{
 		"generated_at":                time.Now().UTC().Format(time.RFC3339),
@@ -2507,6 +2589,20 @@ func (s *Server) handlePaperHistoricalSim(w http.ResponseWriter, r *http.Request
 		"mode_2b_recent_5yr_2021":     res2_2021,
 		"mode_3_fixed_1k_withdrawal":  res3,
 	}
+	call.payload = payload
+
+	s.histSimMu.Lock()
+	delete(s.histSimInflight, capital)
+	if s.histSimCache == nil {
+		s.histSimCache = make(map[float64]map[string]any)
+	}
+	if len(s.histSimCache) >= 16 {
+		clear(s.histSimCache)
+	}
+	s.histSimCache[capital] = payload
+	s.histSimMu.Unlock()
+	close(call.done)
+
 	writeJSON(w, http.StatusOK, payload)
 }
 
@@ -2637,6 +2733,62 @@ func (s *Server) resolveJournalPath() string {
 	return "data/paper/dryrun_journal.jsonl"
 }
 
+func parseTaxYear(r *http.Request) int {
+	year := time.Now().Year()
+	if yearStr := r.URL.Query().Get("year"); yearStr != "" {
+		if y, err := strconv.Atoi(yearStr); err == nil {
+			year = y
+		}
+	}
+	return year
+}
+
+func (s *Server) cachedTaxSummary(year int, fedRate, stateRate float64) *tax.TaxSummary {
+	jPath := s.resolveJournalPath()
+	fi, statErr := os.Stat(jPath)
+	if statErr == nil && !fi.IsDir() {
+		key := taxCacheKey{
+			path:      jPath,
+			year:      year,
+			fedRate:   fedRate,
+			stateRate: stateRate,
+		}
+		s.taxMu.Lock()
+		if s.taxCache != nil {
+			if entry, ok := s.taxCache[key]; ok && entry.modTime.Equal(fi.ModTime()) && entry.size == fi.Size() {
+				s.taxMu.Unlock()
+				return entry.summary
+			}
+		}
+		s.taxMu.Unlock()
+
+		calc := tax.NewCalculator(fedRate, stateRate)
+		if summary, err := calc.CalculateFromJournalFile(jPath, year); err == nil && summary != nil {
+			s.taxMu.Lock()
+			if s.taxCache == nil {
+				s.taxCache = make(map[taxCacheKey]taxCacheEntry)
+			}
+			if len(s.taxCache) >= 32 {
+				clear(s.taxCache)
+			}
+			s.taxCache[key] = taxCacheEntry{
+				modTime: fi.ModTime(),
+				size:    fi.Size(),
+				summary: summary,
+			}
+			s.taxMu.Unlock()
+			return summary
+		}
+	}
+	return &tax.TaxSummary{
+		TaxYear:          year,
+		GeneratedAt:      time.Now().UTC(),
+		FederalRatePct:   fedRate,
+		StateRatePct:     stateRate,
+		EffectiveRatePct: fedRate + stateRate,
+	}
+}
+
 // handleTax returns the comprehensive IRS Form 8949 / Schedule D tax summary.
 func (s *Server) handleTax(w http.ResponseWriter, r *http.Request) {
 	if s.authenticate(r) == authNone {
@@ -2644,13 +2796,7 @@ func (s *Server) handleTax(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	yearStr := r.URL.Query().Get("year")
-	year := time.Now().Year()
-	if yearStr != "" {
-		if y, err := strconv.Atoi(yearStr); err == nil {
-			year = y
-		}
-	}
+	year := parseTaxYear(r)
 
 	fedRate := 24.0
 	if fStr := r.URL.Query().Get("fed"); fStr != "" {
@@ -2666,20 +2812,7 @@ func (s *Server) handleTax(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	calc := tax.NewCalculator(fedRate, stateRate)
-	jPath := s.resolveJournalPath()
-	summary, err := calc.CalculateFromJournalFile(jPath, year)
-	if err != nil {
-		// Provide empty summary baseline if no journal exists yet
-		summary = &tax.TaxSummary{
-			TaxYear:          year,
-			GeneratedAt:      time.Now().UTC(),
-			FederalRatePct:   fedRate,
-			StateRatePct:     stateRate,
-			EffectiveRatePct: fedRate + stateRate,
-		}
-	}
-
+	summary := s.cachedTaxSummary(year, fedRate, stateRate)
 	writeJSON(w, http.StatusOK, summary)
 }
 
@@ -2690,20 +2823,8 @@ func (s *Server) handleTaxExportCSV(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	yearStr := r.URL.Query().Get("year")
-	year := time.Now().Year()
-	if yearStr != "" {
-		if y, err := strconv.Atoi(yearStr); err == nil {
-			year = y
-		}
-	}
-
-	calc := tax.NewCalculator(24.0, 9.3)
-	jPath := s.resolveJournalPath()
-	summary, err := calc.CalculateFromJournalFile(jPath, year)
-	if err != nil {
-		summary = &tax.TaxSummary{TaxYear: year}
-	}
+	year := parseTaxYear(r)
+	summary := s.cachedTaxSummary(year, 24.0, 9.3)
 
 	csvBytes, err := tax.ExportForm8949CSV(summary)
 	if err != nil {
@@ -2727,18 +2848,23 @@ func (s *Server) handleTaxPage(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, taxPageHTML)
 }
 
-// resolveNewsPipeline returns the active news pipeline from DryRun engine or local cache fallback.
+// resolveNewsPipeline returns the active news pipeline from DryRun engine or the server's singleton fallback.
 func (s *Server) resolveNewsPipeline() *macro.NewsPipeline {
 	if s.opts.DryRun != nil {
 		if eng, ok := s.opts.DryRun.(*paper.DryRunEngine); ok && eng.NewsPipeline() != nil {
 			return eng.NewsPipeline()
 		}
 	}
-	dataDir := "data"
-	if len(s.opts.DataDirs) > 0 {
-		dataDir = s.opts.DataDirs[0]
-	}
-	return macro.NewNewsPipeline(dataDir, "")
+	s.newsOnce.Do(func() {
+		if s.newsPipeline == nil {
+			dataDir := "data"
+			if len(s.opts.DataDirs) > 0 && s.opts.DataDirs[0] != "" {
+				dataDir = s.opts.DataDirs[0]
+			}
+			s.newsPipeline = macro.NewNewsPipeline(dataDir, "")
+		}
+	})
+	return s.newsPipeline
 }
 
 // handleNews returns recent ingested and classified news items.
@@ -2783,6 +2909,7 @@ func (s *Server) handleNewsIngest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	var req struct {
 		Title     string `json:"title"`
 		Summary   string `json:"summary"`

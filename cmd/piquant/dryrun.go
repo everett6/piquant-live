@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,10 +138,65 @@ func addDryRunFlags(fs *flag.FlagSet) *dryRunFlags {
 	return f
 }
 
+func validateDryRunFlags(f *dryRunFlags) error {
+	finitePositive := func(name string, value float64) error {
+		if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+			return fmt.Errorf("--%s must be a finite value greater than zero", name)
+		}
+		return nil
+	}
+	if err := finitePositive("capital", f.capital); err != nil {
+		return err
+	}
+	if f.durationH < 0 || math.IsNaN(f.durationH) || math.IsInf(f.durationH, 0) {
+		return fmt.Errorf("--duration-hours must be a finite value greater than or equal to zero")
+	}
+	maxDurationHours := float64(math.MaxInt64) / float64(time.Hour)
+	if f.durationH > maxDurationHours {
+		return fmt.Errorf("--duration-hours is too large (maximum %g hours)", maxDurationHours)
+	}
+	if f.maxDD <= 0 || f.maxDD > 100 || math.IsNaN(f.maxDD) || math.IsInf(f.maxDD, 0) {
+		return fmt.Errorf("--max-drawdown must be in the range (0, 100]")
+	}
+	if err := finitePositive("base-leverage", f.baseLev); err != nil {
+		return err
+	}
+	if err := finitePositive("max-leverage", f.maxLev); err != nil {
+		return err
+	}
+	if f.maxLev < f.baseLev {
+		return fmt.Errorf("--max-leverage must be greater than or equal to --base-leverage")
+	}
+	symbolCount := 0
+	for _, rawSymbol := range strings.Split(f.symbols, ",") {
+		if strings.TrimSpace(rawSymbol) == "" {
+			return fmt.Errorf("--symbols contains an empty symbol")
+		}
+		symbolCount++
+	}
+	if symbolCount == 0 {
+		return fmt.Errorf("--symbols must contain at least one symbol")
+	}
+	switch strings.ToLower(strings.TrimSpace(f.window)) {
+	case "1d", "3d", "7d", "14d", "30d", "1w", "2w", "1m", "month":
+	default:
+		return fmt.Errorf("unknown --window %q (want 1d, 3d, 7d, 14d, 30d, 1w, 2w, 1m, or month)", f.window)
+	}
+	switch strings.ToLower(strings.TrimSpace(f.region)) {
+	case paper.RegionUS, paper.RegionUSFutures, paper.RegionGlobal:
+	default:
+		return fmt.Errorf("unknown --region %q (want us, us-futures or global)", f.region)
+	}
+	return nil
+}
+
 func runDryRun(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("dry-run", flag.ContinueOnError)
 	f := addDryRunFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := validateDryRunFlags(f); err != nil {
 		return err
 	}
 
@@ -183,7 +239,6 @@ func runDryRun(ctx context.Context, args []string) error {
 	}
 	defer func() {
 		_ = syscall.Flock(int(fl.Fd()), syscall.LOCK_UN)
-		_ = os.Remove(lockFile)
 	}()
 	_ = fl.Truncate(0)
 	_, _ = fl.WriteString(fmt.Sprintf("%d\n", os.Getpid()))
@@ -252,7 +307,8 @@ func runDryRun(ctx context.Context, args []string) error {
 	paperCfg.InitialCapital = f.capital
 	paperCfg.WindowPreset = f.window
 	if f.durationH > 0 {
-		paperCfg.TargetDuration = time.Duration(f.durationH) * time.Hour
+		paperCfg.TargetDuration = time.Duration(f.durationH * float64(time.Hour))
+		paperCfg.TargetDurationExplicit = true
 	} else {
 		switch f.window {
 		case "30d", "1m", "month":
@@ -406,6 +462,7 @@ func runDryRun(ctx context.Context, args []string) error {
 			alertTrendDir = filepath.Join(dDir, "trend")
 		}
 	}
+	setKillHook(al)
 	go watchEngine(ctx, dryRunEngine, al, alertTrendDir)
 
 	dryRunEngine.Start(ctx)

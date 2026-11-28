@@ -262,3 +262,25 @@ func mustSet(t *testing.T, s *Store, name, value string) {
 		t.Fatal(err)
 	}
 }
+
+func TestDeleteRollsBackOnSaveFailure(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("chmod 0500 does not block writes on Windows or as root")
+	}
+	s := openTemp(t)
+	mustSet(t, s, PeerToken, "peer-secret-value")
+
+	dir := filepath.Dir(s.Path())
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	if err := s.Delete(PeerToken); err == nil {
+		t.Fatal("expected Delete to fail when directory is read-only")
+	}
+	got, err := s.Get(PeerToken)
+	if err != nil || got != "peer-secret-value" {
+		t.Fatalf("expected in-memory rollback after failed Delete, got (%q, %v)", got, err)
+	}
+}

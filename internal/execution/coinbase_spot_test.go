@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net/http"
@@ -466,6 +467,184 @@ func TestCoinbaseSpotBatchGetQuotesAndFallback(t *testing.T) {
 	}
 }
 
+func TestCoinbaseSpotDoJSONRetry429And503(t *testing.T) {
+	var getAttempts atomic.Int32
+	var cancelAttempts atomic.Int32
+	var placeAttempts atomic.Int32
+	var exhaustAttempts atomic.Int32
+	var cancelBodies []string
+	var cancelTimestamps []string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/brokerage/accounts":
+			n := getAttempts.Add(1)
+			if n == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"error":"unavailable"}`))
+				return
+			}
+			if n == 2 {
+				w.Header().Set("Retry-After", "0")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error":"rate_limited"}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"accounts": []map[string]any{
+					{"currency": "USD", "available_balance": map[string]string{"value": "123.45"}},
+				},
+			})
+
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/brokerage/orders/batch_cancel":
+			bodyBytes, _ := io.ReadAll(r.Body)
+			cancelBodies = append(cancelBodies, string(bodyBytes))
+			cancelTimestamps = append(cancelTimestamps, r.Header.Get("CB-ACCESS-TIMESTAMP"))
+			n := cancelAttempts.Add(1)
+			if n == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"error":"try again"}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{
+					{"success": true, "order_id": "ord-1"},
+				},
+			})
+
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/brokerage/orders":
+			placeAttempts.Add(1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"unavailable"}`))
+
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/brokerage/orders/historical/ord-exhaust":
+			exhaustAttempts.Add(1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"still down"}`))
+
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	var clockTick atomic.Int64
+	clockTick.Store(1700000000)
+	c := NewCoinbaseSpotClient(CoinbaseCredentials{
+		APIKey:    "hmac-key",
+		APISecret: "hmac-secret",
+	}, srv.URL, srv.Client())
+	c.now = func() time.Time {
+		return time.Unix(clockTick.Add(1), 0).UTC()
+	}
+
+	// 1. Safe GET retries on 503 and 429 Retry-After and succeeds.
+	bals, err := c.GetBalances(context.Background())
+	if err != nil {
+		t.Fatalf("GetBalances failed after retries: %v", err)
+	}
+	if getAttempts.Load() != 3 || bals["USD"] != 123.45 {
+		t.Fatalf("unexpected GetBalances retry result: attempts=%d bals=%+v", getAttempts.Load(), bals)
+	}
+
+	// 2. Idempotent cancel retries on 503, rewinds JSON body, and re-signs auth timestamp.
+	if err := c.CancelOrder(context.Background(), "ord-1"); err != nil {
+		t.Fatalf("CancelOrder failed after retry: %v", err)
+	}
+	if cancelAttempts.Load() != 2 || len(cancelBodies) != 2 {
+		t.Fatalf("expected 2 cancel attempts, got %d", cancelAttempts.Load())
+	}
+	if cancelBodies[0] == "" || cancelBodies[0] != cancelBodies[1] {
+		t.Fatalf("expected identical rewound cancel body on retry, got %q vs %q", cancelBodies[0], cancelBodies[1])
+	}
+	if cancelTimestamps[0] == "" || cancelTimestamps[0] == cancelTimestamps[1] {
+		t.Fatalf("expected re-signed auth timestamp on retry, got %q vs %q", cancelTimestamps[0], cancelTimestamps[1])
+	}
+
+	// 3. Non-idempotent PlaceLimitOrder must NOT retry on 503.
+	_, err = c.PlaceLimitOrder(context.Background(), LimitOrderRequest{
+		ClientOrderID: "cid-1",
+		Symbol:        "BTC-USD",
+		Side:          "BUY",
+		Price:         60000,
+		Quantity:      0.01,
+		PostOnly:      true,
+	})
+	if err == nil {
+		t.Fatal("expected PlaceLimitOrder error on 503")
+	}
+	if placeAttempts.Load() != 1 {
+		t.Fatalf("PlaceLimitOrder must not retry on 503, got %d attempts", placeAttempts.Load())
+	}
+
+	// 4. Bounded retries stop after maxAttempts.
+	if _, err := c.GetOrder(context.Background(), "ord-exhaust"); err == nil {
+		t.Fatal("expected GetOrder error after exhausting retries")
+	}
+	if exhaustAttempts.Load() != 4 {
+		t.Fatalf("expected 4 bounded attempts, got %d", exhaustAttempts.Load())
+	}
+}
+
+func TestCoinbaseSpotLookupProductSpecPropagatesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"not_found"}`))
+	}))
+	defer srv.Close()
+
+	c := NewCoinbaseSpotClient(CoinbaseCredentials{}, srv.URL, srv.Client())
+	if _, err := c.lookupProductSpec(context.Background(), "UNKNOWN-USD"); err == nil {
+		t.Fatal("expected lookupProductSpec to propagate HTTP 404 error")
+	}
+}
+
+func TestCoinbaseSpotPlaceAndCancelErrorEdgeCases(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/brokerage/orders":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success": true,
+			})
+		case "/api/v3/brokerage/orders/batch_cancel":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{
+					{"success": true, "order_id": "other-order"},
+				},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewCoinbaseSpotClient(CoinbaseCredentials{
+		APIKey:    "hmac-key",
+		APISecret: "hmac-secret",
+	}, srv.URL, srv.Client())
+
+	if _, err := c.PlaceLimitOrder(context.Background(), LimitOrderRequest{
+		ClientOrderID: "cid-empty",
+		Symbol:        "BTC-USD",
+		Side:          "BUY",
+		Price:         60000,
+		Quantity:      0.01,
+		PostOnly:      true,
+	}); err == nil {
+		t.Fatal("expected error when success response has empty order_id")
+	}
+
+	if err := c.CancelOrder(context.Background(), "ord-target"); err == nil {
+		t.Fatal("expected error when batch_cancel returns mismatched order_id")
+	}
+
+	hc := NewOptimizedHTTPClient(7 * time.Second)
+	tr, ok := hc.Transport.(*http.Transport)
+	if !ok || tr.ResponseHeaderTimeout != 7*time.Second {
+		t.Fatalf("expected ResponseHeaderTimeout=7s, got %+v", hc.Transport)
+	}
+}
+
 func BenchmarkCoinbaseSpotCDPJWTSign(b *testing.B) {
 	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -504,5 +683,144 @@ func BenchmarkCoinbaseSpotHMACSign(b *testing.B) {
 		if err := c.applyAuth(req, body, now); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func TestCoinbaseSpotGetOrder404AndGetOrderByClientOrderID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v3/brokerage/orders/historical/cid-only":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not_found"}`))
+		case "/api/v3/brokerage/orders/historical/batch":
+			if got := r.URL.Query().Get("product_ids"); got != "BTC-USD" {
+				t.Errorf("expected product_ids=BTC-USD, got %q", got)
+			}
+			cursor := r.URL.Query().Get("cursor")
+			if cursor == "" {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"orders": []map[string]any{
+						{
+							"order_id":        "cb-other-1",
+							"client_order_id": "cid-other",
+							"product_id":      "BTC-USD",
+							"side":            "BUY",
+							"status":          "OPEN",
+						},
+					},
+					"has_next": true,
+					"cursor":   "page-2",
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"orders": []map[string]any{
+					{
+						"order_id":        "cb-srv-42",
+						"client_order_id": "cid-target",
+						"product_id":      "BTC-USD",
+						"side":            "BUY",
+						"status":          "FILLED",
+						"filled_size":     "0.02",
+						"order_configuration": map[string]any{
+							"limit_limit_gtc": map[string]any{
+								"base_size":   "0.02",
+								"limit_price": "61000.00",
+								"post_only":   true,
+							},
+						},
+					},
+				},
+				"has_next": false,
+				"cursor":   "",
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewCoinbaseSpotClient(CoinbaseCredentials{
+		APIKey:    "hmac-key-test",
+		APISecret: "hmac-secret-test",
+	}, srv.URL, srv.Client())
+	ctx := context.Background()
+
+	if _, err := c.GetOrder(ctx, "cid-only"); !errors.Is(err, ErrOrderNotFound) {
+		t.Fatalf("expected ErrOrderNotFound on 404 from GetOrder, got %v", err)
+	}
+
+	got, err := c.GetOrderByClientOrderID(ctx, "btc-usd", "cid-target")
+	if err != nil {
+		t.Fatalf("GetOrderByClientOrderID failed: %v", err)
+	}
+	if got.OrderID != "cb-srv-42" || got.ClientOrderID != "cid-target" || got.Status != "FILLED" || got.FilledQty != 0.02 || !got.PostOnly {
+		t.Fatalf("unexpected receipt from GetOrderByClientOrderID: %+v", got)
+	}
+
+	if _, err := c.GetOrderByClientOrderID(ctx, "BTC-USD", "cid-missing"); !errors.Is(err, ErrOrderNotFound) {
+		t.Fatalf("expected ErrOrderNotFound for missing client_order_id, got %v", err)
+	}
+}
+
+func TestCoinbaseSpotPaginationCursorCycleAndMaxPages(t *testing.T) {
+	var acctCalls, ordCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/brokerage/accounts":
+			acctCalls++
+			cursor := r.URL.Query().Get("cursor")
+			nextCursor := "c1"
+			if cursor == "c1" {
+				nextCursor = "c1" // cycle back to same cursor
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"accounts": []map[string]any{
+					{"currency": "USD", "available_balance": map[string]string{"value": "100.0", "currency": "USD"}},
+				},
+				"has_next": true,
+				"cursor":   nextCursor,
+			})
+		case "/api/v3/brokerage/orders/historical/batch":
+			ordCalls++
+			cursor := r.URL.Query().Get("cursor")
+			nextCursor := "p1"
+			if cursor == "p1" {
+				nextCursor = "p1" // cycle back to same cursor
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"orders":   []any{},
+				"has_next": true,
+				"cursor":   nextCursor,
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewCoinbaseSpotClient(CoinbaseCredentials{
+		APIKey:    "hmac-key-test",
+		APISecret: "hmac-secret-test",
+	}, srv.URL, srv.Client())
+	ctx := context.Background()
+
+	bal, err := c.GetBalances(ctx)
+	if err != nil {
+		t.Fatalf("GetBalances failed: %v", err)
+	}
+	if acctCalls != 2 {
+		t.Fatalf("expected GetBalances to stop after cursor cycle (2 calls), got %d", acctCalls)
+	}
+	if bal["USD"] != 200.0 {
+		t.Fatalf("expected USD balance 200.0, got %.2f", bal["USD"])
+	}
+
+	if _, err := c.GetOrderByClientOrderID(ctx, "BTC-USD", "missing"); !errors.Is(err, ErrOrderNotFound) {
+		t.Fatalf("expected ErrOrderNotFound, got %v", err)
+	}
+	if ordCalls != 2 {
+		t.Fatalf("expected GetOrderByClientOrderID to stop after cursor cycle (2 calls), got %d", ordCalls)
 	}
 }

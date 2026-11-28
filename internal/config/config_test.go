@@ -94,6 +94,34 @@ exec: {enabled: true, position_limit: 1, max_order_qty: 2, daily_loss_limit: 10}
 	if _, err := Decode(strings.NewReader("engine: {mode: real}\n"), "inline"); err == nil {
 		t.Fatal("bad mode accepted")
 	}
+
+	// max_file_mb must be converted to bytes (mb << 20).
+	withStorage := base + "storage: {enabled: true, dir: /tmp/pq, max_file_mb: 32}\n"
+	c, err := Decode(strings.NewReader(strings.Replace(withStorage, "max_order_qty: 2", "max_order_qty: 1", 1)), "inline")
+	if err != nil {
+		t.Fatalf("valid storage config rejected: %v", err)
+	}
+	if c.Storage.MaxFileMB != 32 || c.Storage.MaxFileBytes != 32<<20 {
+		t.Fatalf("MaxFileMB=%d MaxFileBytes=%d, want 32 and %d", c.Storage.MaxFileMB, c.Storage.MaxFileBytes, int64(32<<20))
+	}
+
+	// Reject SellThreshold >= BuyThreshold.
+	badThresholds := strings.Replace(base, "max_order_qty: 2", "max_order_qty: 1", 1) +
+		"models: {enabled: true, max_features: 8, max_hidden: 4, buy_threshold: 0.4, sell_threshold: 0.6}\n"
+	if _, err := Decode(strings.NewReader(badThresholds), "inline"); err == nil || !strings.Contains(err.Error(), "sell_threshold") {
+		t.Fatalf("err = %v, want sell_threshold < buy_threshold error", err)
+	}
+
+	// Reject negative watchdog_kick_ms, keep_files, max_file_mb.
+	for _, snippet := range []string{
+		"engine: {mode: dev, watchdog_kick_ms: -1}\nfeed: {kind: synthetic}\nsymbols: [{name: BTC, tick_size: 0.1, start_mid: 100}]\ntargets: {BTC: [binance:BTCUSDT]}\n",
+		"engine: {mode: dev}\nfeed: {kind: synthetic}\nsymbols: [{name: BTC, tick_size: 0.1, start_mid: 100}]\ntargets: {BTC: [binance:BTCUSDT]}\nstorage: {keep_files: -1}\n",
+		"engine: {mode: dev}\nfeed: {kind: synthetic}\nsymbols: [{name: BTC, tick_size: 0.1, start_mid: 100}]\ntargets: {BTC: [binance:BTCUSDT]}\nstorage: {max_file_mb: -5}\n",
+	} {
+		if _, err := Decode(strings.NewReader(snippet), "inline"); err == nil {
+			t.Fatalf("expected validation error for %q", snippet)
+		}
+	}
 }
 
 func TestSymbolIDsStable(t *testing.T) {

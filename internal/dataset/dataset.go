@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 )
@@ -102,7 +103,10 @@ func (r *Record) Validate() error {
 	}
 	switch r.Type {
 	case TypeTrade:
-		if !(r.Price > 0) || !(r.Qty > 0) {
+		if math.IsNaN(r.Price) || math.IsInf(r.Price, 0) || math.IsNaN(r.Qty) || math.IsInf(r.Qty, 0) {
+			return fmt.Errorf("trade with non-finite price/qty (%g/%g)", r.Price, r.Qty)
+		}
+		if r.Price <= 0 || r.Qty <= 0 {
 			return fmt.Errorf("trade with non-positive price/qty (%g/%g)", r.Price, r.Qty)
 		}
 		if r.Side != Buy && r.Side != Sell {
@@ -119,7 +123,7 @@ func (r *Record) Validate() error {
 		if len(levels) == 0 {
 			return fmt.Errorf("depth message for side %q carries no levels on that side", r.Side)
 		}
-		if err := validateLevels(levels, false); err != nil {
+		if err := validateLevels(levels, r.Side == Buy); err != nil {
 			return err
 		}
 	case TypeSnapshot:
@@ -146,8 +150,14 @@ func (r *Record) Validate() error {
 // decrease (bids) or increase (asks).
 func validateLevels(levels []Level, descending bool) error {
 	for i := range levels {
-		if !(levels[i].Price > 0) {
+		if math.IsNaN(levels[i].Price) || math.IsInf(levels[i].Price, 0) {
+			return fmt.Errorf("level %d: non-finite price %g", i, levels[i].Price)
+		}
+		if levels[i].Price <= 0 {
 			return fmt.Errorf("level %d: non-positive price %g", i, levels[i].Price)
+		}
+		if math.IsNaN(levels[i].Qty) || math.IsInf(levels[i].Qty, 0) {
+			return fmt.Errorf("level %d: non-finite qty %g", i, levels[i].Qty)
 		}
 		if levels[i].Qty < 0 {
 			return fmt.Errorf("level %d: negative qty %g", i, levels[i].Qty)

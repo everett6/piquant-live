@@ -3,7 +3,9 @@ package collect
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -131,13 +133,16 @@ func (c *Collector) SetBackfillStatus(job, text string) {
 
 // Run blocks until ctx is cancelled, then flushes.
 func (c *Collector) Run(ctx context.Context) {
-	go c.drainTrades(ctx)
 	// News polling runs on its own goroutine: slow or dead feeds (15s timeout each) must
 	// never delay the 1-second price snapshots.
-	var newsDone sync.WaitGroup
-	newsDone.Add(1)
+	var wg sync.WaitGroup
+	wg.Add(2)
 	go func() {
-		defer newsDone.Done()
+		defer wg.Done()
+		c.drainTrades(ctx)
+	}()
+	go func() {
+		defer wg.Done()
 		c.newsLoop(ctx)
 	}()
 
@@ -148,13 +153,13 @@ func (c *Collector) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			newsDone.Wait()
-			c.flushAll()
+			wg.Wait()
+			_ = c.flushAll()
 			return
 		case now := <-snap.C:
 			c.snapshot(now)
 		case <-flush.C:
-			c.flushAll()
+			_ = c.flushAll()
 		}
 	}
 }
@@ -223,7 +228,7 @@ func (c *Collector) snapshot(now time.Time) {
 		return
 	}
 	last := map[string]float64{}
-	_, _, _, _, _, _, lastEventNs := c.ing.Stats()
+	_, _, _, _, _, _, lastEventNs, _ := c.ing.Stats()
 	for _, sym := range c.cfg.Symbols {
 		row := PriceRow{T: now.UnixMilli(), Sym: sym}
 		if book, ok := c.ing.GetL2Book(sym); ok && book != nil {
@@ -296,14 +301,21 @@ func freeGB(dir string) float64 {
 	return float64(st.Bavail) * float64(st.Bsize) / 1e9
 }
 
-func (c *Collector) flushAll() {
+func (c *Collector) flushAll() error {
 	free := freeGB(c.cfg.Dir)
 	c.mu.Lock()
 	c.status.FreeDiskGB = free
 	c.status.WritingPaused = free >= 0 && free < c.cfg.MinFreeGB
 	c.mu.Unlock()
-	_ = c.prices.Flush()
-	_ = c.news.Flush()
+	var flushErrs []error
+	if err := c.prices.Flush(); err != nil {
+		log.Printf("[COLLECT] flush prices: %v", err)
+		flushErrs = append(flushErrs, fmt.Errorf("flush prices: %w", err))
+	}
+	if err := c.news.Flush(); err != nil {
+		log.Printf("[COLLECT] flush news: %v", err)
+		flushErrs = append(flushErrs, fmt.Errorf("flush news: %w", err))
+	}
 
 	c.mu.Lock()
 	c.status.UpdatedAt = time.Now().UTC()
@@ -323,4 +335,5 @@ func (c *Collector) flushAll() {
 			_ = os.Rename(tmp, filepath.Join(c.cfg.Dir, "status.json"))
 		}
 	}
+	return errors.Join(flushErrs...)
 }

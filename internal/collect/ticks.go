@@ -3,6 +3,7 @@ package collect
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -161,8 +162,13 @@ func NewTickRecorder(cfg TickConfig) (*TickRecorder, error) {
 
 // Run streams every venue until ctx is cancelled, reconnecting with backoff, then flushes.
 func (r *TickRecorder) Run(ctx context.Context) {
+	var wg sync.WaitGroup
 	for _, v := range r.venues {
-		go r.streamLoop(ctx, v)
+		wg.Add(1)
+		go func(v *tickVenue) {
+			defer wg.Done()
+			r.streamLoop(ctx, v)
+		}(v)
 	}
 	snap := time.NewTicker(r.cfg.BookEvery)
 	flush := time.NewTicker(r.cfg.FlushEvery)
@@ -171,12 +177,13 @@ func (r *TickRecorder) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			r.flush()
+			wg.Wait()
+			_ = r.flush()
 			return
 		case now := <-snap.C:
 			r.snapshotBooks(now)
 		case <-flush.C:
-			r.flush()
+			_ = r.flush()
 		}
 	}
 }
@@ -604,16 +611,29 @@ func (r *TickRecorder) snapshotBooks(now time.Time) {
 	}
 }
 
-func (r *TickRecorder) flush() {
+func (r *TickRecorder) flush() error {
 	free := freeGB(r.cfg.Dir)
+	var flushErrs []error
 	for k := range r.trades {
-		_ = r.trades[k].Flush()
-		_ = r.books[k].Flush()
+		if err := r.trades[k].Flush(); err != nil {
+			log.Printf("[TICKS] flush trades %s: %v", k, err)
+			flushErrs = append(flushErrs, fmt.Errorf("flush trades %s: %w", k, err))
+		}
+		if err := r.books[k].Flush(); err != nil {
+			log.Printf("[TICKS] flush books %s: %v", k, err)
+			flushErrs = append(flushErrs, fmt.Errorf("flush books %s: %w", k, err))
+		}
 	}
 	r.mu.Lock()
 	r.paused = free >= 0 && free < r.cfg.MinFreeGB
 	r.status.Paused = r.paused
 	r.status.UpdatedAt = time.Now().UTC()
+	if len(flushErrs) > 0 {
+		if r.status.LastError == nil {
+			r.status.LastError = map[string]string{}
+		}
+		r.status.LastError["flush"] = errors.Join(flushErrs...).Error()
+	}
 	b, err := json.MarshalIndent(r.status, "", "  ")
 	r.mu.Unlock()
 	if err == nil {
@@ -622,4 +642,5 @@ func (r *TickRecorder) flush() {
 			_ = os.Rename(tmp, filepath.Join(r.cfg.Dir, "ticks_status.json"))
 		}
 	}
+	return errors.Join(flushErrs...)
 }

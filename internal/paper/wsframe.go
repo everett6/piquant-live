@@ -1,11 +1,13 @@
 package paper
 
 import (
+	"crypto/rand"
 	"errors"
 	"io"
 )
 
 // sendWSText writes a masked RFC 6455 text frame to the connection.
+// Uses a random mask key per frame as required by RFC 6455 for client-to-server frames.
 func sendWSText(w io.Writer, msg string) error {
 	b := []byte(msg)
 	n := len(b)
@@ -18,7 +20,11 @@ func sendWSText(w io.Writer, msg string) error {
 		return errors.New("frame too large")
 	}
 
-	mask := []byte{0x4b, 0x9e, 0x12, 0x7a}
+	// Generate random mask key per RFC 6455
+	mask := make([]byte, 4)
+	if _, err := rand.Read(mask); err != nil {
+		return err
+	}
 	masked := make([]byte, n)
 	for i := 0; i < n; i++ {
 		masked[i] = b[i] ^ mask[i%4]

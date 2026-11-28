@@ -39,7 +39,13 @@ func ComputeAlphaHealth(name string, netDailyRets []float64, floorMult float64) 
 	if floorMult <= 0 || floorMult > 1 {
 		floorMult = 0.35
 	}
-	n := len(netDailyRets)
+	clean := make([]float64, 0, len(netDailyRets))
+	for _, r := range netDailyRets {
+		if !math.IsNaN(r) && !math.IsInf(r, 0) {
+			clean = append(clean, r)
+		}
+	}
+	n := len(clean)
 	h := SleeveAlphaHealth{
 		Name:         name,
 		Days:         n,
@@ -53,15 +59,15 @@ func ComputeAlphaHealth(name string, netDailyRets []float64, floorMult float64) 
 	// EWMA net return in bps/day (20-day span: alpha = 2/(20+1)).
 	const span = 20.0
 	ewmAlpha := 2.0 / (span + 1.0)
-	ewm := netDailyRets[0]
+	ewm := clean[0]
 	for i := 1; i < n; i++ {
-		ewm = ewmAlpha*netDailyRets[i] + (1.0-ewmAlpha)*ewm
+		ewm = ewmAlpha*clean[i] + (1.0-ewmAlpha)*ewm
 	}
 	h.EWMA20dNetBps = round2Alpha(ewm * 10000.0)
 
-	h.Rolling30dSharpe = round4Alpha(rollingSharpe(netDailyRets, 30))
-	h.Rolling60dSharpe = round4Alpha(rollingSharpe(netDailyRets, 60))
-	h.Lag1Autocorr = round4Alpha(lag1Autocorr(netDailyRets, 60))
+	h.Rolling30dSharpe = round4Alpha(rollingSharpe(clean, 30))
+	h.Rolling60dSharpe = round4Alpha(rollingSharpe(clean, 60))
+	h.Lag1Autocorr = round4Alpha(lag1Autocorr(clean, 60))
 
 	if n >= 20 {
 		sr := h.Rolling60dSharpe
@@ -111,11 +117,15 @@ func RunSelfImprovingLoop(sleeveRets map[string][]float64, eta, minCarry, maxTre
 	for t := 0; t < minLen; t++ {
 		if t >= 20 {
 			for _, k := range order {
+				r := sleeveRets[k][t]
+				if math.IsNaN(r) || math.IsInf(r, 0) {
+					continue
+				}
 				sd := windowStd(sleeveRets[k], t, 45)
 				if sd < 0.005 {
 					sd = 0.005
 				}
-				step := sleeveRets[k][t] / sd
+				step := r / sd
 				if step > 3.0 {
 					step = 3.0
 				} else if step < -3.0 {
@@ -187,14 +197,22 @@ func rollingSharpe(rets []float64, win int) float64 {
 	}
 	sub := rets[start:]
 	var sum, sum2 float64
+	var count int
 	for _, r := range sub {
+		if math.IsNaN(r) || math.IsInf(r, 0) {
+			continue
+		}
 		sum += r
 		sum2 += r * r
+		count++
 	}
-	fn := float64(len(sub))
+	if count < 2 {
+		return 0
+	}
+	fn := float64(count)
 	mu := sum / fn
 	v := (sum2 - fn*mu*mu) / (fn - 1)
-	if v <= 0 {
+	if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 		return 0
 	}
 	return mu / math.Sqrt(v) * math.Sqrt(365.0)
@@ -210,14 +228,22 @@ func windowStd(rets []float64, endIdx, win int) float64 {
 		return 0.01
 	}
 	var sum, sum2 float64
+	var count int
 	for _, r := range sub {
+		if math.IsNaN(r) || math.IsInf(r, 0) {
+			continue
+		}
 		sum += r
 		sum2 += r * r
+		count++
 	}
-	fn := float64(len(sub))
+	if count < 2 {
+		return 0.01
+	}
+	fn := float64(count)
 	mu := sum / fn
 	v := (sum2 - fn*mu*mu) / (fn - 1)
-	if v <= 0 {
+	if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 		return 0.01
 	}
 	return math.Sqrt(v)
@@ -236,18 +262,26 @@ func lag1Autocorr(rets []float64, win int) float64 {
 		return 0
 	}
 	var sx, sy, sxx, syy, sxy float64
-	n := float64(len(sub) - 1)
+	var count int
 	for i := 1; i < len(sub); i++ {
 		x, y := sub[i-1], sub[i]
+		if math.IsNaN(x) || math.IsInf(x, 0) || math.IsNaN(y) || math.IsInf(y, 0) {
+			continue
+		}
 		sx += x
 		sy += y
 		sxx += x * x
 		syy += y * y
 		sxy += x * y
+		count++
 	}
+	if count < 2 {
+		return 0
+	}
+	n := float64(count)
 	num := n*sxy - sx*sy
 	den := math.Sqrt((n*sxx - sx*sx) * (n*syy - sy*sy))
-	if den <= 1e-12 {
+	if den <= 1e-12 || math.IsNaN(den) || math.IsInf(den, 0) {
 		return 0
 	}
 	return num / den

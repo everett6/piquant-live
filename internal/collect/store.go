@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -91,22 +92,51 @@ func (s *dailyStore) Total() uint64 {
 	return s.total
 }
 
+var (
+	gzipBufPool = sync.Pool{
+		New: func() any {
+			b := new(bytes.Buffer)
+			b.Grow(16 << 10)
+			return b
+		},
+	}
+	gzipWriterPool = sync.Pool{
+		New: func() any {
+			zw, _ := gzip.NewWriterLevel(io.Discard, gzip.BestCompression)
+			return zw
+		},
+	}
+)
+
 func appendGzip(path string, data []byte) error {
 	// Compress in memory first so the file sees a single write: a failure then
 	// cannot leave a half-written member in the middle of the file, and any
 	// partial write is rolled back by truncating to the original size.
-	var mem bytes.Buffer
-	// Best compression: about 6% smaller files than the default level, and cheap at one flush a minute.
-	zw, err := gzip.NewWriterLevel(&mem, gzip.BestCompression)
-	if err != nil {
-		return err
-	}
+	mem := gzipBufPool.Get().(*bytes.Buffer)
+	mem.Reset()
+	defer func() {
+		if mem.Cap() <= 4<<20 {
+			mem.Reset()
+			gzipBufPool.Put(mem)
+		}
+	}()
+
+	zw := gzipWriterPool.Get().(*gzip.Writer)
+	zw.Reset(mem)
+	// Keep BestCompression member output while reusing the deflate state across flushes.
 	if _, err := zw.Write(data); err != nil {
+		zw.Reset(io.Discard)
+		gzipWriterPool.Put(zw)
 		return err
 	}
 	if err := zw.Close(); err != nil {
+		zw.Reset(io.Discard)
+		gzipWriterPool.Put(zw)
 		return err
 	}
+	zw.Reset(io.Discard)
+	gzipWriterPool.Put(zw)
+
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -135,6 +165,9 @@ func ReadRows(path string, fn func(line []byte) error) error {
 	defer f.Close()
 	zr, err := gzip.NewReader(f)
 	if err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil
+		}
 		return err
 	}
 	defer zr.Close()

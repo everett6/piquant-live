@@ -6,7 +6,10 @@
 package paper
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
+	"net"
 	"testing"
 	"time"
 
@@ -183,5 +186,126 @@ func BenchmarkBybitFastExtractSymbol(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = FastExtractBybitSymbol(bybitSampleSnapshot)
+	}
+}
+
+func TestBybitMarketFeedInterfaceAndCopyL2Book(t *testing.T) {
+	ring := engine.NewSPSCRing(1024)
+	ingestor := NewBybitStreamIngestor(DefaultBybitStreamConfig(), ring)
+
+	var feed MarketFeed = ingestor
+	if feed.IsFallback() {
+		t.Fatalf("expected IsFallback() == false for BybitStreamIngestor")
+	}
+
+	ingestor.HandleStreamPayload(bybitSampleSnapshot)
+	total, depths, _, _, _, _, lastNs, lastRealNs := feed.Stats()
+	if total != 1 || depths != 1 || lastNs == 0 || lastRealNs == 0 {
+		t.Fatalf("unexpected Stats(): total=%d depths=%d lastNs=%d lastRealNs=%d", total, depths, lastNs, lastRealNs)
+	}
+
+	var dst marketdata.L2OrderBook
+	if !feed.CopyL2Book("BTCUSDT", &dst) {
+		t.Fatalf("expected CopyL2Book to succeed")
+	}
+	mid, ok := dst.MidPrice()
+	if !ok || mid != 65000.25 {
+		t.Fatalf("expected mid=65000.25, got mid=%v ok=%v", mid, ok)
+	}
+}
+
+func writeTestWSFrame(c net.Conn, fin bool, op byte, payload []byte) error {
+	b0 := op & 0x0F
+	if fin {
+		b0 |= 0x80
+	}
+	var hdr [10]byte
+	hdr[0] = b0
+	n := len(payload)
+	var hdrLen int
+	if n <= 125 {
+		hdr[1] = byte(n)
+		hdrLen = 2
+	} else {
+		hdr[1] = 126
+		binary.BigEndian.PutUint16(hdr[2:4], uint16(n))
+		hdrLen = 4
+	}
+	if _, err := c.Write(hdr[:hdrLen]); err != nil {
+		return err
+	}
+	_, err := c.Write(payload)
+	return err
+}
+
+func TestBybitStreamFragmentedFrame(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	srvErr := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			srvErr <- err
+			return
+		}
+		defer conn.Close()
+
+		br := bufio.NewReader(conn)
+		for {
+			line, err := br.ReadString('\n')
+			if err != nil {
+				srvErr <- err
+				return
+			}
+			if line == "\r\n" || line == "\n" {
+				break
+			}
+		}
+		if _, err := conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")); err != nil {
+			srvErr <- err
+			return
+		}
+		// Consume client subscribe frame
+		if _, _, _, err := readWSFrame(br); err != nil {
+			srvErr <- err
+			return
+		}
+		mid := len(bybitSampleSnapshot) / 2
+		if err := writeTestWSFrame(conn, false, 0x1, bybitSampleSnapshot[:mid]); err != nil {
+			srvErr <- err
+			return
+		}
+		if err := writeTestWSFrame(conn, true, 0x0, bybitSampleSnapshot[mid:]); err != nil {
+			srvErr <- err
+			return
+		}
+		_ = writeTestWSFrame(conn, true, 0x8, nil)
+		srvErr <- nil
+	}()
+
+	ring := engine.NewSPSCRing(1024)
+	cfg := DefaultBybitStreamConfig()
+	cfg.Endpoint = "ws://" + ln.Addr().String() + "/v5/public/linear"
+	cfg.PingInterval = time.Minute
+	ingestor := NewBybitStreamIngestor(cfg, ring)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_ = ingestor.connectAndStream(ctx)
+	if err := <-srvErr; err != nil {
+		t.Fatalf("mock ws server error: %v", err)
+	}
+
+	ev, ok := ring.Pop()
+	if !ok {
+		t.Fatalf("expected reassembled fragmented snapshot event in ring")
+	}
+	if ev.Kind != 2 || ev.Price != 65000.25 {
+		t.Fatalf("unexpected event: %+v", ev)
 	}
 }

@@ -24,6 +24,7 @@ type mockVenueClient struct {
 	quotes         map[string]Quote
 	quoteErr       error
 	placeErr       error
+	placeStatus    string
 	placeCalls     int
 	cancelCalls    int
 	getOrderCalls  int
@@ -94,6 +95,10 @@ func (m *mockVenueClient) PlaceLimitOrder(_ context.Context, req LimitOrderReque
 	if m.placeErr != nil {
 		return OrderReceipt{}, m.placeErr
 	}
+	status := "OPEN"
+	if m.placeStatus != "" {
+		status = m.placeStatus
+	}
 	rec := OrderReceipt{
 		OrderID:       "ord-" + req.ClientOrderID,
 		ClientOrderID: req.ClientOrderID,
@@ -102,7 +107,7 @@ func (m *mockVenueClient) PlaceLimitOrder(_ context.Context, req LimitOrderReque
 		Price:         req.Price,
 		Quantity:      req.Quantity,
 		PostOnly:      req.PostOnly,
-		Status:        "OPEN",
+		Status:        status,
 		DryRun:        false,
 		SubmittedAt:   time.Now().UTC(),
 	}
@@ -573,9 +578,9 @@ func TestLiveRouterReconcileMatchAndMismatch(t *testing.T) {
 }
 
 func TestDeterministicClientOrderID(t *testing.T) {
-	id1 := DeterministicClientOrderID("coinbase-spot", "2026-11-20", "btc-usd", "buy", 0.01, 60000.0)
-	id2 := DeterministicClientOrderID("COINBASE-SPOT", "2026-11-20", "BTC-USD", "BUY", 0.01, 60000.0)
-	id3 := DeterministicClientOrderID("coinbase-spot", "2026-11-20", "BTC-USD", "BUY", 0.02, 60000.0)
+	id1 := DeterministicClientOrderID("coinbase-spot", "2026-11-20", "btc-usd", "buy", 0.01)
+	id2 := DeterministicClientOrderID("COINBASE-SPOT", "2026-11-20", "BTC-USD", "BUY", 0.01)
+	id3 := DeterministicClientOrderID("coinbase-spot", "2026-11-20", "BTC-USD", "BUY", 0.02)
 	if len(id1) != 24 {
 		t.Fatalf("expected 24 char hex id, got %d (%q)", len(id1), id1)
 	}
@@ -584,6 +589,215 @@ func TestDeterministicClientOrderID(t *testing.T) {
 	}
 	if id1 == id3 {
 		t.Fatalf("different quantities produced identical client order id: %s", id1)
+	}
+}
+
+func TestLiveRouterIntentStableClientOrderIDAcrossQuoteChanges(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv(LiveArmEnvVar, LiveArmEnvValue)
+	journal := filepath.Join(t.TempDir(), "intent_journal.jsonl")
+	fixedNow := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+
+	cfg := DefaultRouterConfig()
+	cfg.DryRun = false
+	cfg.LiveArmToken = LiveArmConfirmToken
+	cfg.JournalPath = journal
+
+	venue := newMockVenue()
+	venue.quotes["BTC-USD"] = Quote{Symbol: "BTC-USD", Bid: 59990, Ask: 60010, Mid: 60000, Timestamp: fixedNow}
+
+	r, err := NewLiveRouter(cfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.now = func() time.Time { return fixedNow }
+
+	res1, err := r.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false)
+	if err != nil {
+		t.Fatalf("first submit failed: %v", err)
+	}
+
+	// Quote moves before retry/requote of the same intent: ClientOrderID must stay identical and deduplicate.
+	venue.quotes["BTC-USD"] = Quote{Symbol: "BTC-USD", Bid: 60990, Ask: 61010, Mid: 61000, Timestamp: fixedNow.Add(5 * time.Second)}
+	res2, err := r.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false)
+	if err != nil {
+		t.Fatalf("second submit failed: %v", err)
+	}
+	if !res2.SkippedDuplicate || res2.ClientOrderID != res1.ClientOrderID {
+		t.Fatalf("expected duplicate skip with identical intent ClientOrderID across quote change, got res1=%+v res2=%+v", res1, res2)
+	}
+	if venue.placeCalls != 1 {
+		t.Fatalf("expected 1 PlaceLimitOrder call, got %d", venue.placeCalls)
+	}
+}
+
+func TestLiveRouterPersistsPendingBeforePlaceLimitOrder(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv(LiveArmEnvVar, LiveArmEnvValue)
+	journal := filepath.Join(t.TempDir(), "pending_journal.jsonl")
+	fixedNow := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+
+	cfg := DefaultRouterConfig()
+	cfg.DryRun = false
+	cfg.LiveArmToken = LiveArmConfirmToken
+	cfg.JournalPath = journal
+
+	venue := newMockVenue()
+	venue.quotes["BTC-USD"] = Quote{Symbol: "BTC-USD", Bid: 59990, Ask: 60010, Mid: 60000, Timestamp: fixedNow}
+	venue.placeErr = errors.New("simulated network timeout")
+
+	r1, err := NewLiveRouter(cfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1.now = func() time.Time { return fixedNow }
+
+	if _, err := r1.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false); err == nil {
+		t.Fatal("expected PlaceLimitOrder error")
+	}
+
+	raw, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatalf("expected PENDING journal file to be persisted before PlaceLimitOrder: %v", err)
+	}
+	if !strings.Contains(string(raw), `"status":"PENDING"`) {
+		t.Fatalf("expected PENDING status in journal, got: %s", string(raw))
+	}
+	if !strings.Contains(string(raw), `"status":"REJECTED"`) {
+		t.Fatalf("expected REJECTED status in journal after PlaceLimitOrder error, got: %s", string(raw))
+	}
+
+	// Simulate process crash mid-PlaceLimitOrder (only the PENDING line persisted before crash);
+	// retry after restart must skip rather than place a duplicate order.
+	firstLine := strings.SplitN(strings.TrimSpace(string(raw)), "\n", 2)[0] + "\n"
+	if err := os.WriteFile(journal, []byte(firstLine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	venue.placeErr = nil
+	r2, err := NewLiveRouter(cfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.now = func() time.Time { return fixedNow.Add(10 * time.Second) }
+
+	res2, err := r2.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false)
+	if err != nil {
+		t.Fatalf("retry after restart failed: %v", err)
+	}
+	if !res2.SkippedDuplicate || res2.Receipt.Status != "PENDING" {
+		t.Fatalf("expected SkippedDuplicate with PENDING receipt when GetOrder fails, got %+v", res2)
+	}
+	if venue.placeCalls != 1 {
+		t.Fatalf("expected no duplicate PlaceLimitOrder call after restart, got %d", venue.placeCalls)
+	}
+}
+
+func TestLiveRouterPendingReconcilesWithGetOrderOnRetry(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv(LiveArmEnvVar, LiveArmEnvValue)
+	journal := filepath.Join(t.TempDir(), "pending_reconcile.jsonl")
+	fixedNow := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+
+	cfg := DefaultRouterConfig()
+	cfg.DryRun = false
+	cfg.LiveArmToken = LiveArmConfirmToken
+	cfg.JournalPath = journal
+
+	venue := newMockVenue()
+	venue.quotes["BTC-USD"] = Quote{Symbol: "BTC-USD", Bid: 59990, Ask: 60010, Mid: 60000, Timestamp: fixedNow}
+	venue.placeErr = errors.New("timeout after send")
+
+	r1, err := NewLiveRouter(cfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1.now = func() time.Time { return fixedNow }
+	if _, err := r1.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false); err == nil {
+		t.Fatal("expected initial timeout error")
+	}
+
+	// Simulate process crash before PlaceLimitOrder returned (leaving PENDING as latest journal entry).
+	raw, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstLine := strings.SplitN(strings.TrimSpace(string(raw)), "\n", 2)[0] + "\n"
+	if err := os.WriteFile(journal, []byte(firstLine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// On restart, venue actually accepted and filled the order.
+	cid := DeterministicClientOrderID(venue.Name(), "2026-11-20", "BTC-USD", "BUY", 0.01)
+	venue.mu.Lock()
+	venue.placeErr = nil
+	venue.orders[cid] = OrderReceipt{
+		OrderID:       "venue-recovered-1",
+		ClientOrderID: cid,
+		Symbol:        "BTC-USD",
+		Side:          "BUY",
+		Price:         59988,
+		Quantity:      0.01,
+		PostOnly:      true,
+		Status:        "FILLED",
+		FilledQty:     0.01,
+		SubmittedAt:   fixedNow,
+	}
+	venue.mu.Unlock()
+
+	r2, err := NewLiveRouter(cfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.now = func() time.Time { return fixedNow.Add(5 * time.Second) }
+	res, err := r2.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false)
+	if err != nil {
+		t.Fatalf("expected reconciled duplicate skip, got err=%v", err)
+	}
+	if !res.SkippedDuplicate || res.Receipt.Status != "FILLED" || res.Receipt.OrderID != "venue-recovered-1" {
+		t.Fatalf("expected SkippedDuplicate with reconciled FILLED receipt, got %+v", res)
+	}
+	if venue.placeCalls != 1 {
+		t.Fatalf("expected no second PlaceLimitOrder call, got %d", venue.placeCalls)
+	}
+}
+
+func TestLiveRouterPartialFillOnTTLCancelRecordsPartialNotional(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv(LiveArmEnvVar, LiveArmEnvValue)
+	journal := filepath.Join(t.TempDir(), "partial_ttl.jsonl")
+	fixedNow := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+
+	venue := newMockVenue()
+	venue.quotes["BTC-USD"] = Quote{Symbol: "BTC-USD", Bid: 59990, Ask: 60010, Mid: 60000, Timestamp: fixedNow}
+	venue.onGetOrder = func(_ int, rec OrderReceipt) OrderReceipt {
+		rec.Status = "OPEN"
+		rec.FilledQty = 0.004
+		return rec
+	}
+
+	cfg := DefaultRouterConfig()
+	cfg.DryRun = false
+	cfg.LiveArmToken = LiveArmConfirmToken
+	cfg.JournalPath = journal
+	cfg.OrderTTL = 35 * time.Millisecond
+	cfg.OrderPollInterval = 10 * time.Millisecond
+
+	r, err := NewLiveRouter(cfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.now = func() time.Time { return fixedNow }
+
+	res, err := r.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.CancelledOnTTL || res.Receipt.Status != "CANCELLED" || res.Receipt.FilledQty != 0.004 {
+		t.Fatalf("unexpected partial-fill TTL result: %+v", res)
+	}
+	wantNotional := 0.004 * res.Receipt.Price
+	if math.Abs(res.NotionalUSD-wantNotional) > 1e-6 || math.Abs(r.DailyNotionalUSD()-wantNotional) > 1e-6 {
+		t.Fatalf("expected partial notional %.6f, got res=%.6f daily=%.6f", wantNotional, res.NotionalUSD, r.DailyNotionalUSD())
 	}
 }
 
@@ -787,5 +1001,263 @@ func TestHighWaterMarkLoadUpdateAndUTCRollover(t *testing.T) {
 	}
 	if _, err := os.Stat(hwmPath + ".tmp"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected no lingering .tmp file, stat err=%v", err)
+	}
+}
+
+func TestLiveRouterSameDaySameSizeDistinctOrdersWithIntentKeyAndClientOrderID(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv(LiveArmEnvVar, LiveArmEnvValue)
+	journal := filepath.Join(t.TempDir(), "multi_clip_journal.jsonl")
+	fixedNow := time.Date(2026, 11, 20, 14, 0, 0, 0, time.UTC)
+
+	base := DeterministicClientOrderID("coinbase-spot", "2026-11-20", "BTC-USD", "BUY", 0.01)
+	if got := DeterministicClientOrderIDWithKey("coinbase-spot", "2026-11-20", "BTC-USD", "BUY", 0.01, ""); got != base {
+		t.Fatalf("empty intentKey should match DeterministicClientOrderID: got %s want %s", got, base)
+	}
+	clip1 := DeterministicClientOrderIDWithKey("coinbase-spot", "2026-11-20", "BTC-USD", "BUY", 0.01, "clip-1")
+	clip2 := DeterministicClientOrderIDWithKey("coinbase-spot", "2026-11-20", "BTC-USD", "BUY", 0.01, "clip-2")
+	if len(clip1) != 24 || clip1 == clip2 || clip1 == base {
+		t.Fatalf("expected distinct 24-char hex IDs, got base=%s clip1=%s clip2=%s", base, clip1, clip2)
+	}
+
+	cfg := DefaultRouterConfig()
+	cfg.DryRun = false
+	cfg.LiveArmToken = LiveArmConfirmToken
+	cfg.JournalPath = journal
+
+	venue := newMockVenue()
+	venue.quotes["BTC-USD"] = Quote{Symbol: "BTC-USD", Bid: 59990, Ask: 60010, Mid: 60000, Timestamp: fixedNow}
+
+	r, err := NewLiveRouter(cfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.now = func() time.Time { return fixedNow }
+
+	// Clip 1 submits.
+	res1, err := r.SubmitTargetOrderWithOptions(ctx, "BTC-USD", "BUY", 0.01, 25.0, false, SubmitOrderOptions{IntentKey: "clip-1"})
+	if err != nil {
+		t.Fatalf("clip-1 failed: %v", err)
+	}
+	if res1.SkippedDuplicate {
+		t.Fatalf("expected clip-1 not to be skipped")
+	}
+
+	// Retry of clip 1 deduplicates.
+	res1Retry, err := r.SubmitTargetOrderWithOptions(ctx, "BTC-USD", "BUY", 0.01, 25.0, false, SubmitOrderOptions{IntentKey: "clip-1"})
+	if err != nil || !res1Retry.SkippedDuplicate || res1Retry.ClientOrderID != res1.ClientOrderID {
+		t.Fatalf("expected clip-1 retry to deduplicate, got res=%+v err=%v", res1Retry, err)
+	}
+
+	// Clip 2 (same day, same symbol, same side, same qty) must NOT collide with clip 1.
+	res2, err := r.SubmitTargetOrderWithOptions(ctx, "BTC-USD", "BUY", 0.01, 25.0, false, SubmitOrderOptions{IntentKey: "clip-2"})
+	if err != nil {
+		t.Fatalf("clip-2 failed: %v", err)
+	}
+	if res2.SkippedDuplicate || res2.ClientOrderID == res1.ClientOrderID {
+		t.Fatalf("expected clip-2 to submit with distinct ClientOrderID, got res2=%+v res1=%+v", res2, res1)
+	}
+
+	// Explicit ClientOrderID also submits distinctly and deduplicates on retry.
+	res3, err := r.SubmitTargetOrderWithOptions(ctx, "BTC-USD", "BUY", 0.01, 25.0, false, SubmitOrderOptions{ClientOrderID: "custom-reentry-1"})
+	if err != nil {
+		t.Fatalf("explicit ClientOrderID submit failed: %v", err)
+	}
+	if res3.SkippedDuplicate || res3.ClientOrderID != "custom-reentry-1" {
+		t.Fatalf("unexpected explicit ClientOrderID result: %+v", res3)
+	}
+	res3Retry, err := r.SubmitTargetOrderWithOptions(ctx, "BTC-USD", "BUY", 0.01, 25.0, false, SubmitOrderOptions{ClientOrderID: "custom-reentry-1"})
+	if err != nil || !res3Retry.SkippedDuplicate || res3Retry.ClientOrderID != "custom-reentry-1" {
+		t.Fatalf("expected explicit ClientOrderID retry to deduplicate, got res=%+v err=%v", res3Retry, err)
+	}
+
+	if venue.placeCalls != 3 {
+		t.Fatalf("expected 3 PlaceLimitOrder calls (clip-1, clip-2, explicit), got %d", venue.placeCalls)
+	}
+}
+
+type clientLookupMockVenue struct {
+	*mockVenueClient
+	lookupByClient map[string]OrderReceipt
+	lookupErr      error
+	lookupCalls    int
+}
+
+func (m *clientLookupMockVenue) GetOrderByClientOrderID(_ context.Context, _ string, clientOrderID string) (OrderReceipt, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lookupCalls++
+	if m.lookupErr != nil {
+		return OrderReceipt{}, m.lookupErr
+	}
+	rec, ok := m.lookupByClient[clientOrderID]
+	if !ok {
+		return OrderReceipt{}, ErrOrderNotFound
+	}
+	return rec, nil
+}
+
+func TestLiveRouterPendingRecoveryUsesClientOrderLookupAndPropagatesErrors(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv(LiveArmEnvVar, LiveArmEnvValue)
+	journal := filepath.Join(t.TempDir(), "pending_client_lookup.jsonl")
+	fixedNow := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+
+	cfg := DefaultRouterConfig()
+	cfg.DryRun = false
+	cfg.LiveArmToken = LiveArmConfirmToken
+	cfg.JournalPath = journal
+
+	baseVenue := newMockVenue()
+	baseVenue.quotes["BTC-USD"] = Quote{Symbol: "BTC-USD", Bid: 59990, Ask: 60010, Mid: 60000, Timestamp: fixedNow}
+	baseVenue.placeErr = errors.New("timeout after send")
+
+	venue := &clientLookupMockVenue{
+		mockVenueClient: baseVenue,
+		lookupByClient:  make(map[string]OrderReceipt),
+	}
+
+	r1, err := NewLiveRouter(cfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1.now = func() time.Time { return fixedNow }
+	if _, err := r1.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false); err == nil {
+		t.Fatal("expected initial timeout error")
+	}
+
+	// Simulate process crash before PlaceLimitOrder returned (leaving PENDING as latest journal entry).
+	raw, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstLine := strings.SplitN(strings.TrimSpace(string(raw)), "\n", 2)[0] + "\n"
+	if err := os.WriteFile(journal, []byte(firstLine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Transient lookup error must be surfaced (not swallowed as stale PENDING with err==nil).
+	venue.mu.Lock()
+	venue.placeErr = nil
+	venue.lookupErr = errors.New("HTTP 500: upstream unavailable")
+	venue.mu.Unlock()
+
+	r2, err := NewLiveRouter(cfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.now = func() time.Time { return fixedNow.Add(5 * time.Second) }
+	if _, err := r2.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false); err == nil {
+		t.Fatal("expected error when GetOrderByClientOrderID fails with transient 500")
+	}
+	if venue.lookupCalls != 1 {
+		t.Fatalf("expected GetOrderByClientOrderID to be called once, got %d", venue.lookupCalls)
+	}
+
+	// 2. Once GetOrderByClientOrderID succeeds, PENDING reconciles to FILLED with server OrderID.
+	cid := DeterministicClientOrderID(venue.Name(), "2026-11-20", "BTC-USD", "BUY", 0.01)
+	venue.mu.Lock()
+	venue.lookupErr = nil
+	venue.lookupByClient[cid] = OrderReceipt{
+		OrderID:       "srv-ord-777",
+		ClientOrderID: cid,
+		Symbol:        "BTC-USD",
+		Side:          "BUY",
+		Price:         59988,
+		Quantity:      0.01,
+		PostOnly:      true,
+		Status:        "FILLED",
+		FilledQty:     0.01,
+		SubmittedAt:   fixedNow,
+	}
+	venue.mu.Unlock()
+
+	res, err := r2.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false)
+	if err != nil {
+		t.Fatalf("expected reconciled duplicate skip, got err=%v", err)
+	}
+	if !res.SkippedDuplicate || res.Receipt.Status != "FILLED" || res.Receipt.OrderID != "srv-ord-777" {
+		t.Fatalf("expected reconciled FILLED receipt with srv-ord-777, got %+v", res)
+	}
+	if venue.placeCalls != 1 {
+		t.Fatalf("expected no duplicate PlaceLimitOrder call, got %d", venue.placeCalls)
+	}
+}
+
+func TestLiveRouterPlaceLimitOrderErrorMarksRejectedAndUnwedges(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv(LiveArmEnvVar, LiveArmEnvValue)
+	journal := filepath.Join(t.TempDir(), "place_err_rejected.jsonl")
+	fixedNow := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+
+	cfg := DefaultRouterConfig()
+	cfg.DryRun = false
+	cfg.LiveArmToken = LiveArmConfirmToken
+	cfg.JournalPath = journal
+
+	venue := newMockVenue()
+	venue.quotes["BTC-USD"] = Quote{Symbol: "BTC-USD", Bid: 59990, Ask: 60010, Mid: 60000, Timestamp: fixedNow}
+	venue.placeErr = errors.New("400 post-only rejected")
+
+	r, err := NewLiveRouter(cfg, testGuard(), venue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.now = func() time.Time { return fixedNow }
+
+	if _, err := r.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false); err == nil {
+		t.Fatal("expected PlaceLimitOrder error")
+	}
+	if got := r.DailyNotionalUSD(); got != 0 {
+		t.Fatalf("expected DailyNotionalUSD to be 0 after failed PlaceLimitOrder, got %.2f", got)
+	}
+
+	// Retrying with the same clientOrderID in-process must NOT be wedged as SkippedDuplicate.
+	venue.placeErr = nil
+	res, err := r.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false)
+	if err != nil {
+		t.Fatalf("expected retry to succeed, got %v", err)
+	}
+	if res.SkippedDuplicate {
+		t.Fatalf("expected retry after PlaceLimitOrder error not to be SkippedDuplicate, got %+v", res)
+	}
+	if venue.placeCalls != 2 {
+		t.Fatalf("expected 2 PlaceLimitOrder calls (failed + retry), got %d", venue.placeCalls)
+	}
+}
+
+func TestLiveRouterTerminalNonFillStatusesRecomputeNotional(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv(LiveArmEnvVar, LiveArmEnvValue)
+	fixedNow := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+
+	for _, status := range []string{"EXPIRED", "FAILED", "REJECTED"} {
+		t.Run("live_"+status, func(t *testing.T) {
+			cfg := DefaultRouterConfig()
+			cfg.DryRun = false
+			cfg.LiveArmToken = LiveArmConfirmToken
+			cfg.JournalPath = filepath.Join(t.TempDir(), status+".jsonl")
+
+			venue := newMockVenue()
+			venue.quotes["BTC-USD"] = Quote{Symbol: "BTC-USD", Bid: 59990, Ask: 60010, Mid: 60000, Timestamp: fixedNow}
+			venue.placeStatus = status
+
+			r, err := NewLiveRouter(cfg, testGuard(), venue)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.now = func() time.Time { return fixedNow }
+
+			res, err := r.SubmitTargetOrder(ctx, "BTC-USD", "BUY", 0.01, 25.0, false)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.NotionalUSD != 0 {
+				t.Fatalf("expected NotionalUSD=0 for %s with 0 filledQty, got %.2f", status, res.NotionalUSD)
+			}
+			if got := r.DailyNotionalUSD(); got != 0 {
+				t.Fatalf("expected DailyNotionalUSD=0 for %s, got %.2f", status, got)
+			}
+		})
 	}
 }

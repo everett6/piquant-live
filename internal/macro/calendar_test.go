@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -81,6 +83,41 @@ func TestMacroGuardianPhaseTransitions(t *testing.T) {
 	s6 := g.Evaluate(t6)
 	if s6.Phase != PhaseNominal || !s6.AllowQuoting || s6.SpreadMultiplier != 1.0 {
 		t.Errorf("expected PhaseNominal at T+45m, got phase=%s quoting=%v", s6.PhaseName, s6.AllowQuoting)
+	}
+}
+
+func TestMacroGuardianHaltPopulatesNextEventAndLoadCacheModTime(t *testing.T) {
+	tmpDir := t.TempDir()
+	cachePath := filepath.Join(tmpDir, "macro", "calendar_cache.json")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := `[{"title":"CPI m/m","country":"USD","date":"2026-11-10T13:30:00Z","impact":"High"}]`
+	if err := os.WriteFile(cachePath, []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mtime := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(cachePath, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+
+	g := NewMacroGuardian(tmpDir, "http://invalid.local")
+	if !g.lastSync.Equal(mtime) {
+		t.Fatalf("expected lastSync=%s from cache mtime, got %s", mtime, g.lastSync)
+	}
+
+	t1 := time.Date(2026, 11, 10, 13, 30, 0, 0, time.UTC)
+	t2 := time.Date(2026, 11, 10, 18, 0, 0, 0, time.UTC)
+	g.events = []MacroEvent{
+		{Title: "CPI m/m", Country: "USD", DateTime: t1, Impact: ImpactHigh},
+		{Title: "FOMC Rate Decision", Country: "USD", DateTime: t2, Impact: ImpactHigh},
+	}
+	st := g.Evaluate(t1.Add(1 * time.Minute)) // inside PhaseEventHalt
+	if st.Phase != PhaseEventHalt {
+		t.Fatalf("expected PhaseEventHalt, got %s", st.PhaseName)
+	}
+	if st.NextEvent == nil || st.NextEvent.Title != "FOMC Rate Decision" || st.TimeUntilNext <= 0 {
+		t.Fatalf("expected NextEvent populated during PhaseEventHalt, got next=%+v until=%v", st.NextEvent, st.TimeUntilNext)
 	}
 }
 

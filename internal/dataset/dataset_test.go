@@ -3,6 +3,7 @@ package dataset
 import (
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,9 +106,15 @@ func TestValidationRules(t *testing.T) {
 		"unknown type":   {func(r *Record) { r.Type = "x" }, "record type"},
 		"trade price":    {func(r *Record) { r.Type, r.Price, r.Qty, r.Side = TypeTrade, 0, 1, Buy }, "price/qty"},
 		"trade side":     {func(r *Record) { r.Type, r.Price, r.Qty = TypeTrade, 1, 1 }, "side"},
-		"depth side":     {func(r *Record) { r.Type = TypeDepth }, "side"},
-		"depth empty":    {func(r *Record) { r.Type, r.Side = TypeDepth, Buy }, "no levels"},
-		"depth negative": {func(r *Record) { r.Type, r.Side, r.Bids = TypeDepth, Buy, []Level{{Price: 1, Qty: -1}} }, "negative qty"},
+		"depth side":            {func(r *Record) { r.Type = TypeDepth }, "side"},
+		"depth empty":           {func(r *Record) { r.Type, r.Side = TypeDepth, Buy }, "no levels"},
+		"depth negative":        {func(r *Record) { r.Type, r.Side, r.Bids = TypeDepth, Buy, []Level{{Price: 1, Qty: -1}} }, "negative qty"},
+		"depth buy ascending":   {func(r *Record) { r.Type, r.Side, r.Bids = TypeDepth, Buy, []Level{{Price: 99, Qty: 1}, {Price: 100, Qty: 1}} }, "descending"},
+		"depth sell descending": {func(r *Record) { r.Type, r.Side, r.Asks = TypeDepth, Sell, []Level{{Price: 101, Qty: 1}, {Price: 100, Qty: 1}} }, "ascending"},
+		"trade nan price":       {func(r *Record) { r.Type, r.Price, r.Qty, r.Side = TypeTrade, math.NaN(), 1, Buy }, "non-finite"},
+		"trade inf qty":         {func(r *Record) { r.Type, r.Price, r.Qty, r.Side = TypeTrade, 100, math.Inf(1), Buy }, "non-finite"},
+		"depth nan price":       {func(r *Record) { r.Type, r.Side, r.Bids = TypeDepth, Buy, []Level{{Price: math.NaN(), Qty: 1}} }, "non-finite"},
+		"depth inf qty":         {func(r *Record) { r.Type, r.Side, r.Asks = TypeDepth, Sell, []Level{{Price: 100, Qty: math.Inf(1)}} }, "non-finite"},
 		"snapshot empty": {func(r *Record) { r.Type = TypeSnapshot }, "empty side"},
 		"snapshot crossed": {func(r *Record) {
 			r.Type = TypeSnapshot

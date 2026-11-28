@@ -65,3 +65,28 @@ func TestAdaptiveRLSTracking(t *testing.T) {
 		t.Errorf("expected negative prediction after regime shift, got %.2f", pred)
 	}
 }
+
+func TestFitClampsIdxBeyondFeatureCount(t *testing.T) {
+	samples := make([]Sample, 20)
+	for i := range samples {
+		samples[i].Y = float64(i) * 0.1
+		for f := 0; f < FeatureCount; f++ {
+			samples[i].X[f] = float64((i+f)%7) - 3.0
+		}
+	}
+	// len(idx) > FeatureCount must not panic in Ridge, AdaptiveRLS, or ElasticNet.
+	overIdx := make([]int, FeatureCount+4)
+	for i := range overIdx {
+		overIdx[i] = i % FeatureCount
+	}
+
+	if err := NewRidge(1e-3).Fit(samples, overIdx); err != nil {
+		t.Fatalf("Ridge.Fit with len(idx)>FeatureCount failed: %v", err)
+	}
+	if err := NewAdaptiveRLS(0.95).Fit(samples, overIdx); err != nil {
+		t.Fatalf("AdaptiveRLS.Fit with len(idx)>FeatureCount failed: %v", err)
+	}
+	if err := NewElasticNet(1e-3, 0.5).Fit(samples, overIdx); err != nil {
+		t.Fatalf("ElasticNet.Fit with len(idx)>FeatureCount failed: %v", err)
+	}
+}

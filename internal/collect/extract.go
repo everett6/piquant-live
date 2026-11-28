@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -293,16 +294,19 @@ func RunExtractionFile(ctx context.Context, x *Extractor, input, outDir string, 
 }
 
 // extractInto scores pending headlines, recording parse failures with ParseErr so they are not retried forever.
-func extractInto(ctx context.Context, x *Extractor, outDir string, pending []pendingHeadline, limit int, progress func(string)) (int, error) {
+func extractInto(ctx context.Context, x *Extractor, outDir string, pending []pendingHeadline, limit int, progress func(string)) (n int, retErr error) {
 	store, err := newDailyStore(outDir)
 	if err != nil {
 		return 0, err
 	}
-	defer store.Flush()
+	defer func() {
+		if ferr := store.Flush(); ferr != nil {
+			retErr = errors.Join(retErr, ferr)
+		}
+	}()
 	if limit > 0 && len(pending) > limit {
 		pending = pending[:limit]
 	}
-	n := 0
 	for i, h := range pending {
 		if ctx.Err() != nil {
 			return n, ctx.Err()

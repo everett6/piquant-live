@@ -179,10 +179,11 @@ func runDoctor(ctx context.Context, args []string) error {
 	fmt.Printf("  [ok  ] %-26s %s\n", "secrets store", store.Path())
 	line(store.Has(secrets.DashboardToken), "dashboard token",
 		pick(!store.Has(secrets.DashboardToken), "missing: run `piquant setup`", "present"))
-	line(store.Has(secrets.PeerToken), "peer token",
-		pick(!store.Has(secrets.PeerToken), "missing: peers cannot authenticate", "present"))
-	if !store.Has(secrets.PeerToken) {
+	if store.Has(secrets.PeerToken) {
+		fmt.Printf("  [ok  ] %-26s %s\n", "peer token", "present")
+	} else {
 		warnings++
+		fmt.Printf("  [warn] %-26s %s\n", "peer token", "missing: peers cannot authenticate")
 	}
 
 	fmt.Printf("\n  Network\n")

@@ -24,8 +24,8 @@ func TestWriteKeepsThePreviousGoodCopy(t *testing.T) {
 	if !strings.Contains(string(cur), "2") || !strings.Contains(string(bak), "1") {
 		t.Fatalf("cur %s bak %s", cur, bak)
 	}
-	if _, err := os.Stat(p + ".tmp"); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("tmp file left behind")
+	if m, _ := filepath.Glob(p + ".tmp*"); len(m) != 0 {
+		t.Fatalf("tmp file left behind: %v", m)
 	}
 }
 
@@ -75,5 +75,31 @@ func TestReadReportsMissingAndUnusable(t *testing.T) {
 	_ = os.WriteFile(p, []byte("not json"), 0o644)
 	if _, _, err := ReadJSON(p); err == nil || errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("want an unusable-file error, got %v", err)
+	}
+}
+
+func TestWriteFileNonJSONPreservesBackup(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "raw.bin")
+	first := []byte("not-json-first-payload\x00\x01")
+	second := []byte("not-json-second-payload\x02\x03")
+	if err := WriteFile(p, first, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFile(p, second, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cur, err := os.ReadFile(p)
+	if err != nil || string(cur) != string(second) {
+		t.Fatalf("cur=%q err=%v", cur, err)
+	}
+	bak, err := os.ReadFile(BackupPath(p))
+	if err != nil || string(bak) != string(first) {
+		t.Fatalf("expected non-JSON backup preserved, bak=%q err=%v", bak, err)
+	}
+	if m, _ := filepath.Glob(p + ".corrupt-*"); len(m) != 0 {
+		t.Fatalf("non-JSON WriteFile must not treat valid raw file as corrupt: %v", m)
+	}
+	if m, _ := filepath.Glob(p + ".tmp*"); len(m) != 0 {
+		t.Fatalf("tmp file left behind: %v", m)
 	}
 }

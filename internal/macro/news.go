@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -163,7 +164,15 @@ func (p *NewsPipeline) Ingest(item NewsItem) {
 		p.items = p.items[:500]
 	}
 
-	_ = p.saveCacheLocked()
+	// Save cache without holding the lock during I/O
+	itemsCopy := make([]NewsItem, len(p.items))
+	copy(itemsCopy, p.items)
+	cacheFile := p.cacheFile
+	p.mu.Unlock()
+	if err := p.saveCacheUnlocked(itemsCopy, cacheFile); err != nil {
+		log.Printf("macro/news: save cache %s: %v", cacheFile, err)
+	}
+	p.mu.Lock()
 }
 
 // IngestRawHeadline ingests an unclassified raw headline, automatically applying the high-speed NLP classifier.
@@ -682,14 +691,16 @@ func (p *NewsPipeline) fetchAndIngestFeed(ctx context.Context, targetURL string)
 		if err := json.Unmarshal(body, &rawItems); err != nil {
 			return 0, fmt.Errorf("%s: %w", targetURL, err)
 		}
+		ingested := 0
 		for _, raw := range rawItems {
 			t, err := time.Parse(time.RFC3339, raw.Timestamp)
 			if err != nil {
-				t = time.Now().UTC()
+				continue
 			}
 			p.IngestRawHeadline(raw.Title, raw.Summary, raw.Source, raw.URL, t)
+			ingested++
 		}
-		return len(rawItems), nil
+		return ingested, nil
 	}
 
 	// RSS/XML feed
@@ -704,16 +715,24 @@ func (p *NewsPipeline) fetchAndIngestFeed(ctx context.Context, targetURL string)
 	if sourceName == "" {
 		sourceName = req.URL.Hostname()
 	}
+	ingested := 0
 	for _, it := range doc.Channel.Items {
-		cleanSummary := stripHTMLTags(it.Description)
 		pubT := parsePubDate(it.PubDate)
+		if pubT.IsZero() {
+			continue
+		}
+		cleanSummary := stripHTMLTags(it.Description)
 		p.IngestRawHeadline(it.Title, cleanSummary, sourceName, it.Link, pubT)
+		ingested++
 	}
-	return len(doc.Channel.Items), nil
+	return ingested, nil
 }
 
 func parsePubDate(s string) time.Time {
 	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}
+	}
 	formats := []string{
 		time.RFC1123Z,
 		time.RFC1123,
@@ -727,7 +746,7 @@ func parsePubDate(s string) time.Time {
 			return t
 		}
 	}
-	return time.Now().UTC()
+	return time.Time{}
 }
 
 func stripHTMLTags(s string) string {
@@ -753,6 +772,36 @@ func stripHTMLTags(s string) string {
 	return strings.TrimSpace(clean)
 }
 
+func writeCacheAtomic(cacheFile string, data []byte) error {
+	dir := filepath.Dir(cacheFile)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, filepath.Base(cacheFile)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, cacheFile); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
+}
+
 func (p *NewsPipeline) saveCacheLocked() error {
 	if p.cacheFile == "" {
 		return nil
@@ -761,13 +810,18 @@ func (p *NewsPipeline) saveCacheLocked() error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(p.cacheFile)
-	_ = os.MkdirAll(dir, 0o755)
-	tmpPath := p.cacheFile + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+	return writeCacheAtomic(p.cacheFile, data)
+}
+
+func (p *NewsPipeline) saveCacheUnlocked(items []NewsItem, cacheFile string) error {
+	if cacheFile == "" {
+		return nil
+	}
+	data, err := json.MarshalIndent(items, "", "  ")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, p.cacheFile)
+	return writeCacheAtomic(cacheFile, data)
 }
 
 func (p *NewsPipeline) loadCache() error {
@@ -782,10 +836,14 @@ func (p *NewsPipeline) loadCache() error {
 	if err := json.Unmarshal(data, &cached); err != nil {
 		return err
 	}
+	var lastSync time.Time
+	if info, statErr := os.Stat(p.cacheFile); statErr == nil {
+		lastSync = info.ModTime().UTC()
+	}
 	p.mu.Lock()
 	p.ver.Add(1)
 	p.items = cached
-	p.lastSync = time.Now().UTC()
+	p.lastSync = lastSync
 	p.mu.Unlock()
 	return nil
 }

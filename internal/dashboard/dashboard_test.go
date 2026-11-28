@@ -1046,4 +1046,136 @@ func TestPaperMFTEndpoints(t *testing.T) {
 	}
 }
 
+func TestUIModeAndLogsContract(t *testing.T) {
+	if strings.Contains(indexHTML, `data.lines.join("\n")`) {
+		t.Fatal("loadLogs still joins raw LogLine objects instead of extracting .text")
+	}
+	if !strings.Contains(indexHTML, "l && l.text != null ? l.text") {
+		t.Fatal("loadLogs does not map LogLine.text before joining")
+	}
+	if strings.Contains(indexHTML, `"standard"`) {
+		t.Fatal(`UI still references invalid "standard" mode value instead of "simple"`)
+	}
+	if !strings.Contains(indexHTML, `(state.mode === "advanced") ? "simple" : "advanced"`) {
+		t.Fatal(`#btnToggleMode does not toggle between "simple" and "advanced"`)
+	}
+
+	s := newTestServer(t, nil)
+	if got := s.Mode(); got != "simple" {
+		t.Fatalf("initial Mode() = %q, want simple", got)
+	}
+	h := s.Handler()
+
+	for _, tc := range []struct {
+		body string
+		want string
+	}{
+		{body: `{"mode":"advanced"}`, want: "advanced"},
+		{body: `{"mode":"simple"}`, want: "simple"},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/mode", strings.NewReader(tc.body))
+		req.RemoteAddr = "192.168.1.55:4444"
+		req.Header.Set("Authorization", "Bearer "+peerToken)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST /api/mode %s = %d: %s", tc.want, rec.Code, rec.Body.String())
+		}
+		if got := s.Mode(); got != tc.want {
+			t.Fatalf("Mode() after %s = %q, want %q", tc.want, got, tc.want)
+		}
+	}
+}
+
+func TestProxyToEngineClientTimeoutAndContext(t *testing.T) {
+	s := newTestServer(t, nil)
+	if s.proxyClient == nil {
+		t.Fatal("proxyClient is nil")
+	}
+	if s.proxyClient.Timeout != 0 {
+		t.Fatalf("proxyClient.Timeout = %v, want 0 (no 10s cap)", s.proxyClient.Timeout)
+	}
+	if s.httpClient == nil || s.httpClient.Timeout != 10*time.Second {
+		t.Fatalf("httpClient.Timeout = %v, want 10s", s.httpClient)
+	}
+
+	peerSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/slow" {
+			select {
+			case <-time.After(150 * time.Millisecond):
+				writeJSON(w, http.StatusOK, map[string]any{"proxied": true})
+			case <-r.Context().Done():
+				return
+			}
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}))
+	defer peerSrv.Close()
+
+	u, _ := url.Parse(peerSrv.URL)
+	host, portStr, _ := net.SplitHostPort(u.Host)
+	var port int
+	for _, c := range portStr {
+		port = port*10 + int(c-'0')
+	}
+
+	br := &discovery.Browser{TTL: time.Minute}
+	send, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer send.Close()
+	recv, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	br.Conn = recv
+	br.Token = peerToken
+	if err := br.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	defer br.Close()
+
+	payload, err := discovery.Encode(discovery.Beacon{
+		V: discovery.Version, Role: discovery.RoleEngine, ID: "peer-proxy", Name: "piquant-rpi5",
+		Port: port, Addr: host,
+	}, peerToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := send.WriteToUDP(payload, recv.LocalAddr().(*net.UDPAddr)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		if _, ok := br.Best(discovery.RoleEngine); ok {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	proxySrv := newTestServer(t, func(o *Options) { o.Discover = br })
+	// Set a tight httpClient.Timeout to prove proxyToEngine uses proxyClient, not httpClient.
+	proxySrv.httpClient.Timeout = 20 * time.Millisecond
+
+	req := httptest.NewRequest(http.MethodPost, "/api/slow", nil)
+	rec := httptest.NewRecorder()
+	if !proxySrv.proxyToEngine(rec, req) {
+		t.Fatal("proxyToEngine returned false; expected it to succeed using proxyClient without httpClient's timeout")
+	}
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"proxied":true`) {
+		t.Fatalf("unexpected proxy response: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify proxyToEngine respects r.Context() cancellation.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	reqCanceled := httptest.NewRequest(http.MethodPost, "/api/slow", nil).WithContext(ctx)
+	recCanceled := httptest.NewRecorder()
+	if proxySrv.proxyToEngine(recCanceled, reqCanceled) {
+		t.Fatal("proxyToEngine returned true on canceled request context")
+	}
+}
+
 

@@ -119,6 +119,9 @@ func fetchCoinbaseCandlesGran(ctx context.Context, client *http.Client, product 
 			return rows, nil
 		}
 		lastErr = fmt.Errorf("HTTP %d: %v", code, err)
+		if attempt == 4 {
+			break
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -148,6 +151,9 @@ var GDELTRetryBase = 15 * time.Second
 // GDELTSpacing is the minimum delay between GDELT requests (their limit is 1 per 5s).
 var GDELTSpacing = 6 * time.Second
 
+// GDELTMaxConsecFailures aborts BackfillGDELT after this many consecutive failed windows.
+var GDELTMaxConsecFailures = 5
+
 // BackfillGDELT fetches English headlines matching query in fixed windows over
 // [from, to), resuming from <dir>/gdelt/<label>/progress.json.
 func BackfillGDELT(ctx context.Context, client *http.Client, dir, label, query string, from, to time.Time, window time.Duration, progress func(string)) error {
@@ -160,7 +166,10 @@ func BackfillGDELT(ctx context.Context, client *http.Client, dir, label, query s
 	if b, err := os.ReadFile(progPath); err == nil {
 		_ = json.Unmarshal(b, &done)
 	}
-	store, _ := newDailyStore(out)
+	store, err := newDailyStore(out)
+	if err != nil {
+		return err
+	}
 	var windows []time.Time
 	for w := to.Add(-window).UTC().Truncate(window); !w.Before(from); w = w.Add(-window) {
 		if !done[w.Format(time.RFC3339)] {
@@ -168,16 +177,22 @@ func BackfillGDELT(ctx context.Context, client *http.Client, dir, label, query s
 		}
 	}
 	total := 0
+	consecFail := 0
 	for i, w := range windows {
 		rows, err := fetchGDELTWindow(ctx, client, query, w, w.Add(window))
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			consecFail++
 			if progress != nil {
 				progress(fmt.Sprintf("window %s failed, will retry next run: %v", w.Format(time.RFC3339), err))
 			}
+			if GDELTMaxConsecFailures > 0 && consecFail >= GDELTMaxConsecFailures {
+				return fmt.Errorf("GDELT backfill aborted after %d consecutive failed windows: %w", consecFail, err)
+			}
 		} else {
+			consecFail = 0
 			for _, r := range rows {
 				r.Query = label
 				_ = store.Add(r.SeenAt, r)
@@ -252,6 +267,9 @@ func fetchGDELTWindow(ctx context.Context, client *http.Client, query string, st
 			return nil, nil // no articles in window
 		}
 		// Throttle notice (plain text) or HTTP error: back off and retry
+		if attempt == 3 {
+			break
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()

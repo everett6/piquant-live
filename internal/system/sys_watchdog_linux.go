@@ -16,8 +16,8 @@ var (
 
 // watchdogState is the live device plus the loop-liveness gate.
 type watchdogState struct {
-	f io.WriteCloser
-
+	f        io.WriteCloser
+	done     chan struct{}
 	stop     atomic.Bool
 	loopOn   atomic.Bool
 	lastBeat atomic.Int64 // UnixNano of the last application beat; 0 = never
@@ -27,13 +27,16 @@ type watchdogState struct {
 	misses   atomic.Int64
 }
 
-// feed writes one keepalive when the application loop is alive, and marks the
-// watchdog stale when it is not.
+// feedLocked writes one keepalive when the application loop is alive, and marks the
+// watchdog stale when it is not. The caller must hold wdMu.
 //
 // This is the whole point of the gate: a process whose inference thread has
 // wedged but whose timer goroutine still runs would otherwise keep the board
 // alive forever. Only a beat from the loop under test refreshes the deadline.
-func (w *watchdogState) feed(now time.Time) error {
+func (w *watchdogState) feedLocked(now time.Time) error {
+	if w.f == nil {
+		return ErrUnsupported
+	}
 	last := w.lastBeat.Load()
 	if last != 0 && now.Sub(time.Unix(0, last)) <= w.maxStale {
 		w.stale.Store(false)
@@ -108,37 +111,49 @@ func (Watchdog) Kick() error {
 	if wd == nil || wd.stop.Load() {
 		return ErrUnsupported
 	}
-	return wd.feed(time.Now())
+	return wd.feedLocked(time.Now())
 }
 
 // Run starts the feeder. It feeds every interval while the last Beat is at most
 // maxStale old, and stops feeding once it is not. maxStale <= 0 uses
 // 3*interval.
 func (Watchdog) Run(interval, maxStale time.Duration) {
-	wdMu.Lock()
-	w := wd
-	wdMu.Unlock()
-	if w == nil {
-		return
-	}
 	if interval <= 0 {
 		interval = 500 * time.Millisecond
 	}
 	if maxStale <= 0 {
 		maxStale = 3 * interval
 	}
-	w.maxStale = maxStale
-	if !w.loopOn.CompareAndSwap(false, true) {
+	wdMu.Lock()
+	w := wd
+	if w == nil || w.stop.Load() {
+		wdMu.Unlock()
 		return
 	}
+	w.maxStale = maxStale
+	if !w.loopOn.CompareAndSwap(false, true) {
+		wdMu.Unlock()
+		return
+	}
+	done := make(chan struct{})
+	w.done = done
+	wdMu.Unlock()
+
 	go func() {
+		defer close(done)
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for range t.C {
 			if w.stop.Load() {
 				return
 			}
-			_ = w.feed(time.Now())
+			wdMu.Lock()
+			if w.stop.Load() || w.f == nil {
+				wdMu.Unlock()
+				return
+			}
+			_ = w.feedLocked(time.Now())
+			wdMu.Unlock()
 		}
 	}()
 }
@@ -172,18 +187,32 @@ func (Watchdog) Stop(disarm bool) error {
 	wdMu.Lock()
 	w := wd
 	wd = nil
+	var done chan struct{}
+	if w != nil {
+		w.stop.Store(true)
+		done = w.done
+	}
 	wdMu.Unlock()
 	if w == nil {
 		return ErrUnsupported
 	}
-	w.stop.Store(true)
+	if done != nil {
+		<-done
+	}
+	wdMu.Lock()
+	f := w.f
+	w.f = nil
+	wdMu.Unlock()
+	if f == nil {
+		return nil
+	}
 	if disarm {
-		_, err := w.f.Write([]byte{'V'})
-		cerr := w.f.Close()
+		_, err := f.Write([]byte{'V'})
+		cerr := f.Close()
 		if err != nil {
 			return err
 		}
 		return cerr
 	}
-	return w.f.Close()
+	return f.Close()
 }

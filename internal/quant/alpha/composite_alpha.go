@@ -47,7 +47,7 @@ func NewAlphaEngine(leader, follower string) *AlphaEngine {
 
 // Evaluate produces a composite alpha forecast from multi-horizon trends, stat-arb mean-reversion, and microstructure.
 func (ae *AlphaEngine) Evaluate(symbol string, midPrice, bestBid, bidSize, bestAsk, askSize float64, peerPrice float64, now time.Time) AlphaSignal {
-	if midPrice <= 0 {
+	if math.IsNaN(midPrice) || math.IsInf(midPrice, 0) || midPrice <= 0 {
 		return AlphaSignal{Symbol: symbol, Timestamp: now, Conviction: 0.50, RecommendedAction: "HOLD"}
 	}
 
@@ -102,7 +102,9 @@ func (ae *AlphaEngine) Evaluate(symbol string, midPrice, bestBid, bidSize, bestA
 	microEdge := 0.60*l1Delta + 0.40*ratio
 
 	compositeScore := 0.50*mom.TrendScore + 0.30*statArbEdge + 0.20*microEdge
-	if compositeScore > 1.0 {
+	if math.IsNaN(compositeScore) || math.IsInf(compositeScore, 0) {
+		compositeScore = 0
+	} else if compositeScore > 1.0 {
 		compositeScore = 1.0
 	} else if compositeScore < -1.0 {
 		compositeScore = -1.0
@@ -110,9 +112,15 @@ func (ae *AlphaEngine) Evaluate(symbol string, midPrice, bestBid, bidSize, bestA
 
 	// Logistic sigmoid conviction: P(Up) in [0.0, 1.0]
 	conviction := 1.0 / (1.0 + math.Exp(-2.2*compositeScore))
+	if math.IsNaN(conviction) || math.IsInf(conviction, 0) {
+		conviction = 0.50
+	}
 
 	// Expected edge in basis points
 	expectedEdgeBps := compositeScore * math.Max(15.0, mom.Atr15mBps*0.50)
+	if math.IsNaN(expectedEdgeBps) || math.IsInf(expectedEdgeBps, 0) {
+		expectedEdgeBps = 0
+	}
 
 	action := "HOLD"
 	if conviction >= 0.65 {

@@ -44,6 +44,8 @@ var (
 	ErrReconcileMismatch = errors.New("execution: venue balance reconciliation mismatch")
 	// ErrHighLatency indicates venue ping latency exceeds the configured threshold or all probes failed.
 	ErrHighLatency = errors.New("execution: venue ping latency exceeds threshold")
+	// ErrOrderNotFound indicates the venue reported no matching order for the requested ID.
+	ErrOrderNotFound = errors.New("execution: order not found")
 )
 
 // Quote holds top-of-book inside bid/ask/mid prices and quote timestamp from a trading venue.
@@ -88,6 +90,21 @@ type VenueClient interface {
 	PlaceLimitOrder(ctx context.Context, req LimitOrderRequest) (OrderReceipt, error)
 	CancelOrder(ctx context.Context, orderID string) error
 	GetOrder(ctx context.Context, orderID string) (OrderReceipt, error)
+}
+
+// ClientOrderLookup is an optional VenueClient capability for looking up an order
+// by its client_order_id (used during crash recovery when server OrderID is unknown).
+type ClientOrderLookup interface {
+	GetOrderByClientOrderID(ctx context.Context, symbol, clientOrderID string) (OrderReceipt, error)
+}
+
+// SubmitOrderOptions configures optional per-order identity overrides for SubmitTargetOrderWithOptions.
+type SubmitOrderOptions struct {
+	// ClientOrderID explicitly sets the client order ID used for venue submission and idempotency.
+	ClientOrderID string
+	// IntentKey disambiguates distinct same-day, same-size orders (e.g. "clip-2" or "reentry-1")
+	// while preserving deterministic idempotency when retried with the same IntentKey.
+	IntentKey string
 }
 
 // RouterConfig configures LiveRouter execution safety limits, idempotency, and guardrails.
@@ -229,20 +246,47 @@ func NewLiveRouter(cfg RouterConfig, guard *guardrails.PreTradeGuard, venue Venu
 }
 
 // DeterministicClientOrderID produces a stable 24-character hex SHA-256 prefix for idempotent retries.
-func DeterministicClientOrderID(venue, dayBucket, symbol, side string, qty, price float64) string {
+// It hashes only the order intent (venue, dayBucket, symbol, side, qty) so retries or requotes
+// with an updated live quote price preserve the same ClientOrderID.
+func DeterministicClientOrderID(venue, dayBucket, symbol, side string, qty float64) string {
 	normZero := func(v float64) float64 {
 		if v == 0 {
 			return 0
 		}
 		return v
 	}
-	payload := fmt.Sprintf("%s|%s|%s|%s|%.8f|%.8f",
+	payload := fmt.Sprintf("%s|%s|%s|%s|%.8f",
 		strings.ToLower(strings.TrimSpace(venue)),
 		strings.TrimSpace(dayBucket),
 		strings.ToUpper(strings.TrimSpace(symbol)),
 		strings.ToUpper(strings.TrimSpace(side)),
 		normZero(qty),
-		normZero(price),
+	)
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])[:24]
+}
+
+// DeterministicClientOrderIDWithKey produces a stable 24-character hex SHA-256 prefix
+// scoped by an optional intentKey (e.g. clip index or re-entry sequence).
+// When intentKey is empty, it returns the same ID as DeterministicClientOrderID.
+func DeterministicClientOrderIDWithKey(venue, dayBucket, symbol, side string, qty float64, intentKey string) string {
+	key := strings.TrimSpace(intentKey)
+	if key == "" {
+		return DeterministicClientOrderID(venue, dayBucket, symbol, side, qty)
+	}
+	normZero := func(v float64) float64 {
+		if v == 0 {
+			return 0
+		}
+		return v
+	}
+	payload := fmt.Sprintf("%s|%s|%s|%s|%.8f|%s",
+		strings.ToLower(strings.TrimSpace(venue)),
+		strings.TrimSpace(dayBucket),
+		strings.ToUpper(strings.TrimSpace(symbol)),
+		strings.ToUpper(strings.TrimSpace(side)),
+		normZero(qty),
+		key,
 	)
 	sum := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(sum[:])[:24]
@@ -293,6 +337,8 @@ func (r *LiveRouter) DailyNotionalUSD() float64 {
 // Any discrepancy above ReconcileTolerance locks trading, trips the kill switch, fires OnAlert,
 // and returns the ReconcileReport along with ErrReconcileMismatch.
 func (r *LiveRouter) Reconcile(ctx context.Context, expectedQty map[string]float64) (ReconcileReport, error) {
+	r.submitMu.Lock()
+	defer r.submitMu.Unlock()
 	now := r.clock().UTC()
 	report := ReconcileReport{
 		Venue:     r.venue.Name(),
@@ -348,6 +394,9 @@ func (r *LiveRouter) Reconcile(ctx context.Context, expectedQty map[string]float
 		reason := fmt.Sprintf("balance reconciliation mismatch on %s: %s", r.venue.Name(), details)
 		r.guard.LockTrading(true)
 		r.guard.TripKillSwitch(reason)
+		if r.cfg.KillLockStatePath != "" {
+			_ = paper.WriteKillLock(r.cfg.KillLockStatePath, reason, now)
+		}
 		if r.cfg.OnAlert != nil {
 			r.cfg.OnAlert(
 				"reconcile",
@@ -371,6 +420,19 @@ func (r *LiveRouter) SubmitTargetOrder(
 	qty float64,
 	expectedEdgeBps float64,
 	isReduceOnly bool,
+) (ExecutionResult, error) {
+	return r.SubmitTargetOrderWithOptions(ctx, symbol, side, qty, expectedEdgeBps, isReduceOnly, SubmitOrderOptions{})
+}
+
+// SubmitTargetOrderWithOptions behaves like SubmitTargetOrder while allowing an explicit
+// ClientOrderID or IntentKey to disambiguate same-day, same-size distinct orders.
+func (r *LiveRouter) SubmitTargetOrderWithOptions(
+	ctx context.Context,
+	symbol, side string,
+	qty float64,
+	expectedEdgeBps float64,
+	isReduceOnly bool,
+	opts SubmitOrderOptions,
 ) (ExecutionResult, error) {
 	r.submitMu.Lock()
 	defer r.submitMu.Unlock()
@@ -431,9 +493,12 @@ func (r *LiveRouter) SubmitTargetOrder(
 		return ExecutionResult{}, guardrails.ErrInvalidOrderParams
 	}
 
-	// 4. Deterministic client order ID + idempotency check (after quote/price so price matches).
+	// 4. Deterministic client order ID + idempotency check (intent-based, independent of live quote price).
 	dayBucket := now.Format("2006-01-02")
-	clientOrderID := DeterministicClientOrderID(r.venue.Name(), dayBucket, sym, sideUpper, qty, price)
+	clientOrderID := strings.TrimSpace(opts.ClientOrderID)
+	if clientOrderID == "" {
+		clientOrderID = DeterministicClientOrderIDWithKey(r.venue.Name(), dayBucket, sym, sideUpper, qty, opts.IntentKey)
+	}
 
 	r.mu.Lock()
 	if r.dailyBucket != dayBucket {
@@ -442,6 +507,56 @@ func (r *LiveRouter) SubmitTargetOrder(
 	}
 	if prev, exists := r.seenOrders[journalKey{id: clientOrderID, dryRun: r.cfg.DryRun}]; exists {
 		r.mu.Unlock()
+		if !r.cfg.DryRun && strings.EqualFold(prev.Receipt.Status, "PENDING") {
+			var (
+				latest OrderReceipt
+				gerr   error
+			)
+			if prev.Receipt.OrderID != "" {
+				latest, gerr = r.venue.GetOrder(ctx, prev.Receipt.OrderID)
+			} else if lookup, ok := r.venue.(ClientOrderLookup); ok {
+				latest, gerr = lookup.GetOrderByClientOrderID(ctx, sym, clientOrderID)
+			} else {
+				latest, gerr = r.venue.GetOrder(ctx, clientOrderID)
+			}
+			if gerr != nil {
+				if !isOrderNotFoundError(gerr) {
+					return ExecutionResult{
+						ClientOrderID:    clientOrderID,
+						Receipt:          prev.Receipt,
+						DryRun:           false,
+						SkippedDuplicate: true,
+						CancelledOnTTL:   prev.CancelledOnTTL,
+						NotionalUSD:      prev.NotionalUSD,
+					}, fmt.Errorf("execution: reconcile pending order %s: %w", clientOrderID, gerr)
+				}
+			} else {
+				merged := mergeOrderReceipt(prev.Receipt, latest)
+				statusChanged := !strings.EqualFold(merged.Status, "PENDING") && strings.TrimSpace(merged.Status) != ""
+				if statusChanged || (prev.Receipt.OrderID == "" && merged.OrderID != "") {
+					updated := prev
+					updated.Receipt = merged
+					if strings.EqualFold(merged.Status, "CANCELLED") {
+						updated.CancelledOnTTL = true
+						updated.NotionalUSD = merged.FilledQty * prev.Price
+					} else if isTerminalNonFillStatus(merged.Status) {
+						updated.NotionalUSD = merged.FilledQty * prev.Price
+					}
+					_ = r.recordEntry(updated)
+					if statusChanged {
+						return ExecutionResult{
+							ClientOrderID:    clientOrderID,
+							Receipt:          merged,
+							DryRun:           false,
+							SkippedDuplicate: true,
+							CancelledOnTTL:   updated.CancelledOnTTL,
+							NotionalUSD:      updated.NotionalUSD,
+						}, nil
+					}
+					prev = updated
+				}
+			}
+		}
 		return ExecutionResult{
 			ClientOrderID:    clientOrderID,
 			Receipt:          prev.Receipt,
@@ -462,7 +577,7 @@ func (r *LiveRouter) SubmitTargetOrder(
 	if r.cfg.MinOrderUSD > 0 && notionalUSD < r.cfg.MinOrderUSD {
 		return ExecutionResult{}, fmt.Errorf("%w: notional $%.2f < min $%.2f", ErrBelowMinOrderUSD, notionalUSD, r.cfg.MinOrderUSD)
 	}
-	if r.cfg.MaxDailyNotionalUSD > 0 && currentDaily+notionalUSD > r.cfg.MaxDailyNotionalUSD {
+	if !isReduceOnly && r.cfg.MaxDailyNotionalUSD > 0 && currentDaily+notionalUSD > r.cfg.MaxDailyNotionalUSD {
 		return ExecutionResult{}, fmt.Errorf("%w: projected daily notional $%.2f > cap $%.2f", ErrDailyTurnoverCap, currentDaily+notionalUSD, r.cfg.MaxDailyNotionalUSD)
 	}
 
@@ -521,14 +636,36 @@ func (r *LiveRouter) SubmitTargetOrder(
 		}, nil
 	}
 
-	// 8. Live path: defense-in-depth arm check, prepare journal dir, submit post-only limit order.
+	// 8. Live path: defense-in-depth arm check, persist PENDING journal entry before PlaceLimitOrder,
+	// then submit post-only limit order so crashes/timeouts cannot cause duplicate orders on retry.
 	if !r.isLiveArmed() {
 		return ExecutionResult{}, ErrLiveNotArmed
 	}
-	if r.cfg.JournalPath != "" {
-		if err := os.MkdirAll(filepath.Dir(r.cfg.JournalPath), 0o755); err != nil {
-			return ExecutionResult{}, fmt.Errorf("execution: prepare journal dir: %w", err)
-		}
+	pendingEntry := JournalEntry{
+		Timestamp:     now,
+		Venue:         r.venue.Name(),
+		ClientOrderID: clientOrderID,
+		DayBucket:     dayBucket,
+		Symbol:        sym,
+		Side:          sideUpper,
+		Price:         price,
+		Quantity:      qty,
+		NotionalUSD:   notionalUSD,
+		DryRun:        false,
+		Receipt: OrderReceipt{
+			ClientOrderID: clientOrderID,
+			Symbol:        sym,
+			Side:          sideUpper,
+			Price:         price,
+			Quantity:      qty,
+			PostOnly:      true,
+			Status:        "PENDING",
+			DryRun:        false,
+			SubmittedAt:   now,
+		},
+	}
+	if err := r.recordEntry(pendingEntry); err != nil {
+		return ExecutionResult{}, err
 	}
 	receipt, err := r.venue.PlaceLimitOrder(ctx, LimitOrderRequest{
 		ClientOrderID: clientOrderID,
@@ -539,6 +676,19 @@ func (r *LiveRouter) SubmitTargetOrder(
 		PostOnly:      true,
 	})
 	if err != nil {
+		rejectedEntry := pendingEntry
+		rejectedEntry.NotionalUSD = 0
+		rejectedEntry.Receipt.Status = "REJECTED"
+		_ = r.recordEntry(rejectedEntry)
+		r.mu.Lock()
+		key := journalKey{id: clientOrderID, dryRun: false}
+		if prev, exists := r.seenOrders[key]; exists {
+			if prev.DayBucket == r.dailyBucket && !math.IsNaN(prev.NotionalUSD) && !math.IsInf(prev.NotionalUSD, 0) {
+				r.dailyNotional -= prev.NotionalUSD
+			}
+			delete(r.seenOrders, key)
+		}
+		r.mu.Unlock()
 		return ExecutionResult{}, err
 	}
 	if receipt.ClientOrderID == "" {
@@ -553,6 +703,10 @@ func (r *LiveRouter) SubmitTargetOrder(
 		var ttlErr error
 		receipt, cancelledOnTTL, ttlErr = r.waitForFillOrCancelTTL(ctx, receipt, qty)
 		if ttlErr != nil {
+			ttlNotional := notionalUSD
+			if cancelledOnTTL || strings.EqualFold(receipt.Status, "CANCELLED") || isTerminalNonFillStatus(receipt.Status) {
+				ttlNotional = receipt.FilledQty * price
+			}
 			_ = r.recordEntry(JournalEntry{
 				Timestamp:      now,
 				Venue:          r.venue.Name(),
@@ -562,7 +716,7 @@ func (r *LiveRouter) SubmitTargetOrder(
 				Side:           sideUpper,
 				Price:          price,
 				Quantity:       qty,
-				NotionalUSD:    notionalUSD,
+				NotionalUSD:    ttlNotional,
 				DryRun:         false,
 				CancelledOnTTL: cancelledOnTTL,
 				Receipt:        receipt,
@@ -572,9 +726,13 @@ func (r *LiveRouter) SubmitTargetOrder(
 				Receipt:        receipt,
 				DryRun:         false,
 				CancelledOnTTL: cancelledOnTTL,
-				NotionalUSD:    notionalUSD,
+				NotionalUSD:    ttlNotional,
 			}, ttlErr
 		}
+	}
+	recordedNotional := notionalUSD
+	if cancelledOnTTL || strings.EqualFold(receipt.Status, "CANCELLED") || isTerminalNonFillStatus(receipt.Status) {
+		recordedNotional = receipt.FilledQty * price
 	}
 	entry := JournalEntry{
 		Timestamp:      now,
@@ -585,7 +743,7 @@ func (r *LiveRouter) SubmitTargetOrder(
 		Side:           sideUpper,
 		Price:          price,
 		Quantity:       qty,
-		NotionalUSD:    notionalUSD,
+		NotionalUSD:    recordedNotional,
 		DryRun:         false,
 		CancelledOnTTL: cancelledOnTTL,
 		Receipt:        receipt,
@@ -598,8 +756,17 @@ func (r *LiveRouter) SubmitTargetOrder(
 		Receipt:        receipt,
 		DryRun:         false,
 		CancelledOnTTL: cancelledOnTTL,
-		NotionalUSD:    notionalUSD,
+		NotionalUSD:    recordedNotional,
 	}, nil
+}
+
+func isTerminalNonFillStatus(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "CANCELED", "EXPIRED", "FAILED", "REJECTED":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *LiveRouter) waitForFillOrCancelTTL(ctx context.Context, receipt OrderReceipt, targetQty float64) (OrderReceipt, bool, error) {
@@ -612,16 +779,30 @@ func (r *LiveRouter) waitForFillOrCancelTTL(ctx context.Context, receipt OrderRe
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
+	cancelAndRefresh := func() OrderReceipt {
+		cancelCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if cerr := r.CancelOrder(cancelCtx, receipt.OrderID); cerr == nil {
+			if receipt.Status == "" || strings.EqualFold(receipt.Status, "OPEN") || strings.EqualFold(receipt.Status, "NEW") {
+				receipt.Status = "CANCELLED"
+			}
+		}
+		if latest, gerr := r.venue.GetOrder(cancelCtx, receipt.OrderID); gerr == nil {
+			receipt = mergeOrderReceipt(receipt, latest)
+		}
+		return receipt
+	}
+
 	for {
 		if ctx.Err() != nil {
-			return receipt, false, ctx.Err()
+			return cancelAndRefresh(), false, ctx.Err()
 		}
 		select {
 		case <-ctx.Done():
-			return receipt, false, ctx.Err()
+			return cancelAndRefresh(), false, ctx.Err()
 		case <-timer.C:
 			if ctx.Err() != nil {
-				return receipt, false, ctx.Err()
+				return cancelAndRefresh(), false, ctx.Err()
 			}
 			if latest, gerr := r.venue.GetOrder(ctx, receipt.OrderID); gerr == nil {
 				receipt = mergeOrderReceipt(receipt, latest)
@@ -638,7 +819,15 @@ func (r *LiveRouter) waitForFillOrCancelTTL(ctx context.Context, receipt OrderRe
 				}
 				return receipt, false, fmt.Errorf("execution: cancel order %s on TTL expiry: %w", receipt.OrderID, cerr)
 			}
-			receipt.Status = "CANCELLED"
+			if latest, gerr := r.venue.GetOrder(ctx, receipt.OrderID); gerr == nil {
+				receipt = mergeOrderReceipt(receipt, latest)
+				if isOrderFilled(receipt, targetQty) {
+					return receipt, false, nil
+				}
+			}
+			if receipt.Status == "" || strings.EqualFold(receipt.Status, "OPEN") || strings.EqualFold(receipt.Status, "NEW") {
+				receipt.Status = "CANCELLED"
+			}
 			return receipt, true, nil
 		case <-ticker.C:
 			latest, gerr := r.venue.GetOrder(ctx, receipt.OrderID)
@@ -656,6 +845,20 @@ func (r *LiveRouter) waitForFillOrCancelTTL(ctx context.Context, receipt OrderRe
 func isOrderFilled(rec OrderReceipt, targetQty float64) bool {
 	return strings.EqualFold(strings.TrimSpace(rec.Status), "FILLED") ||
 		(targetQty > 0 && rec.FilledQty >= targetQty)
+}
+
+func isOrderNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrOrderNotFound) {
+		return true
+	}
+	var statusErr *httpStatusError
+	if errors.As(err, &statusErr) && statusErr.status == 404 {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "order not found")
 }
 
 func mergeOrderReceipt(base, latest OrderReceipt) OrderReceipt {
@@ -676,6 +879,9 @@ func mergeOrderReceipt(base, latest OrderReceipt) OrderReceipt {
 	}
 	if latest.Quantity <= 0 {
 		latest.Quantity = base.Quantity
+	}
+	if latest.FilledQty < base.FilledQty {
+		latest.FilledQty = base.FilledQty
 	}
 	if !latest.PostOnly {
 		latest.PostOnly = base.PostOnly
@@ -751,12 +957,22 @@ func (r *LiveRouter) loadJournal() error {
 		if entry.ClientOrderID == "" {
 			continue
 		}
-		r.seenOrders[journalKey{id: entry.ClientOrderID, dryRun: entry.DryRun}] = entry
+		key := journalKey{id: entry.ClientOrderID, dryRun: entry.DryRun}
+		if strings.EqualFold(entry.Receipt.Status, "REJECTED") && entry.Receipt.OrderID == "" && entry.Receipt.FilledQty == 0 {
+			delete(r.seenOrders, key)
+			continue
+		}
+		r.seenOrders[key] = entry
+	}
+	if err := sc.Err(); err != nil {
+		return err
+	}
+	for _, entry := range r.seenOrders {
 		if entry.DryRun == r.cfg.DryRun && entry.DayBucket == today && !math.IsNaN(entry.NotionalUSD) && !math.IsInf(entry.NotionalUSD, 0) {
 			r.dailyNotional += entry.NotionalUSD
 		}
 	}
-	return sc.Err()
+	return nil
 }
 
 func (r *LiveRouter) recordEntry(entry JournalEntry) error {
@@ -791,7 +1007,11 @@ func (r *LiveRouter) recordEntry(entry JournalEntry) error {
 		r.dailyBucket = entry.DayBucket
 		r.dailyNotional = 0
 	}
-	r.seenOrders[journalKey{id: entry.ClientOrderID, dryRun: entry.DryRun}] = entry
+	key := journalKey{id: entry.ClientOrderID, dryRun: entry.DryRun}
+	if prev, exists := r.seenOrders[key]; exists && prev.DayBucket == entry.DayBucket && !math.IsNaN(prev.NotionalUSD) && !math.IsInf(prev.NotionalUSD, 0) {
+		r.dailyNotional -= prev.NotionalUSD
+	}
+	r.seenOrders[key] = entry
 	r.dailyNotional += entry.NotionalUSD
 	return nil
 }

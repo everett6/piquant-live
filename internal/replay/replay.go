@@ -19,6 +19,7 @@
 package replay
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -99,6 +100,7 @@ type Replay struct {
 	dataBase int64
 
 	finished bool
+	ctx      context.Context
 }
 
 type bookKey struct{ venue, instrument string }
@@ -111,7 +113,7 @@ type venueMeta struct {
 
 // Open prepares a replay of path. It computes the dataset checksum up front so
 // the report identifies exactly the bytes being read.
-func Open(path string, opts Options) (*Replay, error) {
+func Open(ctx context.Context, path string, opts Options) (*Replay, error) {
 	if opts.Config == nil {
 		return nil, errors.New("replay: Options.Config is required")
 	}
@@ -137,6 +139,7 @@ func Open(path string, opts Options) (*Replay, error) {
 			Checksum: sum,
 			Rejects:  make(map[normalize.RejectKind]int64),
 		},
+		ctx: ctx,
 	}, nil
 }
 
@@ -237,6 +240,13 @@ type Step struct {
 // with an error.
 func (r *Replay) Next() (Step, error) {
 	for {
+		if r.ctx != nil {
+			select {
+			case <-r.ctx.Done():
+				return Step{}, r.ctx.Err()
+			default:
+			}
+		}
 		if r.finished {
 			return Step{}, ErrFinished
 		}
@@ -303,7 +313,11 @@ func (r *Replay) pace(recv int64) {
 	target := time.Duration(float64(recv-r.dataBase) / r.opts.Speed)
 	elapsed := time.Since(r.wallBase)
 	if target > elapsed {
-		time.Sleep(target - elapsed)
+		select {
+		case <-time.After(target - elapsed):
+		case <-r.ctx.Done():
+			return
+		}
 	}
 }
 
@@ -314,7 +328,7 @@ func (r *Replay) Reset() error {
 	if err := r.reader.Close(); err != nil {
 		return err
 	}
-	fresh, err := Open(r.stats.Path, r.opts)
+	fresh, err := Open(r.ctx, r.stats.Path, r.opts)
 	if err != nil {
 		return err
 	}

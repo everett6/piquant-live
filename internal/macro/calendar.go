@@ -64,15 +64,15 @@ type MacroState struct {
 
 // MacroGuardian continuously tracks economic calendar events and orchestrates execution gating.
 type MacroGuardian struct {
-	mu           sync.RWMutex
-	events       []MacroEvent
-	dataDir      string
-	cacheFile    string
-	syncURL      string
-	lastSync     time.Time
-	httpClient   *http.Client
-	stopCh       chan struct{}
-	lastSource   string
+	mu         sync.RWMutex
+	events     []MacroEvent
+	dataDir    string
+	cacheFile  string
+	syncURL    string
+	lastSync   time.Time
+	httpClient *http.Client
+	stopCh     chan struct{}
+	lastSource string
 }
 
 // DefaultSyncURL is the free, unauthenticated weekly economic calendar feed from ForexFactory.
@@ -252,19 +252,20 @@ func (g *MacroGuardian) Evaluate(now time.Time) MacroState {
 				st.SpreadMultiplier = 0.0
 				st.LeverageMultiplier = 0.0
 				st.AllowQuoting = false
-				return st
 			} else if diff > 2*time.Minute {
 				// PHASE: PRE-EVENT DEFENSE (15m before to 2m before)
 				// Widen spreads 2.5x, cut leverage in half to reduce inventory run-up
-				st.Phase = PhasePreEvent
-				st.PhaseName = "PRE_EVENT_DEFENSE"
-				st.SpreadMultiplier = 2.5
-				st.LeverageMultiplier = 0.50
-				st.AllowQuoting = true
+				if st.Phase != PhaseEventHalt {
+					st.Phase = PhasePreEvent
+					st.PhaseName = "PRE_EVENT_DEFENSE"
+					st.SpreadMultiplier = 2.5
+					st.LeverageMultiplier = 0.50
+					st.AllowQuoting = true
+				}
 			} else if diff < -5*time.Minute {
 				// PHASE: POST-EVENT DRIFT (5m after to 30m after)
 				// Initial shock has passed; quote with 1.5x spread to capture the emerging drift
-				if st.Phase != PhasePreEvent { // prioritize pre-event if overlapping
+				if st.Phase != PhaseEventHalt && st.Phase != PhasePreEvent { // prioritize halt and pre-event if overlapping
 					st.Phase = PhasePostDrift
 					st.PhaseName = "POST_EVENT_DRIFT"
 					st.SpreadMultiplier = 1.5
@@ -343,9 +344,13 @@ func (g *MacroGuardian) loadCache() error {
 	}
 
 	merged := mergeEvents(parsed, getEmbeddedFallbackSchedule())
+	var lastSync time.Time
+	if info, statErr := os.Stat(g.cacheFile); statErr == nil {
+		lastSync = info.ModTime().UTC()
+	}
 	g.mu.Lock()
 	g.events = merged
-	g.lastSync = time.Now().UTC()
+	g.lastSync = lastSync
 	g.lastSource = "Local Disk Cache"
 	g.mu.Unlock()
 	return nil

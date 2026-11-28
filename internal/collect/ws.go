@@ -54,6 +54,8 @@ func dialWS(ctx context.Context, endpoint string) (*wsConn, error) {
 		}
 		conn = tc
 	}
+	// Close conn immediately if ctx is cancelled or the handshake deadline expires during the HTTP upgrade.
+	stopAfter := context.AfterFunc(dctx, func() { _ = conn.Close() })
 	key := make([]byte, 16)
 	_, _ = rand.Read(key)
 	path := u.RequestURI()
@@ -61,24 +63,31 @@ func dialWS(ctx context.Context, endpoint string) (*wsConn, error) {
 		"Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n", path, u.Host, base64.StdEncoding.EncodeToString(key))
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	if _, err := conn.Write([]byte(req)); err != nil {
+		stopAfter()
 		_ = conn.Close()
 		return nil, err
 	}
 	br := bufio.NewReaderSize(conn, 256<<10)
 	status, err := br.ReadString('\n')
 	if err != nil || !strings.Contains(status, " 101") {
+		stopAfter()
 		_ = conn.Close()
 		return nil, fmt.Errorf("websocket handshake: %q %v", strings.TrimSpace(status), err)
 	}
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
+			stopAfter()
 			_ = conn.Close()
 			return nil, err
 		}
 		if line == "\r\n" || line == "\n" {
 			break
 		}
+	}
+	if !stopAfter() {
+		_ = conn.Close()
+		return nil, dctx.Err()
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return &wsConn{conn: conn, br: br}, nil

@@ -248,7 +248,7 @@ func ExtractSamples(ctx context.Context, datasetPath string, horizon common.Hori
 			},
 		}
 	}
-	rep, err := replay.Open(datasetPath, replay.Options{
+	rep, err := replay.Open(context.Background(), datasetPath, replay.Options{
 		Config:   cfg,
 		Speed:    0, // max speed
 		MaxBooks: 16,

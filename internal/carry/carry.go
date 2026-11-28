@@ -98,8 +98,12 @@ func New(date string, closes map[string]float64) *State {
 func (st *State) updateDD() {
 	st.Peak = math.Max(st.Peak, st.Equity)
 	st.PeakStress = math.Max(st.PeakStress, st.EquityStress)
-	st.MaxDD = math.Max(st.MaxDD, 1-st.Equity/st.Peak)
-	st.MaxDDStress = math.Max(st.MaxDDStress, 1-st.EquityStress/st.PeakStress)
+	if st.Peak > 0 {
+		st.MaxDD = math.Max(st.MaxDD, 1-st.Equity/st.Peak)
+	}
+	if st.PeakStress > 0 {
+		st.MaxDDStress = math.Max(st.MaxDDStress, 1-st.EquityStress/st.PeakStress)
+	}
 }
 
 func coinRet(in DayInput, prev float64, c Costs) (float64, bool) {
@@ -191,8 +195,8 @@ func ParseFundingCSV(r io.Reader) ([]Rate, error) {
 		}
 		ms, err1 := strconv.ParseInt(strings.TrimSpace(row[0]), 10, 64)
 		v, err2 := strconv.ParseFloat(strings.TrimSpace(row[2]), 64)
-		if err1 != nil || err2 != nil {
-			continue // header
+		if err1 != nil || err2 != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+			continue // header or invalid rate
 		}
 		out = append(out, Rate{At: time.UnixMilli(ms).UTC(), Rate: v})
 	}
@@ -258,7 +262,7 @@ func (st *State) Save(path string) error {
 func (st *State) Summary() string {
 	days := len(st.Days)
 	ann := func(eq float64) float64 {
-		if days == 0 {
+		if days == 0 || eq < 0 {
 			return 0
 		}
 		return math.Pow(eq, 365.0/float64(days)) - 1

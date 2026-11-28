@@ -363,6 +363,9 @@ func (d *Downloader) DownloadFullDataset() error {
 	if err != nil {
 		return fmt.Errorf("building BTC dataset: %w", err)
 	}
+	if len(btcBars) == 0 {
+		return fmt.Errorf("building BTC dataset: returned 0 bars")
+	}
 	if err := SaveHistoricalCSV(btcFile, btcBars); err != nil {
 		return fmt.Errorf("saving BTC dataset: %w", err)
 	}
@@ -374,6 +377,9 @@ func (d *Downloader) DownloadFullDataset() error {
 	ethBars, err := d.buildETHDaily()
 	if err != nil {
 		return fmt.Errorf("building ETH dataset: %w", err)
+	}
+	if len(ethBars) == 0 {
+		return fmt.Errorf("building ETH dataset: returned 0 bars")
 	}
 	if err := SaveHistoricalCSV(ethFile, ethBars); err != nil {
 		return fmt.Errorf("saving ETH dataset: %w", err)
@@ -604,19 +610,20 @@ func (d *Downloader) buildETHDaily() ([]HistoricalBar, error) {
 
 // SaveHistoricalCSV serializes historical bars to a compact, standards-compliant CSV file.
 func SaveHistoricalCSV(path string, bars []HistoricalBar) error {
-	_ = os.MkdirAll(filepath.Dir(path), 0755)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 
 	w := csv.NewWriter(f)
-	defer w.Flush()
 
 	// Header
 	header := []string{"timestamp", "date", "open", "high", "low", "close", "volume", "trades", "quote_volume", "taker_buy_volume"}
 	if err := w.Write(header); err != nil {
+		_ = f.Close()
 		return err
 	}
 
@@ -634,10 +641,16 @@ func SaveHistoricalCSV(path string, bars []HistoricalBar) error {
 			strconv.FormatFloat(b.TakerBuyBase, 'f', 4, 64),
 		}
 		if err := w.Write(row); err != nil {
+			_ = f.Close()
 			return err
 		}
 	}
-	return nil
+	w.Flush()
+	if err := w.Error(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // LoadHistoricalCSV deserializes bars from CSV.

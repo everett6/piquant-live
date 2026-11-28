@@ -63,4 +63,20 @@ func TestParseFunding(t *testing.T) {
 	if len(noHeader) != 1 || noHeader[0].Rate != 0.0002 {
 		t.Fatal("headerless csv")
 	}
+	withBad, err := ParseFundingCSV(strings.NewReader("1794441600000,8,NaN\n1794470400000,8,+Inf\n1794499200000,8,-Inf\n1794528000000,8,0.0003\n"))
+	if err != nil || len(withBad) != 1 || withBad[0].Rate != 0.0003 {
+		t.Fatalf("expected NaN/Inf rows skipped, got %+v err=%v", withBad, err)
+	}
+}
+
+func TestCarryZeroPeakAndNegativeEquityGuards(t *testing.T) {
+	st := &State{Equity: -0.5, EquityStress: -0.5, Days: []DayRec{{Date: "2026-01-01"}}}
+	st.updateDD()
+	if math.IsNaN(st.MaxDD) || math.IsInf(st.MaxDD, 0) || math.IsNaN(st.MaxDDStress) || math.IsInf(st.MaxDDStress, 0) {
+		t.Fatalf("updateDD produced NaN/Inf with Peak==0: %+v", st)
+	}
+	sum := st.Summary()
+	if strings.Contains(sum, "NaN") || strings.Contains(sum, "Inf") {
+		t.Fatalf("Summary produced NaN/Inf with negative equity: %s", sum)
+	}
 }

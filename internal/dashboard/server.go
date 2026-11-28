@@ -29,9 +29,11 @@ package dashboard
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net"
@@ -43,13 +45,18 @@ import (
 	"sync"
 	"time"
 
+	"piquant-live/internal/carry"
 	"piquant-live/internal/cluster"
 	"piquant-live/internal/discovery"
 	"piquant-live/internal/execution"
 	"piquant-live/internal/experiment"
+	"piquant-live/internal/macro"
 	"piquant-live/internal/paper"
 	"piquant-live/internal/secrets"
+	"piquant-live/internal/tax"
 	"piquant-live/internal/telemetry"
+	"piquant-live/internal/trend"
+	"piquant-live/internal/trendcache"
 )
 
 // Version is the interface version reported to a peer. A dashboard that speaks
@@ -148,6 +155,7 @@ type PeerStatus struct {
 	Live      bool   `json:"live"`
 	LatencyMs int64  `json:"latency_ms"`
 	Error     string `json:"error,omitempty"`
+	endpoint  string // base URL from discovery.Peer.Endpoint()
 }
 
 // Check is one setup/health diagnostic line, shown as a tick or a warning.
@@ -228,16 +236,80 @@ type Server struct {
 	modeMu         sync.RWMutex
 	mode           string
 	clusterMode    string // "pi5_only" or "dual_pi"
-	peerMu         sync.RWMutex
-	lastPeerStatus *Status
-	lastPeerFetch  time.Time
-	httpClient     *http.Client
-	probeMu        sync.RWMutex
-	probeCache     map[string]cachedProbe
-	delegator      *cluster.TaskDelegator
-	pingMu         sync.Mutex
-	cachedPingPlan *execution.PingExecutionPlan
-	cachedPingAt   time.Time
+	peerMu           sync.RWMutex
+	lastPeerStatus   *Status
+	lastPeerFetch    time.Time
+	httpClient       *http.Client
+	proxyClient      *http.Client
+	schwabHTTPClient *http.Client
+	probeMu          sync.RWMutex
+	probeCache       map[string]cachedProbe
+	delegator        *cluster.TaskDelegator
+	pingMu           sync.Mutex
+	cachedPingPlan   *execution.PingExecutionPlan
+	cachedPingAt     time.Time
+
+	trendCache *trendcache.TrendCache
+
+	dryRunMu    sync.Mutex
+	dryRunCache dryRunStateCache
+
+	taxMu    sync.Mutex
+	taxCache map[taxCacheKey]taxCacheEntry
+
+	newsOnce     sync.Once
+	newsPipeline *macro.NewsPipeline
+
+	histSimMu       sync.Mutex
+	histSimCache    map[float64]map[string]any
+	histSimInflight map[float64]*histSimCall
+
+	shutdownOnce sync.Once
+	shutdownCh   chan struct{}
+}
+
+type histSimCall struct {
+	done    chan struct{}
+	payload map[string]any
+	err     error
+}
+
+type dryRunStateCache struct {
+	path    string
+	modTime time.Time
+	size    int64
+	state   paper.DryRunState
+	valid   bool
+}
+
+type taxCacheKey struct {
+	path      string
+	year      int
+	fedRate   float64
+	stateRate float64
+}
+
+type taxCacheEntry struct {
+	modTime time.Time
+	size    int64
+	summary *tax.TaxSummary
+}
+
+
+func (s *Server) cachedTrendState(path string) (*trend.State, error) {
+	return s.trendCache.GetTrendState(path)
+}
+
+func (s *Server) cachedCarryState(path string) (*carry.State, error) {
+	return s.trendCache.GetCarryState(path)
+}
+
+func (s *Server) cachedDTB3Rates(path string) (map[string]float64, error) {
+	return s.trendCache.GetDTB3Rates(path)
+}
+
+func (s *Server) cachedMacroHRP(eqDir, dtb3Path string, rates map[string]float64) (trend.MacroSleeveSummary, bool) {
+	return s.trendCache.GetMacroHRP(eqDir, dtb3Path, rates)
 }
 
 type cachedProbe struct {
@@ -261,9 +333,16 @@ var sharedHTTPClient = &http.Client{
 			}
 			return c, nil
 		},
+		ForceAttemptHTTP2:   true,
 		MaxIdleConns:        50,
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     60 * time.Second,
+		WriteBufferSize:     32 << 10,
+		ReadBufferSize:      32 << 10,
+		TLSClientConfig: &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			ClientSessionCache: tls.NewLRUClientSessionCache(64),
+		},
 	},
 	Timeout: 5 * time.Second,
 }
@@ -315,8 +394,20 @@ func New(opts Options) (*Server, error) {
 		sess:       newSessionStore(opts.SessionTTL),
 		lim:        newLoginLimiter(5, 15*time.Minute),
 		mode:       mode,
-		probeCache: make(map[string]cachedProbe),
-		delegator:  cluster.NewTaskDelegator(),
+		probeCache:      make(map[string]cachedProbe),
+		delegator:       cluster.NewTaskDelegator(),
+		trendCache:      trendcache.NewTrendCache(),
+		taxCache:        make(map[taxCacheKey]taxCacheEntry),
+		histSimCache:    make(map[float64]map[string]any),
+		histSimInflight: make(map[float64]*histSimCall),
+		shutdownCh:      make(chan struct{}),
+	}
+	if opts.DryRun == nil {
+		dataDir := "data"
+		if len(opts.DataDirs) > 0 && opts.DataDirs[0] != "" {
+			dataDir = opts.DataDirs[0]
+		}
+		s.newsPipeline = macro.NewNewsPipeline(dataDir, "")
 	}
 	cm := opts.ClusterMode
 	if cm == "" {
@@ -352,6 +443,10 @@ func New(opts Options) (*Server, error) {
 		Transport: tr,
 		Timeout:   10 * time.Second,
 	}
+	s.proxyClient = &http.Client{
+		Transport: tr,
+	}
+	s.schwabHTTPClient = execution.NewOptimizedHTTPClient(8 * time.Second)
 	s.routes()
 	return s, nil
 }
@@ -370,6 +465,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	srv := &http.Server{
 		Handler:           s.Handler(),
+		BaseContext:       func(net.Listener) context.Context { return ctx },
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		// No WriteTimeout: an SSE stream is a long-lived response.
@@ -381,6 +477,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	s.logger.Printf("listening on http://%s", ln.Addr())
 	select {
 	case <-ctx.Done():
+		s.shutdownOnce.Do(func() {
+			if s.shutdownCh != nil {
+				close(s.shutdownCh)
+			}
+		})
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return srv.Shutdown(shutdown)
@@ -481,12 +582,6 @@ func (s *Server) Status(ctx context.Context) Status {
 		st.Jobs = s.opts.Jobs()
 	}
 	st.Peers = append(st.Peers, s.peers(ctx)...)
-	sort.Slice(st.Peers, func(i, j int) bool {
-		if st.Peers[i].Role != st.Peers[j].Role {
-			return st.Peers[i].Role < st.Peers[j].Role
-		}
-		return st.Peers[i].Name < st.Peers[j].Name
-	})
 
 	// If running on Pi 3B dashboard, poll the discovered Pi 5 engine peer
 	if s.opts.Role == discovery.RoleDashboard {
@@ -566,14 +661,16 @@ func (s *Server) peers(ctx context.Context) []PeerStatus {
 	now := s.opts.Now()
 
 	for _, p := range live {
+		ep := p.Endpoint()
 		row := PeerStatus{
-			Role:   p.Role,
-			Name:   p.Name,
-			Addr:   p.Addr,
-			ID:     p.ID,
-			AgeSec: p.Age(now).Seconds(),
-			Auth:   p.Auth,
-			Live:   true,
+			Role:     p.Role,
+			Name:     p.Name,
+			Addr:     p.Addr,
+			ID:       p.ID,
+			AgeSec:   p.Age(now).Seconds(),
+			Auth:     p.Auth,
+			Live:     true,
+			endpoint: ep,
 		}
 
 		// Check probe cache (valid for 2.5s) to eliminate blocking synchronous TCP handshakes
@@ -588,7 +685,7 @@ func (s *Server) peers(ctx context.Context) []PeerStatus {
 		} else {
 			probeCtx, cancel := context.WithTimeout(ctx, s.opts.ProbeTimeout)
 			start := time.Now()
-			endpoint := p.Endpoint() + "/api/health"
+			endpoint := ep + "/api/health"
 			var err error
 			if s.httpClient != nil {
 				err = s.probePeer(probeCtx, endpoint, s.opts.PeerToken)
@@ -636,6 +733,12 @@ func (s *Server) peers(ctx context.Context) []PeerStatus {
 
 		out = append(out, row)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Role != out[j].Role {
+			return out[i].Role < out[j].Role
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 
@@ -754,7 +857,10 @@ func (s *Server) probePeer(ctx context.Context, url, token string) error {
 	if err != nil {
 		return trimErr(err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		resp.Body.Close()
+	}()
 	if resp.StatusCode == http.StatusUnauthorized {
 		return errors.New("rejected: peer token differs")
 	}
@@ -777,7 +883,10 @@ func probe(ctx context.Context, url, token string) error {
 	if err != nil {
 		return trimErr(err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		resp.Body.Close()
+	}()
 	if resp.StatusCode == http.StatusUnauthorized {
 		return errors.New("rejected: peer token differs")
 	}
@@ -849,33 +958,48 @@ func (s *Server) syncPeerEngine(ctx context.Context, peers []PeerStatus) *Status
 	}
 
 	s.peerMu.Lock()
-	defer s.peerMu.Unlock()
-	if s.lastPeerStatus != nil && time.Since(s.lastPeerFetch) < 2*time.Second {
-		return s.lastPeerStatus
+	cached := s.lastPeerStatus
+	fresh := time.Since(s.lastPeerFetch) < 2*time.Second
+	s.peerMu.Unlock()
+	if cached != nil && fresh {
+		return cached
 	}
 
-	endpoint := "http://" + enginePeer.Addr + "/api/status"
+	base := enginePeer.endpoint
+	if base == "" {
+		base = "http://" + enginePeer.Addr
+	}
+	endpoint := base + "/api/status"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return s.lastPeerStatus
+		return cached
 	}
 	if s.opts.PeerToken != "" {
 		req.Header.Set("Authorization", "Bearer "+s.opts.PeerToken)
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return s.lastPeerStatus
+		s.peerMu.Lock()
+		s.lastPeerFetch = time.Now()
+		s.peerMu.Unlock()
+		return cached
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return s.lastPeerStatus
+		s.peerMu.Lock()
+		s.lastPeerFetch = time.Now()
+		s.peerMu.Unlock()
+		return cached
 	}
 	var remote Status
 	if err := json.NewDecoder(resp.Body).Decode(&remote); err == nil {
+		s.peerMu.Lock()
 		s.lastPeerStatus = &remote
 		s.lastPeerFetch = time.Now()
+		s.peerMu.Unlock()
+		return &remote
 	}
-	return s.lastPeerStatus
+	return cached
 }
 
 // Mode returns current interface mode ("simple" or "advanced").

@@ -155,3 +155,56 @@ func TestBackfillGDELT_RetriesThrottleAndResumes(t *testing.T) {
 		t.Fatal("completed windows must not be refetched")
 	}
 }
+
+func TestBackfillGDELT_NoSleepOnFinalAttempt(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		fmt.Fprint(w, "Please limit requests to one every 5 seconds")
+	}))
+	defer srv.Close()
+	oldBase, oldRetry := GDELTBase, GDELTRetryBase
+	GDELTBase, GDELTRetryBase = srv.URL, 40*time.Millisecond
+	defer func() { GDELTBase, GDELTRetryBase = oldBase, oldRetry }()
+
+	start := time.Now()
+	_, err := fetchGDELTWindow(context.Background(), srv.Client(), "bitcoin",
+		time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 11, 10, 3, 0, 0, 0, time.UTC))
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected error when all attempts are throttled")
+	}
+	if calls.Load() != 4 {
+		t.Fatalf("calls = %d, want 4", calls.Load())
+	}
+	// Attempts 0,1,2 sleep 40+80+120 = 240ms; attempt 3 (final) must not sleep (+160ms).
+	if elapsed >= 380*time.Millisecond {
+		t.Fatalf("elapsed %v suggests final attempt slept unnecessarily", elapsed)
+	}
+}
+
+func TestBackfillGDELT_AbortsAfterConsecFailures(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	oldBase, oldSpace, oldRetry, oldMax := GDELTBase, GDELTSpacing, GDELTRetryBase, GDELTMaxConsecFailures
+	GDELTBase, GDELTSpacing, GDELTRetryBase, GDELTMaxConsecFailures = srv.URL, time.Millisecond, time.Millisecond, 2
+	defer func() {
+		GDELTBase, GDELTSpacing, GDELTRetryBase, GDELTMaxConsecFailures = oldBase, oldSpace, oldRetry, oldMax
+	}()
+
+	to := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+	from := to.Add(-15 * time.Hour) // 5 windows of 3h
+	err := BackfillGDELT(context.Background(), srv.Client(), t.TempDir(), "crypto", "bitcoin", from, to, 3*time.Hour, nil)
+	if err == nil || !strings.Contains(err.Error(), "2 consecutive failed windows") {
+		t.Fatalf("expected consecutive failure abort, got err=%v", err)
+	}
+	// 2 windows x 4 attempts = 8 calls (not 5 x 4 = 20).
+	if calls.Load() != 8 {
+		t.Fatalf("calls = %d, want 8", calls.Load())
+	}
+}

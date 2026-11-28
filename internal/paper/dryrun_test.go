@@ -12,9 +12,25 @@ import (
 	"time"
 
 	"piquant-live/internal/engine"
+	"piquant-live/internal/experiment"
 	"piquant-live/internal/marketdata"
 	"piquant-live/internal/models/common"
 )
+
+func TestNewDryRunEnginePreservesExplicitDuration(t *testing.T) {
+	cfg := DefaultDryRunConfig(t.TempDir())
+	cfg.WindowPreset = "7d"
+	cfg.TargetDuration = 48*time.Hour + 30*time.Minute
+	cfg.TargetDurationExplicit = true
+
+	eng, err := NewDryRunEngine(cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	if eng.cfg.TargetDuration != cfg.TargetDuration {
+		t.Fatalf("explicit target duration changed: got %v want %v", eng.cfg.TargetDuration, cfg.TargetDuration)
+	}
+}
 
 func TestDryRunEngineLifecycleAndCheckpoint(t *testing.T) {
 	tempDir := t.TempDir()
@@ -177,8 +193,8 @@ func TestContDeLarrardAndKylesLambdaExecution(t *testing.T) {
 		t.Errorf("expected 1 maker trade in pos, got %d", pos.MakerTrades)
 	}
 
-	// Test Taker Fill with Kyle's Lambda slippage
-	dryRun.simulateTakerFill("BTCUSDT", 60000.0, 3.50)
+	// Test Taker Fill with Kyle's Lambda slippage (close/reduce long position)
+	dryRun.simulateTakerFill("BTCUSDT", 60000.0, -3.50)
 	st2 := dryRun.State()
 	if st2.TotalTrades != 2 {
 		t.Fatalf("expected 2 total trades, got %d", st2.TotalTrades)
@@ -216,7 +232,7 @@ func TestMarketStreamIngestorFallback(t *testing.T) {
 
 	stream.Stop()
 
-	total, depths, trades, _, _, fallbacks, lastNs := stream.Stats()
+	total, depths, trades, _, _, fallbacks, lastNs, _ := stream.Stats()
 	if fallbacks == 0 || total == 0 {
 		t.Errorf("expected fallback generator to generate events, got fallbacks=%d total=%d", fallbacks, total)
 	}
@@ -858,7 +874,7 @@ func TestCleanResetPurgesLegacyStats(t *testing.T) {
 func TestAdaptiveMicrostructureFormulasAndProfitDecayRatchet(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := DefaultDryRunConfig(tempDir)
-	cfg.OrderLatency = 5 * time.Millisecond // low-latency (HFT) regime: entry offsets use the 1.0x profile
+	cfg.OrderLatency = 5 * time.Millisecond          // low-latency (HFT) regime: entry offsets use the 1.0x profile
 	cfg.BuyThreshold, cfg.SellThreshold = 0.40, 0.60 // quoting-mechanics test: permissive entry gate (default 0.65/0.35 rejects neutral-conviction opens)
 	cfg.EntryOffsetBps = 7.5
 	cfg.TargetProfitBps = 12.5
@@ -1422,6 +1438,7 @@ func TestQuantHedgeFundAlphaAndVolatilityKellySizing(t *testing.T) {
 	sm.OBI = -0.35
 	sm.Ret5mBps = -12.0
 	sm.Conviction = 0.67 // Conviction (0.67) exceeds base 0.65, but is BELOW thin-bid threshold 0.72!
+	sm.ConvictionOverride = 0.67
 	eng.mu.Unlock()
 
 	eng.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
@@ -1437,6 +1454,7 @@ func TestQuantHedgeFundAlphaAndVolatilityKellySizing(t *testing.T) {
 	// Now provide high conviction (0.75 >= 0.72) with thin bids: BUY quote should be allowed!
 	eng.mu.Lock()
 	sm.Conviction = 0.75
+	sm.ConvictionOverride = 0.75
 	sm.Ret5mBps = 5.0
 	sm.Ret1mBps = 4.0
 	eng.mu.Unlock()
@@ -1465,6 +1483,7 @@ func TestQuantHedgeFundAlphaAndVolatilityKellySizing(t *testing.T) {
 	}
 	sm.InventorySince = now
 	sm.Conviction = 0.52 // Moderate neutral conviction: must NOT exit on noise!
+	sm.ConvictionOverride = 0.52
 	sm.OBI = 0.0
 	sm.Ret5mBps = 0.0
 	eng.mu.Unlock()
@@ -1485,6 +1504,7 @@ func TestQuantHedgeFundAlphaAndVolatilityKellySizing(t *testing.T) {
 	// Adverse drawdown 25 bps, Conviction collapsed to 0.32 (< 0.38), OBI < -0.25, Ret5mBps < -10.0
 	eng.mu.Lock()
 	sm.Conviction = 0.32
+	sm.ConvictionOverride = 0.32
 	sm.OBI = -0.30
 	sm.Ret5mBps = -15.0
 	eng.mu.Unlock()
@@ -1523,6 +1543,7 @@ func TestTribecaTargetInventoryAndFairValueIntegration(t *testing.T) {
 		eng.symMicro["BTCUSDT"] = sm
 	}
 	sm.Conviction = 0.70 // Bullish directional conviction
+	sm.ConvictionOverride = 0.70
 	eng.mu.Unlock()
 
 	eng.evaluateQuotesAndGating("BTCUSDT", 75000.00, now)
@@ -1609,5 +1630,831 @@ func TestAutoRecalibrationFailureBacksOff(t *testing.T) {
 	case <-calls:
 		t.Error("recalibrator retried during failure backoff")
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestRunJournalWriterBatchSync(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.Symbols = []string{"BTCUSDT"}
+	ring := engine.NewSPSCRing(1024)
+	streamCfg := DefaultStreamConfig()
+	streamCfg.Symbols = cfg.Symbols
+	stream := NewMarketStreamIngestor(streamCfg, ring)
+
+	eng, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	defer func() {
+		if eng.journalCh != nil {
+			close(eng.journalCh)
+			eng.journalWg.Wait()
+		}
+	}()
+
+	// Queue a burst of 5 records and verify they are synced immediately (<500ms, no 2s ticker wait)
+	eng.mu.Lock()
+	for i := 0; i < 5; i++ {
+		eng.appendTradeRecord(TradeRecord{
+			Timestamp: time.Now().UTC(),
+			Symbol:    "BTCUSDT",
+			Side:      "BUY",
+			Role:      "MAKER",
+			Price:     50000,
+			Size:      0.01,
+			ValueUSDT: 500,
+		})
+	}
+	eng.mu.Unlock()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if eng.journalSyncCount.Load() >= 1 {
+			data, rerr := os.ReadFile(cfg.JournalFile)
+			if rerr == nil && strings.Count(string(data), "\n") == 5 {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	data, _ := os.ReadFile(cfg.JournalFile)
+	t.Fatalf("expected 5 synced journal lines within 500ms, syncs=%d lines=%d", eng.journalSyncCount.Load(), strings.Count(string(data), "\n"))
+}
+
+func TestRecomputeEquityLockedAcrossFillsAndFunding(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.InitialCapital = 10000.0
+	cfg.TaxRatePct = 35.0
+	cfg.MakerFeeBps = 2.0
+	cfg.TakerFeeBps = 5.0
+	cfg.FundingBpsPerHour = 10.0
+	cfg.Symbols = []string{"BTCUSDT"}
+
+	ring := engine.NewSPSCRing(1024)
+	streamCfg := DefaultStreamConfig()
+	streamCfg.Symbols = cfg.Symbols
+	stream := NewMarketStreamIngestor(streamCfg, ring)
+
+	eng, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	defer func() {
+		if eng.journalCh != nil {
+			close(eng.journalCh)
+			eng.journalWg.Wait()
+		}
+	}()
+
+	eng.mu.Lock()
+	pos := eng.state.Positions["BTCUSDT"]
+	pos.MarkPrice = 51000.0
+	sm := eng.getOrCreateSymbolMicro("BTCUSDT")
+	sm.InventorySince = time.Now().Add(-5 * time.Minute)
+
+	// 1. Maker buy opens long 1.0 @ 50000 while MarkPrice=51000 -> UnrealizedPnL=1000
+	eng.executeMakerFillLocked("BTCUSDT", 50000.0, 1.0, "BUY", 1.0, "test")
+	if math.Abs(eng.state.UnrealizedPnL-1000.0) > 1e-6 {
+		t.Fatalf("expected UnrealizedPnL=1000, got %.6f", eng.state.UnrealizedPnL)
+	}
+	if math.Abs(eng.state.Equity-(eng.state.Cash+1000.0)) > 1e-6 {
+		t.Fatalf("expected Equity=Cash+1000, got %.6f vs %.6f", eng.state.Equity, eng.state.Cash+1000.0)
+	}
+
+	// 2. Maker sell crosses zero (1.0 -> -0.5) -> InventorySince must reset
+	eng.executeMakerFillLocked("BTCUSDT", 51000.0, 1.5, "SELL", 1.0, "test")
+	if !sm.InventorySince.IsZero() {
+		t.Fatalf("expected InventorySince reset on zero-cross, got %v", sm.InventorySince)
+	}
+	if eng.state.EstimatedTaxUSDT <= 0 {
+		t.Fatalf("expected positive EstimatedTaxUSDT after profitable close, got %.6f", eng.state.EstimatedTaxUSDT)
+	}
+
+	// 3. Accrue funding updates Equity and Tax
+	sm.InventorySince = time.Now().Add(-time.Minute)
+	eng.lastFundingAccrual = time.Now().Add(-time.Hour)
+	eqBeforeFunding := eng.state.Equity
+	eng.accrueFundingLocked(time.Now())
+	if eng.state.Equity >= eqBeforeFunding {
+		t.Fatalf("expected Equity to decrease after funding accrual: before=%.6f after=%.6f", eqBeforeFunding, eng.state.Equity)
+	}
+
+	// 4. Taker exit closes remaining short -> UnrealizedPnL=0, Equity==Cash
+	eng.takerExitLocked("BTCUSDT", 50990.0, 51010.0, 51000.0, "STOP_LOSS")
+	if eng.state.UnrealizedPnL != 0 {
+		t.Fatalf("expected UnrealizedPnL=0 after takerExitLocked, got %.6f", eng.state.UnrealizedPnL)
+	}
+	if math.Abs(eng.state.Equity-eng.state.Cash) > 1e-9 {
+		t.Fatalf("expected Equity==Cash after close, got %.6f vs %.6f", eng.state.Equity, eng.state.Cash)
+	}
+
+	// 5. Simulate taker fill updates Equity/UnrealizedPnL and resets InventorySince when hitting zero
+	pos.MarkPrice = 50000.0
+	eng.simulateTakerFillLocked("BTCUSDT", 50000.0, 5.0)
+	if math.Abs(eng.state.Equity-(eng.state.Cash+eng.state.UnrealizedPnL)) > 1e-6 {
+		t.Fatalf("expected Equity=Cash+UnrealizedPnL after simulateTakerFillLocked")
+	}
+	eng.mu.Unlock()
+}
+
+func TestRecoverStateFromJournalProRataAndScratch(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.InitialCapital = 10000.0
+	cfg.Symbols = []string{"BTCUSDT"}
+
+	ring := engine.NewSPSCRing(1024)
+	streamCfg := DefaultStreamConfig()
+	streamCfg.Symbols = cfg.Symbols
+	stream := NewMarketStreamIngestor(streamCfg, ring)
+
+	eng, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	if eng.journalCh != nil {
+		close(eng.journalCh)
+		eng.journalWg.Wait()
+		eng.journalCh = nil
+	}
+
+	t0 := time.Now().Add(-10 * time.Minute).UTC()
+	recs := []TradeRecord{
+		// Open long 2.0 @ 100, fee=2.0
+		{Timestamp: t0, Symbol: "BTCUSDT", Side: "BUY", Role: "MAKER", Price: 100, Size: 2.0, ValueUSDT: 200, FeeUSDT: 2.0, PnLRealized: -2.0, JournalSeq: 1},
+		// Close 1.0 @ 102, fee=1.0 -> gross=2.0, net=1.0, entryShare=1.0 -> roundTrip=0.0 (scratch!)
+		{Timestamp: t0.Add(time.Minute), Symbol: "BTCUSDT", Side: "SELL", Role: "MAKER", Price: 102, Size: 1.0, ValueUSDT: 102, FeeUSDT: 1.0, PnLRealized: 1.0, JournalSeq: 2},
+		// Close remaining 1.0 @ 105, fee=1.0 -> gross=5.0, net=4.0, entryShare=1.0 -> roundTrip=3.0 (win!)
+		{Timestamp: t0.Add(2 * time.Minute), Symbol: "BTCUSDT", Side: "SELL", Role: "MAKER", Price: 105, Size: 1.0, ValueUSDT: 105, FeeUSDT: 1.0, PnLRealized: 4.0, JournalSeq: 3},
+	}
+	var buf strings.Builder
+	for _, r := range recs {
+		b, _ := json.Marshal(r)
+		buf.Write(b)
+		buf.WriteByte('\n')
+	}
+	if err := os.WriteFile(cfg.JournalFile, []byte(buf.String()), 0o644); err != nil {
+		t.Fatalf("write journal: %v", err)
+	}
+
+	st, err := eng.recoverStateFromJournal()
+	if err != nil {
+		t.Fatalf("recoverStateFromJournal: %v", err)
+	}
+	if st.WinningTrades != 1 || st.LosingTrades != 0 {
+		t.Fatalf("expected 1 win and 0 losses (1 scratch), got wins=%d losses=%d", st.WinningTrades, st.LosingTrades)
+	}
+	if st.LastJournalSeq != 3 {
+		t.Fatalf("expected LastJournalSeq=3, got %d", st.LastJournalSeq)
+	}
+}
+
+func TestStaleCheckpointReplaysNewerJournalRecords(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.InitialCapital = 10000.0
+	cfg.Symbols = []string{"BTCUSDT"}
+
+	t0 := time.Now().Add(-10 * time.Minute).UTC()
+	staleState := DryRunState{
+		StartTime:            t0,
+		TargetEndTime:        t0.Add(14 * 24 * time.Hour),
+		LastCheckpoint:       t0.Add(time.Minute),
+		InitialCapital:       10000.0,
+		Cash:                 10050.0,
+		Equity:               10050.0,
+		PeakEquity:           10050.0,
+		RealizedPnL:          50.0,
+		TotalTrades:          1,
+		WinningTrades:        1,
+		Positions:            map[string]*Position{"BTCUSDT": {Symbol: "BTCUSDT"}},
+		LastJournalSeq:       1,
+		LastJournalTimestamp: t0.Add(time.Minute),
+	}
+	stateBytes, _ := json.MarshalIndent(staleState, "", "  ")
+	if err := os.MkdirAll(filepath.Dir(cfg.StateFile), 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	if err := os.WriteFile(cfg.StateFile, stateBytes, 0o644); err != nil {
+		t.Fatalf("write stale checkpoint: %v", err)
+	}
+
+	recs := []TradeRecord{
+		{Timestamp: t0.Add(time.Minute), Symbol: "BTCUSDT", Side: "SELL", Role: "MAKER", Price: 100, Size: 1.0, ValueUSDT: 100, FeeUSDT: 0, PnLRealized: 50.0, JournalSeq: 1},
+		{Timestamp: t0.Add(2 * time.Minute), Symbol: "BTCUSDT", Side: "BUY", Role: "MAKER", Price: 100, Size: 1.0, ValueUSDT: 100, FeeUSDT: 1.0, PnLRealized: -1.0, JournalSeq: 2},
+		{Timestamp: t0.Add(3 * time.Minute), Symbol: "BTCUSDT", Side: "SELL", Role: "MAKER", Price: 120, Size: 1.0, ValueUSDT: 120, FeeUSDT: 1.0, PnLRealized: 19.0, JournalSeq: 3},
+	}
+	var buf strings.Builder
+	for _, r := range recs {
+		b, _ := json.Marshal(r)
+		buf.Write(b)
+		buf.WriteByte('\n')
+	}
+	if err := os.WriteFile(cfg.JournalFile, []byte(buf.String()), 0o644); err != nil {
+		t.Fatalf("write journal: %v", err)
+	}
+
+	ring := engine.NewSPSCRing(1024)
+	streamCfg := DefaultStreamConfig()
+	streamCfg.Symbols = cfg.Symbols
+	stream := NewMarketStreamIngestor(streamCfg, ring)
+
+	eng, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	defer func() {
+		if eng.journalCh != nil {
+			close(eng.journalCh)
+			eng.journalWg.Wait()
+		}
+	}()
+
+	st := eng.State()
+	if st.TotalTrades != 3 {
+		t.Fatalf("expected TotalTrades=3 after replaying newer journal records, got %d", st.TotalTrades)
+	}
+	if math.Abs(st.Cash-10068.0) > 1e-6 {
+		t.Fatalf("expected Cash=10068.0 (10050 - 1 + 19), got %.6f", st.Cash)
+	}
+	if st.LastJournalSeq != 3 {
+		t.Fatalf("expected LastJournalSeq=3, got %d", st.LastJournalSeq)
+	}
+}
+
+func TestSpotOnlyUnencumberedCashMultiSymbol(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.InitialCapital = 1000.0
+	cfg.SpotOnly = true
+	cfg.Symbols = []string{"BTCUSDT", "ETHUSDT"}
+
+	ring := engine.NewSPSCRing(1024)
+	streamCfg := DefaultStreamConfig()
+	streamCfg.Symbols = cfg.Symbols
+	stream := NewMarketStreamIngestor(streamCfg, ring)
+
+	eng, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	defer func() {
+		if eng.journalCh != nil {
+			close(eng.journalCh)
+			eng.journalWg.Wait()
+		}
+	}()
+
+	eng.mu.Lock()
+	// Open long in BTCUSDT: 0.01 @ 60000 = $600 cost basis
+	eng.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          0.01,
+		AvgEntryPrice: 60000.0,
+	}
+	// Resting BUY in ETHUSDT: 0.1 @ 3000 = $300 encumbered
+	eng.activeOrders["ETHUSDT"] = []*ActiveMakerOrder{
+		{Symbol: "ETHUSDT", Side: "BUY", Price: 3000.0, Size: 0.1},
+	}
+	avail := eng.unencumberedSpotCashLocked(nil)
+	eng.mu.Unlock()
+
+	if math.Abs(avail-100.0) > 1e-6 {
+		t.Fatalf("expected unencumberedSpotCash=100.0 (1000 - 600 - 300), got %.6f", avail)
+	}
+}
+
+func TestReplayJournalSinceCursorSameTimestamp(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.InitialCapital = 10000.0
+	cfg.Symbols = []string{"BTCUSDT"}
+
+	t0 := time.Now().Add(-5 * time.Minute).UTC()
+	// Checkpoint saved at t0 with 0 trades (LastJournalSeq == 0)
+	cp := DryRunState{
+		StartTime:      t0,
+		TargetEndTime:  t0.Add(14 * 24 * time.Hour),
+		LastCheckpoint: t0,
+		InitialCapital: 10000.0,
+		Cash:           10000.0,
+		Equity:         10000.0,
+		PeakEquity:     10000.0,
+		Positions:      map[string]*Position{"BTCUSDT": {Symbol: "BTCUSDT"}},
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.StateFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cpBytes, _ := json.MarshalIndent(cp, "", "  ")
+	if err := os.WriteFile(cfg.StateFile, cpBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two fills at exact same timestamp t0 with JournalSeq 1 and 2
+	recs := []TradeRecord{
+		{Timestamp: t0, Symbol: "BTCUSDT", Side: "BUY", Role: "MAKER", Price: 100, Size: 1.0, ValueUSDT: 100, FeeUSDT: 1.0, PnLRealized: -1.0, JournalSeq: 1},
+		{Timestamp: t0, Symbol: "BTCUSDT", Side: "SELL", Role: "MAKER", Price: 110, Size: 1.0, ValueUSDT: 110, FeeUSDT: 1.0, PnLRealized: 9.0, JournalSeq: 2},
+	}
+	var buf strings.Builder
+	for _, r := range recs {
+		b, _ := json.Marshal(r)
+		buf.Write(b)
+		buf.WriteByte('\n')
+	}
+	if err := os.WriteFile(cfg.JournalFile, []byte(buf.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ring := engine.NewSPSCRing(1024)
+	streamCfg := DefaultStreamConfig()
+	streamCfg.Symbols = cfg.Symbols
+	stream := NewMarketStreamIngestor(streamCfg, ring)
+
+	eng, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	defer func() {
+		if eng.journalCh != nil {
+			close(eng.journalCh)
+			eng.journalWg.Wait()
+		}
+	}()
+
+	st := eng.State()
+	if st.TotalTrades != 2 || st.LastJournalSeq != 2 {
+		t.Fatalf("expected TotalTrades=2 LastJournalSeq=2 for same-timestamp fills, got trades=%d seq=%d", st.TotalTrades, st.LastJournalSeq)
+	}
+}
+
+func TestDryRunEngineStopCancelsMacroAndNews(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.Symbols = []string{"BTCUSDT"}
+	cfg.EnableMacroShield = true
+	cfg.EnableNewsPipeline = true
+	cfg.MacroSyncURL = "http://127.0.0.1:0/macro"
+	cfg.NewsSyncURL = "http://127.0.0.1:0/news"
+
+	ring := engine.NewSPSCRing(1024)
+	streamCfg := DefaultStreamConfig()
+	streamCfg.Symbols = cfg.Symbols
+	stream := NewMarketStreamIngestor(streamCfg, ring)
+
+	eng, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	eng.Start(ctx)
+	eng.Stop()
+}
+
+func TestDryRunEngineStateSkipsNilPosition(t *testing.T) {
+	eng := &DryRunEngine{
+		state: DryRunState{
+			Positions: map[string]*Position{
+				"BTCUSDT": nil,
+				"ETHUSDT": {Symbol: "ETHUSDT", Size: 1.5},
+			},
+		},
+	}
+	st := eng.State()
+	if _, ok := st.Positions["BTCUSDT"]; ok {
+		t.Fatalf("expected nil position BTCUSDT to be skipped in State() snapshot")
+	}
+	if p := st.Positions["ETHUSDT"]; p == nil || p.Size != 1.5 {
+		t.Fatalf("expected ETHUSDT position size 1.5, got %+v", p)
+	}
+}
+
+func TestRunExecutionLoopNilRing(t *testing.T) {
+	eng := &DryRunEngine{
+		stopCh: make(chan struct{}),
+	}
+	eng.wg.Add(1)
+	done := make(chan struct{})
+	go func() {
+		eng.runExecutionLoop(context.Background())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runExecutionLoop did not return immediately when ring == nil")
+	}
+}
+
+func TestLoadCheckpointEmptyPrimaryWithoutBakReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	if err := os.MkdirAll(filepath.Dir(cfg.StateFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.StateFile, []byte("  \n\x00 "), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	eng := &DryRunEngine{cfg: cfg}
+	if err := eng.loadCheckpoint(); err == nil {
+		t.Fatal("expected loadCheckpoint to fail on empty primary without .bak")
+	}
+
+	// Also when .bak exists but is empty
+	if err := os.WriteFile(cfg.StateFile, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.StateFile+".bak", []byte("\x00\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.loadCheckpoint(); err == nil {
+		t.Fatal("expected loadCheckpoint to fail when both primary and .bak are empty")
+	}
+}
+
+func TestCheckpointPersistAndRestoreRuntimeState(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.Symbols = []string{"BTCUSDT"}
+	cfg.InitialCapital = 10000.0
+
+	ring := engine.NewSPSCRing(1024)
+	streamCfg := DefaultStreamConfig()
+	streamCfg.Symbols = cfg.Symbols
+	stream := NewMarketStreamIngestor(streamCfg, ring)
+
+	eng1, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine 1: %v", err)
+	}
+	accrualAt := time.Now().Add(-3 * time.Hour).UTC().Truncate(time.Second)
+	eng1.mu.Lock()
+	eng1.lastFundingAccrual = accrualAt
+	eng1.state.PeakEquity = 12500.0
+	eng1.state.Equity = 12000.0
+	eng1.state.Cash = 12000.0
+	eng1.state.Positions["BTCUSDT"] = &Position{
+		Symbol:        "BTCUSDT",
+		Size:          0.1,
+		AvgEntryPrice: 50000.0,
+		MarkPrice:     50000.0,
+		HoldingSec:    120.0,
+	}
+	sm1 := eng1.getOrCreateSymbolMicro("BTCUSDT")
+	sm1.ScalpingDisabled = true
+	sm1.ScalpingDisabledReason = "consecutive losses"
+	sm1.ConsecutiveLosses = 4
+	eng1.mu.Unlock()
+
+	if err := eng1.saveCheckpoint(); err != nil {
+		t.Fatalf("saveCheckpoint: %v", err)
+	}
+	if eng1.journalCh != nil {
+		close(eng1.journalCh)
+		eng1.journalWg.Wait()
+		eng1.journalCh = nil
+	}
+
+	eng2, err := NewDryRunEngine(cfg, ring, stream)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine 2: %v", err)
+	}
+	defer func() {
+		if eng2.journalCh != nil {
+			close(eng2.journalCh)
+			eng2.journalWg.Wait()
+		}
+	}()
+
+	eng2.mu.RLock()
+	sm2 := eng2.symMicro["BTCUSDT"]
+	gotAccrual := eng2.lastFundingAccrual
+	eng2.mu.RUnlock()
+
+	if !gotAccrual.Equal(accrualAt) {
+		t.Fatalf("lastFundingAccrual mismatch: got %v, want %v", gotAccrual, accrualAt)
+	}
+	if sm2 == nil {
+		t.Fatal("expected symMicro[BTCUSDT] to be restored")
+	}
+	if !sm2.ScalpingDisabled || sm2.ScalpingDisabledReason != "consecutive losses" || sm2.ConsecutiveLosses != 4 {
+		t.Fatalf("scalping state not restored: disabled=%v reason=%q losses=%d",
+			sm2.ScalpingDisabled, sm2.ScalpingDisabledReason, sm2.ConsecutiveLosses)
+	}
+	if sm2.InventorySince.IsZero() {
+		t.Fatal("expected InventorySince to be reconstructed from HoldingSec")
+	}
+	if eng2.riskSafeguard.PeakEquity != 12500.0 {
+		t.Fatalf("expected riskSafeguard.PeakEquity=12500.0, got %.2f", eng2.riskSafeguard.PeakEquity)
+	}
+	if math.Abs(eng2.riskSafeguard.CurrentDrawdownPct-4.0) > 1e-6 {
+		t.Fatalf("expected riskSafeguard.CurrentDrawdownPct=4.0, got %.4f", eng2.riskSafeguard.CurrentDrawdownPct)
+	}
+}
+
+func TestSimulateTakerFillTracksEntryFeesAndOutcome(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.Symbols = []string{"BTCUSDT"}
+	cfg.InitialCapital = 10000.0
+	cfg.TakerFeeBps = 5.0
+	cfg.KylesLambda = 0.0
+
+	ring := engine.NewSPSCRing(1024)
+	eng, err := NewDryRunEngine(cfg, ring, nil)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	defer func() {
+		if eng.journalCh != nil {
+			close(eng.journalCh)
+			eng.journalWg.Wait()
+		}
+	}()
+
+	eng.mu.Lock()
+	eng.simulateTakerFillLocked("BTCUSDT", 50000.0, 10.0)
+	pos := eng.state.Positions["BTCUSDT"]
+	if pos.Size <= 0 || pos.EntryFeesUSDT <= 0 {
+		eng.mu.Unlock()
+		t.Fatalf("expected open position with EntryFeesUSDT > 0, got size=%v entryFees=%v", pos.Size, pos.EntryFeesUSDT)
+	}
+	// Close the position via opposite taker fill at higher price
+	eng.simulateTakerFillLocked("BTCUSDT", 51000.0, -10.0)
+	eng.mu.Unlock()
+
+	st := eng.State()
+	if st.Expectancy.All.N != 1 {
+		t.Fatalf("expected Expectancy.All.N == 1 after taker close, got %d", st.Expectancy.All.N)
+	}
+	if st.Positions["BTCUSDT"].Size == 0 && st.Positions["BTCUSDT"].EntryFeesUSDT != 0 {
+		t.Fatalf("expected EntryFeesUSDT == 0 when flat, got %v", st.Positions["BTCUSDT"].EntryFeesUSDT)
+	}
+}
+
+func TestFeedDownSecondsNoDoubleCount(t *testing.T) {
+	ring := engine.NewSPSCRing(1024)
+	stream := NewMarketStreamIngestor(DefaultStreamConfig(), ring)
+	eng := &DryRunEngine{
+		stream:       stream,
+		activeOrders: make(map[string][]*ActiveMakerOrder),
+		lastTickTime: time.Now(),
+		state: DryRunState{
+			DataSource:    "fallback",
+			QuotingPaused: true,
+		},
+	}
+	eng.checkFeedLiveness()
+	if eng.state.FeedDownSeconds != 0 {
+		t.Fatalf("expected FeedDownSeconds == 0 when fallback ticks are fresh, got %v", eng.state.FeedDownSeconds)
+	}
+}
+
+func TestEvaluateQuotesAndGatingConcurrentStateRace(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.Symbols = []string{"BTCUSDT"}
+	cfg.InitialCapital = 10000.0
+
+	ring := engine.NewSPSCRing(1024)
+	eng, err := NewDryRunEngine(cfg, ring, nil)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	defer func() {
+		if eng.journalCh != nil {
+			close(eng.journalCh)
+			eng.journalWg.Wait()
+		}
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			_ = eng.State()
+			time.Sleep(100 * time.Microsecond)
+		}
+	}()
+
+	for i := 0; i < 50; i++ {
+		ev := &engine.MarketEvent{
+			SymbolID: 0,
+			Price:    50000.0 + float64(i)*0.5,
+			Size:     0.1,
+		}
+		eng.ProcessMarketEvent(ev)
+	}
+	<-done
+}
+
+func TestFillLockedInitializesNilPosition(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.Symbols = []string{"BTCUSDT"}
+	cfg.InitialCapital = 10000.0
+
+	ring := engine.NewSPSCRing(1024)
+	eng, err := NewDryRunEngine(cfg, ring, nil)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	defer func() {
+		if eng.journalCh != nil {
+			close(eng.journalCh)
+			eng.journalWg.Wait()
+		}
+	}()
+
+	eng.mu.Lock()
+	delete(eng.state.Positions, "BTCUSDT")
+	eng.executeMakerFillLocked("BTCUSDT", 50000.0, 0.01, "BUY", 2.0, "test")
+	if eng.state.Positions["BTCUSDT"] == nil || math.Abs(eng.state.Positions["BTCUSDT"].Size-0.01) > 1e-9 {
+		eng.mu.Unlock()
+		t.Fatalf("expected initialized BTCUSDT position after executeMakerFillLocked")
+	}
+
+	delete(eng.state.Positions, "BTCUSDT")
+	eng.simulateTakerFillLocked("BTCUSDT", 50000.0, 10.0)
+	if eng.state.Positions["BTCUSDT"] == nil || eng.state.Positions["BTCUSDT"].Size <= 0 {
+		eng.mu.Unlock()
+		t.Fatalf("expected initialized BTCUSDT position after simulateTakerFillLocked")
+	}
+	eng.mu.Unlock()
+}
+
+func TestSimulateTakerFillGuards(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.Symbols = []string{"BTCUSDT"}
+	cfg.InitialCapital = 1000.0
+	cfg.SpotOnly = true
+
+	ring := engine.NewSPSCRing(1024)
+	eng, err := NewDryRunEngine(cfg, ring, nil)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	defer func() {
+		if eng.journalCh != nil {
+			close(eng.journalCh)
+			eng.journalWg.Wait()
+		}
+	}()
+
+	eng.mu.Lock()
+	// 1. SpotOnly blocks shorting when flat
+	eng.simulateTakerFillLocked("BTCUSDT", 50000.0, -10.0)
+	if eng.state.TotalTrades != 0 {
+		eng.mu.Unlock()
+		t.Fatalf("expected SpotOnly to block shorting when flat, got %d trades", eng.state.TotalTrades)
+	}
+
+	// 2. BidCooldownUntil blocks opening BUY
+	eng.symMicro["BTCUSDT"].BidCooldownUntil = time.Now().Add(10 * time.Second)
+	eng.simulateTakerFillLocked("BTCUSDT", 50000.0, 10.0)
+	if eng.state.TotalTrades != 0 {
+		eng.mu.Unlock()
+		t.Fatalf("expected BidCooldownUntil to block BUY, got %d trades", eng.state.TotalTrades)
+	}
+	eng.symMicro["BTCUSDT"].BidCooldownUntil = time.Time{}
+
+	// 3. SpotOnly blocks BUY when unencumbered cash is insufficient
+	eng.state.Cash = 1.0
+	eng.simulateTakerFillLocked("BTCUSDT", 50000.0, 10.0)
+	if eng.state.TotalTrades != 0 {
+		eng.mu.Unlock()
+		t.Fatalf("expected insufficient spot cash to block BUY, got %d trades", eng.state.TotalTrades)
+	}
+
+	// 4. Valid BUY then SELL clamps to long size (no flip short in SpotOnly)
+	eng.state.Cash = 1000.0
+	eng.recomputeEquityLocked()
+	eng.simulateTakerFillLocked("BTCUSDT", 50000.0, 10.0)
+	if eng.state.Positions["BTCUSDT"].Size <= 0 {
+		eng.mu.Unlock()
+		t.Fatalf("expected positive long size after valid BUY")
+	}
+	eng.simulateTakerFillLocked("BTCUSDT", 50000.0, -10.0)
+	if eng.state.Positions["BTCUSDT"].Size < 0 {
+		eng.mu.Unlock()
+		t.Fatalf("expected SpotOnly SELL not to flip short, got size=%v", eng.state.Positions["BTCUSDT"].Size)
+	}
+	eng.mu.Unlock()
+}
+
+type mockL1Feed struct {
+	book marketdata.L2OrderBook
+}
+
+func (m *mockL1Feed) IsConnected() bool { return true }
+func (m *mockL1Feed) IsFallback() bool  { return false }
+func (m *mockL1Feed) Stats() (uint64, uint64, uint64, uint64, uint64, uint64, int64, int64) {
+	now := time.Now().UnixNano()
+	return 1, 1, 0, 0, 0, 0, now, now
+}
+func (m *mockL1Feed) GetL2Book(symbol string) (*marketdata.L2OrderBook, bool) {
+	cp := m.book
+	return &cp, true
+}
+func (m *mockL1Feed) CopyL2Book(symbol string, dst *marketdata.L2OrderBook) bool {
+	*dst = m.book
+	return true
+}
+
+func TestL1OnlyCircuitBreakerDoesNotWipeNormalSpreads(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.Symbols = []string{"BTC-USD"}
+	cfg.InitialCapital = 200.0
+	cfg.SpotOnly = true
+
+	// 7 bps spread on L1-only book
+	feed := &mockL1Feed{}
+	feed.book.SetSnapshot(1,
+		[]marketdata.PriceLevel{{Price: 50000.0, Size: 1.0}},
+		[]marketdata.PriceLevel{{Price: 50035.0, Size: 1.0}},
+	)
+
+	ring := engine.NewSPSCRing(1024)
+	eng, err := NewDryRunEngine(cfg, ring, nil)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	eng.stream = feed
+	defer func() {
+		if eng.journalCh != nil {
+			close(eng.journalCh)
+			eng.journalWg.Wait()
+		}
+	}()
+
+	eng.ProcessMarketEvent(&engine.MarketEvent{SymbolID: 0, Price: 50017.5, Size: 2.0})
+
+	// Simulate 90% L1 depth flicker within 500ms at 7 bps spread
+	feed.book.SetSnapshot(2,
+		[]marketdata.PriceLevel{{Price: 50000.0, Size: 0.1}},
+		[]marketdata.PriceLevel{{Price: 50035.0, Size: 0.1}},
+	)
+	eng.ProcessMarketEvent(&engine.MarketEvent{SymbolID: 0, Price: 50017.5, Size: 0.2})
+
+	eng.mu.RLock()
+	sm := eng.symMicro["BTC-USD"]
+	state := sm.CircuitBrk.State
+	eng.mu.RUnlock()
+	if state == experiment.StateHalted {
+		t.Fatalf("expected L1-only circuit breaker not to halt on normal 7 bps spread / L1 depth flicker")
+	}
+}
+
+func TestClipQtyReflooredAboveMinNotional(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := DefaultDryRunConfig(tmpDir)
+	cfg.Symbols = []string{"BTC-USD"}
+	cfg.InitialCapital = 200.0
+	cfg.SpotOnly = true
+	cfg.BuyThreshold = 0.01 // allow BUY quoting easily
+	cfg.EnableMacroShield = false
+	cfg.EnableNewsPipeline = false
+
+	feed := &mockL1Feed{}
+	feed.book.SetSnapshot(1,
+		[]marketdata.PriceLevel{{Price: 50000.0, Size: 1.0}},
+		[]marketdata.PriceLevel{{Price: 50035.0, Size: 1.0}},
+	)
+
+	ring := engine.NewSPSCRing(1024)
+	eng, err := NewDryRunEngine(cfg, ring, nil)
+	if err != nil {
+		t.Fatalf("NewDryRunEngine: %v", err)
+	}
+	eng.stream = feed
+	defer func() {
+		if eng.journalCh != nil {
+			close(eng.journalCh)
+			eng.journalWg.Wait()
+		}
+	}()
+
+	eng.mu.Lock()
+	eng.state.Goal.LeverageMultiplier = 0.25 // scales clipQty below $5.00 before re-flooring
+	eng.mu.Unlock()
+
+	eng.evaluateQuotesAndGating("BTC-USD", 50017.5, time.Now())
+
+	eng.mu.RLock()
+	orders := eng.activeOrders["BTC-USD"]
+	eng.mu.RUnlock()
+	if len(orders) == 0 {
+		t.Fatalf("expected resting quote to be placed after re-flooring clipQty to >= $5.00")
+	}
+	for _, ord := range orders {
+		if ord.Size*ord.Price < 5.0 {
+			t.Fatalf("expected re-floored notional >= $5.00, got %.4f", ord.Size*ord.Price)
+		}
 	}
 }

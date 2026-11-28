@@ -2,7 +2,9 @@ package collect
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -213,5 +215,63 @@ func TestKrakenTradeAndBookTruncation(t *testing.T) {
 	}
 	if err := r.handleKraken([]byte(`{"method":"subscribe","success":false,"error":"bad symbol"}`), now); err == nil {
 		t.Fatal("subscribe failure ignored")
+	}
+}
+
+func TestTickRecorderRunWaitsForStreamLoopBeforeFlush(t *testing.T) {
+	dir := t.TempDir()
+	r, err := NewTickRecorder(TickConfig{
+		Dir:        dir,
+		Endpoint:   "ws://127.0.0.1:1/ws",
+		Products:   []string{"BTC-USD"},
+		Depth:      2,
+		BookEvery:  50 * time.Millisecond,
+		FlushEvery: 50 * time.Millisecond,
+		MinFreeGB:  0.001,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.Run(ctx)
+	}()
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("TickRecorder.Run did not exit promptly on cancel")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ticks_status.json")); err != nil {
+		t.Fatalf("expected ticks_status.json written on final flush: %v", err)
+	}
+}
+
+func TestDialWSHonorsContextCancelDuringHandshake(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			defer conn.Close()
+			time.Sleep(2 * time.Second)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = dialWS(ctx, "ws://"+ln.Addr().String()+"/ws")
+	if err == nil {
+		t.Fatal("expected dialWS to fail on cancelled context during handshake")
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("dialWS took %v to abort on ctx cancel", time.Since(start))
 	}
 }

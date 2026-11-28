@@ -139,7 +139,7 @@ func (e *DryRunEngine) takerExitLocked(symbol string, bestBid, bestAsk, midPrice
 		e.riskSafeguard.OnFill(net, 0)
 	}
 	e.recordCloseOutcomeLocked(symbol, roundTrip, valUSDT, reason, true)
-	e.updateTaxReservesLocked()
+	e.recomputeEquityLocked()
 
 	slippageVsMidBps := 0.0
 	if midPrice > 0 {
@@ -230,8 +230,8 @@ func (e *DryRunEngine) applyFuturesSizing(symbol string, equity, price, effLev, 
 	if maxLev <= 0 {
 		maxLev = effLev
 	}
+	var otherGross, ownQty float64
 	e.mu.RLock()
-	otherGross, ownQty := 0.0, 0.0
 	for sym, pos := range e.state.Positions {
 		if pos == nil || pos.MarkPrice <= 0 {
 			continue
@@ -242,7 +242,7 @@ func (e *DryRunEngine) applyFuturesSizing(symbol string, equity, price, effLev, 
 		}
 		otherGross += math.Abs(pos.Size) * pos.MarkPrice
 	}
-	e.mu.RUnlock()
+	// Do the calculations under the lock to avoid race conditions
 	room := equity*maxLev - otherGross - ownQty*price
 	if room < 0 {
 		room = 0
@@ -253,6 +253,7 @@ func (e *DryRunEngine) applyFuturesSizing(symbol string, equity, price, effLev, 
 	if capInv := math.Floor((equity*maxLev-otherGross)/price/cs+1e-9) * cs; maxInvQty > capInv {
 		maxInvQty = math.Max(capInv, 0)
 	}
+	e.mu.RUnlock()
 	if clipQty < cs {
 		return 0, math.Max(maxInvQty, 0)
 	}
@@ -283,4 +284,5 @@ func (e *DryRunEngine) accrueFundingLocked(now time.Time) {
 		pos.RealizedPnL -= cost
 		pos.EntryFeesUSDT += cost
 	}
+	e.recomputeEquityLocked()
 }

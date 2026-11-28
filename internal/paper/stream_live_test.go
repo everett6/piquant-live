@@ -34,7 +34,7 @@ func TestLiveBinanceStreamIngestion60s(t *testing.T) {
 	for {
 		select {
 		case <-ctx.Done():
-			total, depths, trades, gaps, recons, fallbacks, lastNs := ingestor.Stats()
+			total, depths, trades, gaps, recons, fallbacks, lastNs, _ := ingestor.Stats()
 			btcBook, hasBTC := ingestor.GetL2Book("BTCUSDT")
 			ethBook, hasETH := ingestor.GetL2Book("ETHUSDT")
 
@@ -64,7 +64,7 @@ func TestLiveBinanceStreamIngestion60s(t *testing.T) {
 			}
 			return
 		case <-ticker.C:
-			tot, dep, tr, _, _, _, _ := ingestor.Stats()
+			tot, dep, tr, _, _, _, _, _ := ingestor.Stats()
 			t.Logf("[%v elapsed] Received %d events (depths=%d, trades=%d)", time.Since(start).Round(time.Second), tot, dep, tr)
 		}
 	}

@@ -240,3 +240,104 @@ func TestCalculateFromTrades_EmergencyLiquidation(t *testing.T) {
 		t.Fatalf("expected gain $%.4f, got $%.4f", expectedGain, summary.NetTaxableGainUSD)
 	}
 }
+
+func TestFIFOEdgeCases(t *testing.T) {
+	calc := NewCalculator(24.0, 9.3)
+	tNow := time.Now()
+
+	// Test 1: Partial lot matching - sell spans multiple buy lots
+	trades := []RawTrade{
+		{Timestamp: tNow, Symbol: "BTCUSDT", Side: "BUY", Price: 50000.0, Size: 0.010, FeeUSDT: 0.075},
+		{Timestamp: tNow.Add(time.Minute), Symbol: "BTCUSDT", Side: "BUY", Price: 51000.0, Size: 0.010, FeeUSDT: 0.0765},
+		{Timestamp: tNow.Add(2*time.Minute), Symbol: "BTCUSDT", Side: "SELL", Price: 52000.0, Size: 0.015, FeeUSDT: 0.117}, // Sell 0.015, spans both lots
+	}
+	summary := calc.CalculateFromTrades(trades, tNow.Year())
+	if summary.TotalDispositions != 2 {
+		t.Fatalf("expected 2 dispositions for partial lot matching, got %d", summary.TotalDispositions)
+	}
+	// First lot: 0.010 @ 50000, second lot: 0.005 @ 51000
+	expectedGain1 := (0.010 * 52000.0) - (0.010 * 50000.0) - (0.010 * (0.075/0.010 + 0.117/0.015))
+	expectedGain2 := (0.005 * 52000.0) - (0.005 * 51000.0) - (0.005 * (0.0765/0.010 + 0.117/0.015))
+	expectedTotal := expectedGain1 + expectedGain2
+	if math.Abs(summary.NetTaxableGainUSD-expectedTotal) > 1e-4 {
+		t.Fatalf("partial lot matching: expected gain $%.4f, got $%.4f", expectedTotal, summary.NetTaxableGainUSD)
+	}
+
+	// Test 2: Sell exactly matches a lot (no partial)
+	trades2 := []RawTrade{
+		{Timestamp: tNow, Symbol: "ETHUSDT", Side: "BUY", Price: 3000.0, Size: 1.0, FeeUSDT: 4.5},
+		{Timestamp: tNow.Add(time.Hour), Symbol: "ETHUSDT", Side: "SELL", Price: 3100.0, Size: 1.0, FeeUSDT: 4.65},
+	}
+	summary2 := calc.CalculateFromTrades(trades2, tNow.Year())
+	if summary2.TotalDispositions != 1 {
+		t.Fatalf("expected 1 disposition for exact match, got %d", summary2.TotalDispositions)
+	}
+	expectedGain2 = (3100.0 - 3000.0) - (4.5 + 4.65)
+	if math.Abs(summary2.NetTaxableGainUSD-expectedGain2) > 1e-4 {
+		t.Fatalf("exact match: expected gain $%.4f, got $%.4f", expectedGain2, summary2.NetTaxableGainUSD)
+	}
+
+	// Test 3: Multiple sells in same timestamp (order preserved by stable sort)
+	trades3 := []RawTrade{
+		{Timestamp: tNow, Symbol: "SOLUSDT", Side: "BUY", Price: 100.0, Size: 10.0, FeeUSDT: 0.15},
+		{Timestamp: tNow, Symbol: "SOLUSDT", Side: "SELL", Price: 110.0, Size: 5.0, FeeUSDT: 0.0825},  // First sell
+		{Timestamp: tNow, Symbol: "SOLUSDT", Side: "SELL", Price: 115.0, Size: 5.0, FeeUSDT: 0.08625}, // Second sell (same timestamp)
+	}
+	summary3 := calc.CalculateFromTrades(trades3, tNow.Year())
+	if summary3.TotalDispositions != 2 {
+		t.Fatalf("expected 2 dispositions for same-timestamp sells, got %d", summary3.TotalDispositions)
+	}
+	// First sell should match first 5 units, second sell matches remaining 5
+	if summary3.Dispositions[0].Quantity != 5.0 || summary3.Dispositions[1].Quantity != 5.0 {
+		t.Fatalf("unexpected quantities: %v, %v", summary3.Dispositions[0].Quantity, summary3.Dispositions[1].Quantity)
+	}
+}
+
+func TestFIFOFallbackNoPriorBuy(t *testing.T) {
+	calc := NewCalculator(24.0, 9.3)
+	tNow := time.Now()
+
+	// Sell without any prior buy - should use fallback logic
+	trades := []RawTrade{
+		{Timestamp: tNow, Symbol: "BTCUSDT", Side: "SELL", Price: 50000.0, Size: 0.010, FeeUSDT: 0.075, PnLRealized: 100.0},
+	}
+	summary := calc.CalculateFromTrades(trades, tNow.Year())
+	if summary.TotalDispositions != 1 {
+		t.Fatalf("expected 1 disposition for fallback sell, got %d", summary.TotalDispositions)
+	}
+	// Fallback basis = proceeds - pnlProp - fee
+	// pnlProp = 100.0 * (0.010/0.010) = 100.0
+	// proceeds = 500.0, fee = 0.075
+	// basis = 500.0 - 100.0 - 0.075 = 399.925
+	// netGain = 500.0 - 399.925 - 0.075 = 100.0
+	expectedGain := 100.0
+	if math.Abs(summary.NetTaxableGainUSD-expectedGain) > 1e-4 {
+		t.Fatalf("fallback sell: expected gain $%.4f, got $%.4f", expectedGain, summary.NetTaxableGainUSD)
+	}
+	// Should be short-term (acquired 1 hour before sell)
+	if summary.Dispositions[0].HoldingType != HoldingShortTerm {
+		t.Fatalf("fallback should be short-term, got %s", summary.Dispositions[0].HoldingType)
+	}
+}
+
+func TestFIFOZeroFeeHandling(t *testing.T) {
+	calc := NewCalculator(24.0, 9.3)
+	tNow := time.Now()
+
+	// Trades with zero fees
+	trades := []RawTrade{
+		{Timestamp: tNow, Symbol: "BTCUSDT", Side: "BUY", Price: 50000.0, Size: 0.010, FeeUSDT: 0.0},
+		{Timestamp: tNow.Add(time.Hour), Symbol: "BTCUSDT", Side: "SELL", Price: 51000.0, Size: 0.010, FeeUSDT: 0.0},
+	}
+	summary := calc.CalculateFromTrades(trades, tNow.Year())
+	if summary.TotalDispositions != 1 {
+		t.Fatalf("expected 1 disposition, got %d", summary.TotalDispositions)
+	}
+	expectedGain := 10.0 // (51000 - 50000) * 0.010
+	if math.Abs(summary.NetTaxableGainUSD-expectedGain) > 1e-4 {
+		t.Fatalf("zero fee: expected gain $%.4f, got $%.4f", expectedGain, summary.NetTaxableGainUSD)
+	}
+	if summary.TotalFeesUSD != 0.0 {
+		t.Fatalf("expected zero total fees, got %f", summary.TotalFeesUSD)
+	}
+}

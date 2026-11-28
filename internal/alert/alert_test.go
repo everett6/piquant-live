@@ -79,6 +79,81 @@ func TestUnconfiguredLogsOnly(t *testing.T) {
 	}
 }
 
+func TestLogfSerialization(t *testing.T) {
+	// Test that Logf calls are serialized (no concurrent access issues)
+	var mu sync.Mutex
+	var logged []string
+	a := &Alerter{Source: "test", Cooldown: time.Hour,
+		Logf: func(f string, args ...any) {
+			mu.Lock()
+			logged = append(logged, fmt.Sprintf(f, args...))
+			mu.Unlock()
+		},
+		send: func(string, smtp.Auth, string, []string, []byte) error { return nil }}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			a.Send(fmt.Sprintf("key-%d", id), "subject", "body")
+		}(i)
+	}
+	wg.Wait()
+
+	// All 10 sends should have been logged (no cooldown conflict since keys differ)
+	mu.Lock()
+	if len(logged) != 10 {
+		t.Fatalf("expected 10 log entries, got %d: %v", len(logged), logged)
+	}
+	mu.Unlock()
+}
+
+func TestDefaultCooldown(t *testing.T) {
+	// Test that Cooldown defaults to 1 hour when not explicitly set
+	var logged []string
+	a := &Alerter{Source: "test", // Cooldown not set (zero value)
+		Logf: func(f string, args ...any) { logged = append(logged, fmt.Sprintf(f, args...)) },
+		send: func(string, smtp.Auth, string, []string, []byte) error { return nil }}
+
+	now := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return now }
+
+	// First send should succeed
+	if !a.Send("key1", "subject", "body") {
+		t.Fatal("first send should succeed")
+	}
+	if len(logged) != 1 {
+		t.Fatalf("expected 1 log entry, got %d", len(logged))
+	}
+
+	// Second send with same key within default cooldown (1 hour) should be suppressed
+	if a.Send("key1", "subject", "body") {
+		t.Fatal("second send should be suppressed by default cooldown")
+	}
+	if len(logged) != 1 {
+		t.Fatalf("expected still 1 log entry, got %d", len(logged))
+	}
+
+	// Advance time past default cooldown
+	now = now.Add(61 * time.Minute)
+	a.now = func() time.Time { return now }
+	if !a.Send("key1", "subject", "body") {
+		t.Fatal("send should succeed after cooldown expires")
+	}
+	if len(logged) != 2 {
+		t.Fatalf("expected 2 log entries after cooldown expiry, got %d", len(logged))
+	}
+}
+
+func TestSendNowRequiresConfig(t *testing.T) {
+	a := &Alerter{Source: "test"}
+	err := a.SendNow("subject", "body")
+	if err == nil || err.Error() != "email not configured" {
+		t.Fatalf("expected 'email not configured' error, got %v", err)
+	}
+}
+
 func TestSendLogsBodyWhenEmailOff(t *testing.T) {
 	var lines []string
 	a := &Alerter{Source: "raspberrypi", Logf: func(f string, args ...any) { lines = append(lines, fmt.Sprintf(f, args...)) }}

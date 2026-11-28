@@ -42,6 +42,9 @@ func NewElasticNet(lam, alpha float64) *ElasticNet {
 
 // Fit trains the ElasticNet model on samples using coordinate descent.
 func (e *ElasticNet) Fit(samples []Sample, idx []int) error {
+	e.Weights = [FeatureCount]float64{}
+	e.Bias = 0
+	e.Fitted = false
 	n := len(samples)
 	if n == 0 || len(idx) == 0 {
 		return ErrNotFitted
@@ -49,6 +52,10 @@ func (e *ElasticNet) Fit(samples []Sample, idx []int) error {
 
 	// 1. Compute feature and target means & standard deviations
 	k := len(idx)
+	if k > FeatureCount {
+		k = FeatureCount
+	}
+	idx = idx[:k]
 	var sumY float64
 	for i := range samples {
 		sumY += samples[i].Y

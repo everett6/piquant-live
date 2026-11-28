@@ -25,15 +25,15 @@ import (
 
 // ANSI color and formatting codes
 const (
-	ansiReset      = "\033[0m"
-	ansiBold       = "\033[1m"
-	ansiDim        = "\033[2m"
-	ansiUnderline  = "\033[4m"
-	ansiClearScreen= "\033[H\033[2J"
-	ansiHome       = "\033[H"
-	ansiHideCursor = "\033[?25l"
-	ansiShowCursor = "\033[?25h"
-	ansiClearLine  = "\033[2K"
+	ansiReset       = "\033[0m"
+	ansiBold        = "\033[1m"
+	ansiDim         = "\033[2m"
+	ansiUnderline   = "\033[4m"
+	ansiClearScreen = "\033[H\033[2J"
+	ansiHome        = "\033[H"
+	ansiHideCursor  = "\033[?25l"
+	ansiShowCursor  = "\033[?25h"
+	ansiClearLine   = "\033[2K"
 
 	// Foreground colors
 	ansiBlack   = "\033[30m"
@@ -92,6 +92,9 @@ func runMonitor(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if f.interval <= 0 {
+		return fmt.Errorf("--interval must be greater than zero")
+	}
 
 	dDir := f.dataDir
 	if dDir == "" {
@@ -131,6 +134,7 @@ func runMonitor(ctx context.Context, args []string) error {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
 
 	keyCh := make(chan byte, 16)
 	go readKeypresses(keyCh)
@@ -713,6 +717,9 @@ func renderTerminalFrame(w io.Writer, st *paper.DryRunState, trades []paper.Trad
 }
 
 func renderWaitingFrame(w io.Writer, err error, width int, dataDir, remoteURL string) {
+	if width < 62 {
+		width = 62
+	}
 	border := strings.Repeat("═", width-2)
 	fmt.Fprintf(w, "%s╔%s╗%s\n", ansiBrightYellow, border, ansiReset)
 	fmt.Fprintf(w, "%s║  PIQUANT QUANTITATIVE TERMINAL  │  CONNECTING TO ENGINE...%s║\n",

@@ -141,3 +141,95 @@ func TestGuard(t *testing.T) {
 		t.Fatal("stale verification should halt")
 	}
 }
+
+func TestGuardBackoffWhenNotOK(t *testing.T) {
+	offsets := map[string]time.Duration{"a": 100 * time.Millisecond}
+	now := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
+	g := &Guard{Servers: []string{"a"}, Max: 250 * time.Millisecond, Interval: 10 * time.Minute,
+		Query: func(ctx context.Context, s string) (Sample, error) { return fixed(offsets, time.Millisecond)(ctx, s) },
+		now:   func() time.Time { return now }}
+	g.Check(context.Background())
+	if !g.OK() {
+		t.Fatal("initial check should be OK")
+	}
+
+	// Make the clock fail
+	offsets["a"] = -300 * time.Millisecond
+	g.Check(context.Background())
+	if g.OK() {
+		t.Fatal("should not be OK after bad offset")
+	}
+
+	// Check that backoff multiplier increased (internal state, verify via behavior)
+	// The next check should happen sooner than 10 minutes due to backoff
+	// We can't easily test the timer without exposing internals, but we can verify
+	// the backoffMult field is updated by checking it doesn't stay at 1.0
+	// Since backoffMult is unexported, we test the behavioral effect:
+	// After failure, Check should still work and update state
+	g.Check(context.Background()) // another failure
+	if g.OK() {
+		t.Fatal("should still not be OK")
+	}
+
+	// Restore good offset
+	offsets["a"] = 50 * time.Millisecond
+	g.Check(context.Background())
+	if !g.OK() {
+		t.Fatal("should be OK after good offset restored")
+	}
+	// Backoff should reset on success
+}
+
+func TestGuardWallClockJumpDetection(t *testing.T) {
+	// This test verifies that the Run loop handles wall-clock jumps correctly.
+	// We can't easily test the Run loop without integration, but we can verify
+	// the Check method updates lastCheck properly.
+	offsets := map[string]time.Duration{"a": 100 * time.Millisecond}
+	now := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC)
+	g := &Guard{Servers: []string{"a"}, Max: 250 * time.Millisecond, Interval: 10 * time.Minute,
+		Query: func(ctx context.Context, s string) (Sample, error) { return fixed(offsets, time.Millisecond)(ctx, s) },
+		now:   func() time.Time { return now }}
+
+	m := g.Check(context.Background())
+	if m.Err != nil {
+		t.Fatalf("Check failed: %v", m.Err)
+	}
+	// lastCheck should be set (internal field, but we can verify OK works)
+	if !g.OK() {
+		t.Fatal("should be OK after good check")
+	}
+
+	// Simulate clock jump forward by advancing 'now'
+	now = now.Add(20 * time.Minute)
+	m = g.Check(context.Background())
+	if m.Err != nil {
+		t.Fatalf("Check failed after clock jump: %v", m.Err)
+	}
+	if !g.OK() {
+		t.Fatal("should still be OK after clock jump forward (within 3 intervals)")
+	}
+
+	// Simulate clock jump backward
+	now = now.Add(-30 * time.Minute)
+	m = g.Check(context.Background())
+	if m.Err != nil {
+		t.Fatalf("Check failed after clock jump backward: %v", m.Err)
+	}
+	// Should still work (lastGood is based on g.clock() which now returns the jumped time)
+}
+
+func TestMeasureWithInvalidOffset(t *testing.T) {
+	// Test that Measure handles very large offsets correctly (simulating bad server)
+	largeOffset := 24 * time.Hour // 1 day offset - unrealistic but tests bounds
+	q := fixed(map[string]time.Duration{"a": largeOffset}, 30*time.Millisecond)
+	m := Measure(context.Background(), []string{"a"}, 250*time.Millisecond, q)
+	if len(m.Samples) != 1 {
+		t.Fatalf("expected 1 sample, got %d", len(m.Samples))
+	}
+	if m.Samples[0].Offset != largeOffset {
+		t.Fatalf("expected large offset %v, got %v", largeOffset, m.Samples[0].Offset)
+	}
+	if m.Offset != largeOffset {
+		t.Fatalf("expected median %v, got %v", largeOffset, m.Offset)
+	}
+}

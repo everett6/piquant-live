@@ -318,3 +318,59 @@ func TestHoles47Through59(t *testing.T) {
 		t.Fatalf("Hole 59 failed: TriangularArb Predict with NaN spread returned: %v", pred)
 	}
 }
+
+func TestRidgeValidationAndRefitZeroing(t *testing.T) {
+	samples := []Sample{
+		{X: [FeatureCount]float64{1, 2}, Y: 3},
+		{X: [FeatureCount]float64{2, 4}, Y: 6},
+		{X: [FeatureCount]float64{3, 1}, Y: 4},
+		{X: [FeatureCount]float64{4, 3}, Y: 7},
+	}
+
+	r := NewRidge(1e-3)
+	if err := r.Fit(samples, []int{0, 1}); err != nil {
+		t.Fatalf("initial Fit failed: %v", err)
+	}
+	if r.Weights[1] == 0 {
+		t.Fatalf("expected non-zero weight on feature 1")
+	}
+
+	// Re-fitting with a different idx must zero stale weights from feature 1.
+	if err := r.Fit(samples, []int{0}); err != nil {
+		t.Fatalf("refit failed: %v", err)
+	}
+	if r.Weights[1] != 0 {
+		t.Fatalf("stale weight on feature 1 not zeroed: %v", r.Weights[1])
+	}
+
+	// NaN/Inf in X or Y must be rejected.
+	badX := append([]Sample(nil), samples...)
+	badX[0].X[0] = math.NaN()
+	if err := r.Fit(badX, []int{0}); err != ErrNotFitted {
+		t.Fatalf("expected ErrNotFitted for NaN X, got %v", err)
+	}
+	if r.Fitted {
+		t.Fatal("expected Fitted=false after failed Fit")
+	}
+
+	badInfX := append([]Sample(nil), samples...)
+	badInfX[1].X[0] = math.Inf(1)
+	if err := r.Fit(badInfX, []int{0}); err != ErrNotFitted {
+		t.Fatalf("expected ErrNotFitted for Inf X, got %v", err)
+	}
+
+	badY := append([]Sample(nil), samples...)
+	badY[2].Y = math.NaN()
+	if err := r.Fit(badY, []int{0}); err != ErrNotFitted {
+		t.Fatalf("expected ErrNotFitted for NaN Y, got %v", err)
+	}
+
+	// solveFixed must reject NaN pivots.
+	var a [FeatureCount + 1][FeatureCount + 1]float64
+	a[0][0] = math.NaN()
+	a[0][FeatureCount] = 1
+	var out [FeatureCount + 1]float64
+	if solveFixed(&a, 1, FeatureCount, &out) {
+		t.Fatal("solveFixed accepted NaN pivot")
+	}
+}

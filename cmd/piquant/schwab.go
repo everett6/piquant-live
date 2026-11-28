@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -10,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"piquant-live/internal/carry"
 	"piquant-live/internal/execution"
 	"piquant-live/internal/trend"
+	"piquant-live/internal/trendcache"
 )
 
 func runSchwab(ctx context.Context, args []string) error {
@@ -32,6 +33,15 @@ func runSchwab(ctx context.Context, args []string) error {
 	navUSD := fs.Float64("nav", 0, "account NAV USD (0 = use Schwab liquidation value when connected, else $1000)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if !isFinite(*navUSD) || *navUSD < 0 {
+		return fmt.Errorf("--nav must be a finite value >= 0 (got %v)", *navUSD)
+	}
+	sel := strings.ToLower(strings.TrimSpace(*portfolio))
+	if sel != "q57_full_fund" && sel != "q57_full" && sel != "q57_macro" {
+		if _, ok := knownPortfolioSelectors[sel]; !ok {
+			return fmt.Errorf("unknown portfolio %q", *portfolio)
+		}
 	}
 
 	creds := execution.LoadSchwabCredentials(*envPath)
@@ -78,25 +88,41 @@ func runSchwab(ctx context.Context, args []string) error {
 			"has_refresh":   strings.TrimSpace(tok.RefreshToken) != "",
 			"next_step_cli": "piquant schwab --portfolio " + *portfolio,
 		}
-		b, _ := json.MarshalIndent(out, "", " ")
+		b, merr := json.MarshalIndent(out, "", " ")
+		if merr != nil {
+			return merr
+		}
 		fmt.Println(string(b))
 		return nil
 	}
 
-	st, err := trend.Load(filepath.Join(*dir, "trend_state.json"))
+	// Use shared trend cache for consistent caching across CLI tools
+	trendCache := trendcache.NewTrendCache()
+
+	st, err := trendCache.GetTrendState(filepath.Join(*dir, "trend_state.json"))
 	if err != nil {
 		return err
 	}
 	if st == nil {
 		st = trend.NewState("")
 	}
-	cState, _ := carry.Load(filepath.Join(*carryDir, "carry_state.json"))
-	rates, _ := trend.LoadDTB3Rates(*dtb3Path)
+	cState, cerr := trendCache.GetCarryState(filepath.Join(*carryDir, "carry_state.json"))
+	if cerr != nil && !errors.Is(cerr, os.ErrNotExist) {
+		return fmt.Errorf("load carry state: %w", cerr)
+	}
+	rates, rerr := trendCache.GetDTB3Rates(*dtb3Path)
+	if rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+		return fmt.Errorf("load DTB3 rates: %w", rerr)
+	}
 
 	client := execution.NewOptimizedHTTPClient(10 * time.Second)
-	sel := strings.ToLower(strings.TrimSpace(*portfolio))
 	if sel == "q57_full_fund" || sel == "q57_full" || sel == "q57_macro" {
-		full, ok := trend.ComputeQ57FullFund(st, cState, rates, *equitiesDir, nil)
+		macroSum, hasMacro := trendCache.GetMacroHRP(*equitiesDir, *dtb3Path, rates)
+		var full trend.FullFundSummary
+		var ok bool
+		if hasMacro {
+			full, ok = trend.ComputeQ57FullFundWithMacro(st, cState, rates, macroSum, nil)
+		}
 		if !ok {
 			return fmt.Errorf("q57_full_fund unavailable (check equities CSVs in %s)", *equitiesDir)
 		}

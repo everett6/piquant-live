@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,7 +81,7 @@ func run(t *testing.T, path string, opts Options) ([]Step, Stats) {
 	if opts.Config == nil {
 		opts.Config = testConfig()
 	}
-	r, err := Open(path, opts)
+	r, err := Open(context.Background(), path, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +151,7 @@ func TestReplayIsDeterministic(t *testing.T) {
 		t.Fatalf("stats differ:\n%+v\n%+v", sa, sb)
 	}
 	// Reset must reproduce the run inside one Replay handle too.
-	r, err := Open(path, Options{Config: testConfig()})
+	r, err := Open(context.Background(), path, Options{Config: testConfig()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +273,7 @@ func TestMaxBooks(t *testing.T) {
 		snapRec("binance", "BTCUSDT", 1, 0, 100, 100.1),
 		snapRec("binance", "ETHUSDT", 1, 0, 10, 10.01),
 	)
-	r, err := Open(path, Options{Config: testConfig(), MaxBooks: 1})
+	r, err := Open(context.Background(), path, Options{Config: testConfig(), MaxBooks: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,10 +343,10 @@ func TestUnknownVenueRejected(t *testing.T) {
 
 func TestOpenRequiresConfig(t *testing.T) {
 	path := writeCapture(t, tradeRec("binance", "BTCUSDT", 1, 0, 1, 1, dataset.Buy))
-	if _, err := Open(path, Options{}); err == nil {
+	if _, err := Open(context.Background(), path, Options{}); err == nil {
 		t.Fatal("replay opened without a config")
 	}
-	if _, err := Open(filepath.Join(t.TempDir(), "missing.jsonl"), Options{Config: testConfig()}); err == nil {
+	if _, err := Open(context.Background(), filepath.Join(t.TempDir(), "missing.jsonl"), Options{Config: testConfig()}); err == nil {
 		t.Fatal("replay opened a missing file")
 	}
 }

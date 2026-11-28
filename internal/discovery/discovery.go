@@ -323,9 +323,9 @@ type Announcer struct {
 	// datagrams through a loopback socket.
 	Conn *net.UDPConn
 
+	mu       sync.Mutex
 	adaptive bool
 	seq      uint64
-	once     sync.Once
 	stop     chan struct{}
 	done     chan struct{}
 }
@@ -335,6 +335,11 @@ func (a *Announcer) Start() error {
 	if err := a.Beacon.Validate(); err != nil {
 		return err
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.stop != nil {
+		return errors.New("discovery: announcer already started")
+	}
 	if a.Port == 0 {
 		a.Port = DefaultPort
 	}
@@ -343,8 +348,6 @@ func (a *Announcer) Start() error {
 		a.Interval = FastDiscoveryInterval
 	}
 	a.seq = 0
-	a.stop = make(chan struct{})
-	a.done = make(chan struct{})
 	conn := a.Conn
 	if conn == nil {
 		c, err := net.ListenUDP("udp4", &net.UDPAddr{Port: 0})
@@ -354,35 +357,59 @@ func (a *Announcer) Start() error {
 		_ = c.SetWriteBuffer(8 << 10)
 		conn = c
 	}
-	go a.loop(conn)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	a.stop = stop
+	a.done = done
+	go a.loop(conn, stop, done)
 	return nil
 }
 
 // Stop ends the announcer and closes a connection it opened itself.
 func (a *Announcer) Stop() {
-	if a.stop == nil {
+	a.mu.Lock()
+	stop := a.stop
+	done := a.done
+	if stop == nil {
+		a.mu.Unlock()
 		return
 	}
-	a.once.Do(func() { close(a.stop) })
-	<-a.done
+	a.stop = nil
+	a.done = nil
+	close(stop)
+	a.mu.Unlock()
+	<-done
 }
 
-func (a *Announcer) loop(conn *net.UDPConn) {
-	defer close(a.done)
+func (a *Announcer) loop(conn *net.UDPConn, stop, done chan struct{}) {
+	defer close(done)
 	defer func() {
 		if a.Conn == nil {
 			conn.Close()
 		}
 	}()
 	currentInterval := a.Interval
-	t := time.NewTicker(currentInterval)
-	defer t.Stop()
+	nextDeadline := time.Now().Add(currentInterval)
+	timer := time.NewTimer(currentInterval)
+	defer timer.Stop()
 	a.send(conn)
 	for {
 		select {
-		case <-a.stop:
+		case <-stop:
 			return
-		case <-t.C:
+		case <-timer.C:
+			now := time.Now()
+
+			// Wall-clock jump detection: if clock jumped significantly, resync
+			if now.Sub(nextDeadline) > currentInterval/10 || now.Before(nextDeadline.Add(-currentInterval)) {
+				nextDeadline = now.Add(currentInterval)
+			} else {
+				nextDeadline = nextDeadline.Add(currentInterval)
+				if nextDeadline.Before(now) {
+					nextDeadline = now.Add(currentInterval)
+				}
+			}
+
 			a.send(conn)
 			if a.adaptive {
 				paired := false
@@ -399,8 +426,11 @@ func (a *Announcer) loop(conn *net.UDPConn) {
 				}
 				if nextInterval != currentInterval {
 					currentInterval = nextInterval
-					t.Reset(currentInterval)
 				}
+			}
+			timer.Reset(time.Until(nextDeadline))
+			if d := time.Until(nextDeadline); d <= 0 {
+				timer.Reset(currentInterval)
 			}
 		}
 	}
@@ -450,28 +480,36 @@ type Browser struct {
 // Listen binds the discovery port and starts collecting. Binding the wildcard
 // address is required to receive a broadcast on Linux.
 func (b *Browser) Listen() error {
+	b.mu.Lock()
+	if b.stop != nil {
+		b.mu.Unlock()
+		return errors.New("discovery: browser already listening")
+	}
 	if b.Port == 0 {
 		b.Port = DefaultPort
 	}
 	if b.TTL == 0 {
 		b.TTL = DefaultTTL
 	}
-	b.mu.Lock()
 	if b.peers == nil {
 		b.peers = make(map[string]Peer)
 	}
-	b.mu.Unlock()
 	conn := b.Conn
-	if conn == nil {
+	ownConn := conn == nil
+	if ownConn {
 		c, err := b.bind()
 		if err != nil {
+			b.mu.Unlock()
 			return err
 		}
 		conn = c
 	}
-	b.stop = make(chan struct{})
-	b.done = make(chan struct{})
-	go b.loop(conn)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	b.stop = stop
+	b.done = done
+	b.mu.Unlock()
+	go b.loop(conn, ownConn, stop, done)
 	return nil
 }
 
@@ -489,21 +527,24 @@ func (b *Browser) bind() (*net.UDPConn, error) {
 
 // Close stops the browser.
 func (b *Browser) Close() {
-	if b.stop == nil {
+	b.mu.Lock()
+	stop := b.stop
+	done := b.done
+	if stop == nil {
+		b.mu.Unlock()
 		return
 	}
-	select {
-	case <-b.stop:
-	default:
-		close(b.stop)
-	}
-	<-b.done
+	b.stop = nil
+	b.done = nil
+	close(stop)
+	b.mu.Unlock()
+	<-done
 }
 
-func (b *Browser) loop(conn *net.UDPConn) {
-	defer close(b.done)
+func (b *Browser) loop(conn *net.UDPConn, ownConn bool, stop, done chan struct{}) {
+	defer close(done)
 	defer func() {
-		if b.Conn == nil {
+		if ownConn {
 			conn.Close()
 		}
 	}()
@@ -516,14 +557,14 @@ func (b *Browser) loop(conn *net.UDPConn) {
 				return
 			}
 			select {
-			case <-b.stop:
+			case <-stop:
 				return
 			default:
 			}
 			continue // timeout, or a datagram we could not read
 		}
 		select {
-		case <-b.stop:
+		case <-stop:
 			return
 		default:
 		}

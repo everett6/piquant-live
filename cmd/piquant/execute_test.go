@@ -138,6 +138,29 @@ func TestExecuteAbortsOnHighPingLatency(t *testing.T) {
 	if report2.PingPlan == nil {
 		t.Fatalf("expected PingPlan attached when all probes fail")
 	}
+
+	// Explicit --max-ping-ms 0 disables the max-ping threshold instead of overriding with 1500ms.
+	opts0, err := parseExecuteOptions([]string{
+		"--dir", trendDir,
+		"--carry-dir", t.TempDir(),
+		"--dtb3", filepath.Join(t.TempDir(), "missing.csv"),
+		"--data", dataDir,
+		"--env", envPath,
+		"--alert-env", alertEnv,
+		"--ping-probe=true",
+		"--max-ping-ms", "0",
+	})
+	if err != nil {
+		t.Fatalf("parseExecuteOptions(--max-ping-ms 0) failed: %v", err)
+	}
+	if opts0.maxPingMs != 0 {
+		t.Fatalf("expected maxPingMs == 0, got %v", opts0.maxPingMs)
+	}
+	opts0.coinbaseBaseURL = cbSrv.URL
+	opts0.pingEndpoints = []execution.ExchangeEndpoint{{Venue: "coinbase", URL: slowPingSrv.URL}}
+	if _, err := executeWithOptions(ctx, opts0); errors.Is(err, execution.ErrHighLatency) {
+		t.Fatalf("expected --max-ping-ms 0 to disable latency threshold, got ErrHighLatency: %v", err)
+	}
 }
 
 func TestExecutePersistentHighWaterMarkDrawdownKillSwitch(t *testing.T) {
@@ -568,5 +591,134 @@ func TestExecuteQ56QuantumFastDryRunAndRebalanceBuffer(t *testing.T) {
 	}
 	if !foundBufferSkip {
 		t.Fatalf("expected rebalance buffer skip with 25%% buffer from 0%% initial holdings, plans=%+v", rep.Plans)
+	}
+}
+
+func TestParseExecuteOptionsValidation(t *testing.T) {
+	validArgs := [][]string{
+		{"--portfolio", "q42_dualspeed"},
+		{"--portfolio", "Q57_HRP_HURST"},
+		{"--portfolio", "s36_fut", "--tax-rate-pct", "0", "--nav", "0", "--order-ttl", "0s"},
+		{"--max-daily-usd", "100", "--max-order-usd", "50", "--max-drawdown-pct", "100"},
+	}
+	for _, args := range validArgs {
+		if _, err := parseExecuteOptions(args); err != nil {
+			t.Fatalf("parseExecuteOptions(%v) unexpected error: %v", args, err)
+		}
+	}
+
+	invalidCases := []struct {
+		name string
+		args []string
+	}{
+		{"portfolio typo", []string{"--portfolio", "q42_dualspeeed"}},
+		{"portfolio unknown", []string{"--portfolio", "nonexistent"}},
+		{"max-daily-usd zero", []string{"--max-daily-usd", "0"}},
+		{"max-daily-usd negative", []string{"--max-daily-usd", "-10"}},
+		{"max-daily-usd NaN", []string{"--max-daily-usd", "NaN"}},
+		{"max-daily-usd Inf", []string{"--max-daily-usd", "+Inf"}},
+		{"max-order-usd zero", []string{"--max-order-usd", "0"}},
+		{"max-order-usd negative", []string{"--max-order-usd", "-1"}},
+		{"tax-rate-pct negative", []string{"--tax-rate-pct", "-0.1"}},
+		{"tax-rate-pct over 100", []string{"--tax-rate-pct", "100.1"}},
+		{"max-drawdown-pct zero", []string{"--max-drawdown-pct", "0"}},
+		{"max-drawdown-pct over 100", []string{"--max-drawdown-pct", "101"}},
+		{"order-ttl negative", []string{"--order-ttl", "-1s"}},
+		{"nav negative", []string{"--nav", "-50"}},
+		{"nav NaN", []string{"--nav", "NaN"}},
+	}
+	for _, tc := range invalidCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := parseExecuteOptions(tc.args); err == nil {
+				t.Fatalf("parseExecuteOptions(%v) expected error, got nil", tc.args)
+			}
+		})
+	}
+}
+
+func TestNormalizeQuoteMidAndInvalidMidGuard(t *testing.T) {
+	q := normalizeQuoteMid(execution.Quote{Symbol: "BTC-USD", Bid: 59990, Ask: 60010, Mid: 0})
+	if q.Mid != 60000 {
+		t.Fatalf("normalizeQuoteMid = %v, want 60000", q.Mid)
+	}
+	bad := normalizeQuoteMid(execution.Quote{Symbol: "BTC-USD", Bid: 0, Ask: 0, Mid: 0})
+	if bad.Mid != 0 {
+		t.Fatalf("normalizeQuoteMid bad = %v, want 0", bad.Mid)
+	}
+
+	ctx := context.Background()
+	trendDir, dataDir, envPath, alertEnv := setupExecuteTestFixtures(t)
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sym := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("product_ids")))
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"pricebooks": []map[string]any{
+				{
+					"product_id": sym,
+					"bids":       []map[string]string{{"price": "0", "size": "1.0"}},
+					"asks":       []map[string]string{{"price": "0", "size": "1.0"}},
+					"time":       ts,
+				},
+			},
+		})
+	}))
+	defer badSrv.Close()
+	fastPingSrv := newMockPingServer(t, 1*time.Millisecond)
+	defer fastPingSrv.Close()
+
+	opts, err := parseExecuteOptions([]string{
+		"--dir", trendDir,
+		"--carry-dir", t.TempDir(),
+		"--dtb3", filepath.Join(t.TempDir(), "missing.csv"),
+		"--data", dataDir,
+		"--env", envPath,
+		"--alert-env", alertEnv,
+		"--nav", "1000",
+	})
+	if err != nil {
+		t.Fatalf("parseExecuteOptions: %v", err)
+	}
+	opts.coinbaseBaseURL = badSrv.URL
+	opts.pingEndpoints = []execution.ExchangeEndpoint{{Venue: "coinbase", URL: fastPingSrv.URL}}
+
+	rep, err := executeWithOptions(ctx, opts)
+	if err == nil || len(rep.Errors) == 0 {
+		t.Fatalf("expected error on zero-mid quote, got rep.Errors=%v err=%v", rep.Errors, err)
+	}
+}
+
+func TestExecuteLiveSurfacesAlertEnvErrorAndSchwabValidation(t *testing.T) {
+	trendDir, dataDir, _, _ := setupExecuteTestFixtures(t)
+	t.Setenv(execution.LiveArmEnvVar, execution.LiveArmEnvValue)
+	t.Setenv("COINBASE_API_KEY", "test-key")
+	t.Setenv("COINBASE_API_SECRET", "test-secret")
+
+	fastPingSrv := newMockPingServer(t, 1*time.Millisecond)
+	defer fastPingSrv.Close()
+
+	badAlertEnvDir := t.TempDir() // directory, not a file -> non-ErrNotExist error
+	opts, err := parseExecuteOptions([]string{
+		"--dry-run=false",
+		"--confirm-live", execution.LiveArmConfirmToken,
+		"--dir", trendDir,
+		"--carry-dir", t.TempDir(),
+		"--dtb3", filepath.Join(t.TempDir(), "missing.csv"),
+		"--data", dataDir,
+		"--alert-env", badAlertEnvDir,
+		"--nav", "1000",
+	})
+	if err != nil {
+		t.Fatalf("parseExecuteOptions: %v", err)
+	}
+	opts.pingEndpoints = []execution.ExchangeEndpoint{{Venue: "coinbase", URL: fastPingSrv.URL}}
+	if _, err := executeWithOptions(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "load alert env") {
+		t.Fatalf("expected load alert env error in live mode, got %v", err)
+	}
+
+	if err := runSchwab(context.Background(), []string{"--portfolio", "q42_dualspeeed"}); err == nil {
+		t.Fatal("expected runSchwab to reject unknown portfolio")
+	}
+	if err := runSchwab(context.Background(), []string{"--nav", "-10"}); err == nil {
+		t.Fatal("expected runSchwab to reject negative nav")
 	}
 }

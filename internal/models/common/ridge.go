@@ -50,17 +50,33 @@ type Sample struct {
 // Standardise computes the training mean and standard deviation per feature.
 // A feature that never varies gets std 1 so its standardised value is 0 and
 // the penalty keeps its coefficient at 0, rather than dividing by zero.
-func (r *Ridge) Standardise(samples []Sample, idx []int) {
-	for _, j := range idx {
+func (r *Ridge) Standardise(samples []Sample, idx []int) error {
+	if len(samples) == 0 {
+		return ErrNotFitted
+	}
+	k := len(idx)
+	if k > FeatureCount {
+		k = FeatureCount
+	}
+	n := float64(len(samples))
+	for _, j := range idx[:k] {
+		if j < 0 || j >= FeatureCount {
+			return ErrNotFitted
+		}
 		var sum, sumSq float64
 		for i := range samples {
 			v := samples[i].X[j]
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return ErrNotFitted
+			}
 			sum += v
 			sumSq += v * v
 		}
-		n := float64(len(samples))
 		mean := sum / n
 		varr := sumSq/n - mean*mean
+		if math.IsNaN(mean) || math.IsInf(mean, 0) || math.IsNaN(varr) || math.IsInf(varr, 0) {
+			return ErrNotFitted
+		}
 		std := 1.0
 		if varr > 0 {
 			std = math.Sqrt(varr)
@@ -71,14 +87,20 @@ func (r *Ridge) Standardise(samples []Sample, idx []int) {
 		r.Mean[j] = mean
 		r.Std[j] = std
 	}
+	return nil
 }
 
 // Fit solves the ridge normal equations over idx.
 func (r *Ridge) Fit(samples []Sample, idx []int) error {
+	r.Weights = [FeatureCount]float64{}
+	r.Bias = 0
+	r.Fitted = false
 	if len(samples) == 0 {
 		return ErrNotFitted
 	}
-	r.Standardise(samples, idx)
+	if err := r.Standardise(samples, idx); err != nil {
+		return err
+	}
 	// Solve only over the used features to keep the system small.
 	k := len(idx)
 	if k > FeatureCount {
@@ -91,11 +113,14 @@ func (r *Ridge) Fit(samples []Sample, idx []int) error {
 	// Row 0 carries the bias (unpenalised), rows 1..k the features.
 	a[0][0] = n
 	for s := range samples {
+		y := samples[s].Y
+		if math.IsNaN(y) || math.IsInf(y, 0) {
+			return ErrNotFitted
+		}
 		for j := 0; j < k; j++ {
 			jj := idx[j]
 			row[j] = (samples[s].X[jj] - r.Mean[jj]) / r.Std[jj]
 		}
-		y := samples[s].Y
 		a[0][FeatureCount] += y
 		for j := 0; j < k; j++ {
 			rj := row[j]
@@ -154,7 +179,7 @@ func solveFixed(a *[FeatureCount + 1][FeatureCount + 1]float64, n, rhsCol int, o
 				best, pivot = v, row
 			}
 		}
-		if best < 1e-12 {
+		if math.IsNaN(best) || math.IsInf(best, 0) || best < 1e-12 {
 			return false
 		}
 		if pivot != col {

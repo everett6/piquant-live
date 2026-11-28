@@ -165,6 +165,14 @@ func (o *CoinbaseSignalOracle) appendKeyIfMissingLocked(base, key string) {
 
 // extractBaseCurrency extracts the underlying asset symbol (e.g. BTC from BTC-USD, BTCUSDC, BTCUSDT).
 func extractBaseCurrency(s string) string {
+	switch s {
+	case "BTC", "BTCUSD", "BTCUSDT", "BTCUSDC", "BTC-USD", "BTC-USDT", "BTC-USDC":
+		return "BTC"
+	case "ETH", "ETHUSD", "ETHUSDT", "ETHUSDC", "ETH-USD", "ETH-USDT", "ETH-USDC":
+		return "ETH"
+	case "SOL", "SOLUSD", "SOLUSDT", "SOLUSDC", "SOL-USD", "SOL-USDT", "SOL-USDC":
+		return "SOL"
+	}
 	u := strings.ToUpper(s)
 	u = strings.ReplaceAll(u, "-", "")
 	u = strings.ReplaceAll(u, "_", "")
@@ -484,14 +492,15 @@ func (c *CoinbaseStreamIngestor) IsConnected() bool {
 }
 
 // Stats returns connection metrics.
-func (c *CoinbaseStreamIngestor) Stats() (total, depths, trades, gaps, reconnects, fallbacks uint64, lastNs int64) {
+func (c *CoinbaseStreamIngestor) Stats() (total, depths, trades, gaps, reconnects, fallbacks uint64, lastNs, lastRealNs int64) {
 	return c.stats.TotalEvents.Load(),
 		c.stats.DepthUpdates.Load(),
 		c.stats.Trades.Load(),
 		c.stats.GapsDetected.Load(),
 		c.stats.Reconnects.Load(),
 		c.stats.FallbackTicks.Load(),
-		c.stats.LastEventNs.Load()
+		c.stats.LastEventNs.Load(),
+		c.stats.LastEventNs.Load() // Coinbase doesn't track fallback separately
 }
 
 func (c *CoinbaseStreamIngestor) runLoop(ctx context.Context) {
@@ -506,6 +515,7 @@ func (c *CoinbaseStreamIngestor) runLoop(ctx context.Context) {
 		default:
 		}
 
+		connStart := time.Now()
 		err := c.connectAndStream(ctx)
 		c.oracle.connected.Store(false)
 		if ctx.Err() != nil {
@@ -513,11 +523,16 @@ func (c *CoinbaseStreamIngestor) runLoop(ctx context.Context) {
 		}
 
 		c.stats.Reconnects.Add(1)
-		if err != nil {
-			time.Sleep(backoff)
-			backoff = time.Duration(math.Min(float64(backoff*2), float64(c.cfg.ReconnectMax)))
-		} else {
+		if time.Since(connStart) > 15*time.Second || err == nil {
 			backoff = c.cfg.ReconnectBase
+		}
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff = time.Duration(math.Min(float64(backoff*2), float64(c.cfg.ReconnectMax)))
 		}
 	}
 }
@@ -593,6 +608,7 @@ func (c *CoinbaseStreamIngestor) connectAndStream(ctx context.Context) error {
 		"Sec-WebSocket-Key: %s\r\n"+
 		"Sec-WebSocket-Version: 13\r\n\r\n", path, u.Host, keyB64)
 
+	_ = conn.SetDeadline(time.Now().Add(8 * time.Second))
 	if _, err := conn.Write([]byte(req)); err != nil {
 		return fmt.Errorf("Coinbase handshake write failed: %w", err)
 	}
@@ -626,12 +642,14 @@ func (c *CoinbaseStreamIngestor) connectAndStream(ctx context.Context) error {
 	if err := sendWSText(conn, subMsg); err != nil {
 		return fmt.Errorf("Coinbase subscription failed: %w", err)
 	}
+	_ = conn.SetDeadline(time.Time{})
 
 	c.oracle.connected.Store(true)
 
 	// Keepalive ping loop
 	pingCtx, pingCancel := context.WithCancel(ctx)
 	defer pingCancel()
+	var writeMu sync.Mutex
 
 	go func() {
 		ticker := time.NewTicker(c.cfg.PingInterval)
@@ -643,15 +661,24 @@ func (c *CoinbaseStreamIngestor) connectAndStream(ctx context.Context) error {
 			case <-ticker.C:
 				// Coinbase RFC 6455 ping with bounded write deadline
 				pingFrame := []byte{0x89, 0x80, 0x11, 0x22, 0x33, 0x44}
+				writeMu.Lock()
 				_ = conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
-				if _, err := conn.Write(pingFrame); err != nil {
+				_, err := conn.Write(pingFrame)
+				writeMu.Unlock()
+				if err != nil {
 					return
 				}
 			}
 		}
 	}()
 
-	// Frame read loop
+	readTimeout := c.cfg.PingInterval + 10*time.Second
+	if readTimeout < 30*time.Second {
+		readTimeout = 30 * time.Second
+	}
+
+	// Frame read loop - handle fragmented messages (continuation frames)
+	var reassemblyBuf []byte
 	for {
 		select {
 		case <-ctx.Done():
@@ -659,28 +686,101 @@ func (c *CoinbaseStreamIngestor) connectAndStream(ctx context.Context) error {
 		default:
 		}
 
-		_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
-		payload, op, err := readWSFrame(br)
+		_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
+		payload, op, fin, err := readWSFrame(br)
 		if err != nil {
+			c.invalidateBooks()
 			return err
 		}
 
 		if op == 0x8 {
+			c.invalidateBooks()
 			return io.EOF
 		}
 		if op == 0x9 { // Ping from Coinbase
+			writeMu.Lock()
 			_ = sendWSPong(conn, payload)
+			writeMu.Unlock()
 			continue
 		}
 		if op == 0xA { // Pong in reply to our ping
 			continue
 		}
-		if op != 0x1 && op != 0x2 {
+
+		// Handle fragmented messages per RFC 6455
+		if op == 0x0 { // Continuation frame
+			if reassemblyBuf == nil {
+				continue
+			}
+			reassemblyBuf = append(reassemblyBuf, payload...)
+			if fin {
+				c.HandleStreamPayload(reassemblyBuf)
+				reassemblyBuf = nil
+			}
 			continue
 		}
 
-		c.HandleStreamPayload(payload)
+		// New message frame (text=0x1, binary=0x2)
+		if op == 0x1 || op == 0x2 {
+			if reassemblyBuf != nil {
+				reassemblyBuf = nil
+			}
+			if fin {
+				c.HandleStreamPayload(payload)
+			} else {
+				reassemblyBuf = payload
+			}
+			continue
+		}
 	}
+
+}
+
+func (c *CoinbaseStreamIngestor) invalidateBooks() {
+	c.booksMu.Lock()
+	for _, book := range c.books {
+		book.Initialized = false
+		book.NumBids = 0
+		book.NumAsks = 0
+	}
+	c.booksMu.Unlock()
+}
+
+var (
+	cbTickerTypeKey    = []byte(`"type":"ticker"`)
+	cbErrorTypeKey     = []byte(`"type":"error"`)
+	cbProductIDKey     = []byte(`"product_id":`)
+	cbPriceKey         = []byte(`"price":`)
+	cbBestBidKey       = []byte(`"best_bid":`)
+	cbBestAskKey       = []byte(`"best_ask":`)
+	cbLastSizeKey      = []byte(`"last_size":`)
+	cbSideKey          = []byte(`"side":`)
+	cbBestBidSizeKey   = []byte(`"best_bid_size":`)
+	cbBestAskSizeKey   = []byte(`"best_ask_size":`)
+)
+
+func normalizeUniverseSymbolBytes(b []byte) string {
+	switch string(b) {
+	case "BTC-USD", "BTCUSD":
+		return "BTCUSD"
+	case "ETH-USD", "ETHUSD":
+		return "ETHUSD"
+	case "SOL-USD", "SOLUSD":
+		return "SOLUSD"
+	case "BTC-USDC", "BTCUSDC":
+		return "BTCUSDC"
+	case "ETH-USDC", "ETHUSDC":
+		return "ETHUSDC"
+	case "SOL-USDC", "SOLUSDC":
+		return "SOLUSDC"
+	case "BTC-USDT", "BTCUSDT":
+		return "BTCUSDT"
+	case "ETH-USDT", "ETHUSDT":
+		return "ETHUSDT"
+	case "SOL-USDT", "SOLUSDT":
+		return "SOLUSDT"
+	}
+	return NormalizeToUniverseSymbol(string(b))
 }
 
 // HandleStreamPayload processes raw Coinbase WebSocket payload bytes with zero heap allocation.
@@ -689,8 +789,21 @@ func (c *CoinbaseStreamIngestor) HandleStreamPayload(payload []byte) {
 	nowNs := now.UnixNano()
 	c.stats.LastEventNs.Store(nowNs)
 
+	// Check for error messages from Coinbase
+	if bytes.Contains(payload, cbErrorTypeKey) {
+		// Log error and invalidate books to force resync on reconnect
+		c.booksMu.Lock()
+		for _, book := range c.books {
+			book.Initialized = false
+			book.NumBids = 0
+			book.NumAsks = 0
+		}
+		c.booksMu.Unlock()
+		return
+	}
+
 	// Quick check for ticker frame
-	if !bytes.Contains(payload, []byte(`"type":"ticker"`)) {
+	if !bytes.Contains(payload, cbTickerTypeKey) {
 		return
 	}
 
@@ -730,8 +843,8 @@ func (c *CoinbaseStreamIngestor) HandleStreamPayload(payload []byte) {
 		// Top-of-book update first (mid), so quoting/gating sees the book before the trade print.
 		if bestBid > 0 && bestAsk >= bestBid {
 			if c.symNames != nil {
-				c.updateBook(c.symNames[symID], bestBid, nonNeg(fastExtractJSONFloat(payload, []byte(`"best_bid_size":`))),
-					bestAsk, nonNeg(fastExtractJSONFloat(payload, []byte(`"best_ask_size":`))), nowNs)
+				c.updateBook(c.symNames[symID], bestBid, nonNeg(fastExtractJSONFloat(payload, cbBestBidSizeKey)),
+					bestAsk, nonNeg(fastExtractJSONFloat(payload, cbBestAskSizeKey)), nowNs)
 			}
 			if !c.ring.Push(engine.MarketEvent{
 				Timestamp: nowNs,
@@ -763,12 +876,11 @@ func (c *CoinbaseStreamIngestor) HandleStreamPayload(payload []byte) {
 // FastParseCoinbaseTicker extracts ticker data from Coinbase JSON with 0 allocations.
 func FastParseCoinbaseTicker(payload []byte) (symbol string, price, bestBid, bestAsk, lastSize float64, isBuy bool, ok bool) {
 	// 1. Extract product_id
-	pIDKey := []byte(`"product_id":`)
-	idx := bytes.Index(payload, pIDKey)
+	idx := bytes.Index(payload, cbProductIDKey)
 	if idx < 0 {
 		return "", 0, 0, 0, 0, false, false
 	}
-	rest := payload[idx+len(pIDKey):]
+	rest := payload[idx+len(cbProductIDKey):]
 	for len(rest) > 0 && rest[0] <= ' ' {
 		rest = rest[1:]
 	}
@@ -780,13 +892,13 @@ func FastParseCoinbaseTicker(payload []byte) (symbol string, price, bestBid, bes
 	if end <= 0 {
 		return "", 0, 0, 0, 0, false, false
 	}
-	symbol = NormalizeToUniverseSymbol(string(rest[:end]))
+	symbol = normalizeUniverseSymbolBytes(rest[:end])
 
 	// 2. Extract price
-	price = fastExtractJSONFloat(payload, []byte(`"price":`))
-	bestBid = fastExtractJSONFloat(payload, []byte(`"best_bid":`))
-	bestAsk = fastExtractJSONFloat(payload, []byte(`"best_ask":`))
-	lastSize = fastExtractJSONFloat(payload, []byte(`"last_size":`))
+	price = fastExtractJSONFloat(payload, cbPriceKey)
+	bestBid = fastExtractJSONFloat(payload, cbBestBidKey)
+	bestAsk = fastExtractJSONFloat(payload, cbBestAskKey)
+	lastSize = fastExtractJSONFloat(payload, cbLastSizeKey)
 
 	if math.IsNaN(price) || math.IsInf(price, 0) || price <= 0 {
 		return "", 0, 0, 0, 0, false, false
@@ -802,9 +914,8 @@ func FastParseCoinbaseTicker(payload []byte) (symbol string, price, bestBid, bes
 	}
 
 	// 3. Extract side ("buy" vs "sell")
-	sideKey := []byte(`"side":`)
-	if sIdx := bytes.Index(payload, sideKey); sIdx >= 0 {
-		sRest := payload[sIdx+len(sideKey):]
+	if sIdx := bytes.Index(payload, cbSideKey); sIdx >= 0 {
+		sRest := payload[sIdx+len(cbSideKey):]
 		for len(sRest) > 0 && (sRest[0] <= ' ' || sRest[0] == '"') {
 			sRest = sRest[1:]
 		}

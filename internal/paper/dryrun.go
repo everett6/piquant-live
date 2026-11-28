@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -28,55 +29,56 @@ import (
 
 // DryRunConfig configures the 14-day autonomous paper money dry run.
 type DryRunConfig struct {
-	InitialCapital  float64       // Initial paper money in USDT (default: 100,000.00)
-	TargetDuration  time.Duration // Target autonomous duration (default: 14 * 24 * time.Hour = 336h)
-	Symbols         []string      // Instruments traded (default: BTCUSDT, ETHUSDT)
-	MaxDrawdownPct  float64       // Max allowable drawdown % before circuit breaker halts (default: 2.0%)
-	MakerFeeBps     float64       // Maker fee/rebate in bps (default: 0.0)
-	TakerFeeBps     float64       // Taker fee in bps (default: 4.0)
-	KylesLambda     float64       // Slippage coefficient on taker orders (bps per unit volume, default: 0.25)
-	StateFile       string        // Path to checkpoint state (default: data/paper/dryrun_state.json)
-	JournalFile     string        // Path to trade journal (default: data/paper/dryrun_journal.jsonl)
-	CheckpointFreq  time.Duration // Interval to save state (default: 5 * time.Second)
-	OrderLatency     time.Duration // Feed + order placement latency before maker order is active (default: 50ms)
-	EnableAllModels   bool          // Re-enable models disabled by ablation gate in the ensemble (default: false)
-	ExtendOnShutdown  bool          // Automatically extend target end time by offline duration upon shutdown/power-cycle recovery (default: true)
-	FlattenOnShutdown bool          // Automatically liquidate all open positions to cash at current mark price on shutdown (default: true)
-	WindowPreset      string        // Window preset: "7d" (last week), "30d" (last month), "14d" (2 weeks)
-	BaseLeverage      float64       // Nominal base leverage multiplier (default: 2.5x)
-	MaxLeverage       float64       // Maximum allowable leverage ceiling (default: 5.0x)
-	EnableMacroShield bool          // Zero-cost macro calendar event shield (default: true)
-	MacroSyncURL      string        // Optional custom URL for macro calendar sync (default: ForexFactory free feed)
-	EnableNewsPipeline bool         // Macro and micro news intelligence pipeline with time-decay & exploit defense (default: true)
-	NewsSyncURL        string       // Optional custom URL for news feed ingestion
-	DataDir           string        // Root data directory (default: "data")
-	TargetProfitBps   float64       // Net target profit margin per swing in bps (default: 25.0 bps = 0.25%)
-	EntryOffsetBps    float64       // Minimum maker entry distance from mid in bps (default: 12.5 bps = 0.125%)
-	StopLossBps       float64       // Structural invalidation stop loss in bps (default: 75.0 bps = 0.75%)
-	CleanReset        bool          // Reset cumulative historical win/loss stats on start
-	EnableTaker       bool          // Opt-in to tactical taker executions on high-conviction momentum (default: false)
-	MonthlyGainCapPct float64       // Soft ceiling for monthly profit target; triggers capital preservation when reached (default: 15.0%)
-	SpotOnly          bool          // Spot-only cash account mode: disable naked shorting, long inventory only (default: false)
-	TaxRatePct        float64       // Estimated income/capital gains tax rate percentage (default: 35.0% for US/CA)
-	ZeroFeeMaker      bool          // Zero-fee tier on major pairs (e.g. Binance.US BTC/USD, BTC/USDT, BTC/USDC)
-	ClipFraction      float64       // Fraction of max symbol allocation per quote clip (default: 0.45 = 45%)
-	BuyThreshold      float64       // Directional conviction entry threshold (default: 0.65; dynamic up to 0.72 on thin bids)
-	SellThreshold     float64       // Directional conviction short entry threshold (default: 0.35; dynamic down to 0.28 on heavy bids)
-	Debug             bool          // Enable verbose real-time MFT decision matrix logging (default: false)
-	TickSizes         map[string]float64 // Per-symbol venue price tick overrides (e.g. Binance.US BTCUSDT = 0.01)
-	TargetFloorFrac   float64            // Take-profit decays to this fraction of the target, never lower (default: 0.80)
-	MaxHoldMinutes    float64            // Time stop: exit a losing position held longer than this (default: 45; <0 disables)
-	ContractSizes     map[string]float64 // Futures contract size per symbol (e.g. BTC nano = 0.01); empty = spot lots
-	VPINBucketUSDK    map[string]float64 // Per-symbol-prefix VPIN bucket in $k (venue-dependent); empty = vpinBucketUSDK
-	FundingBpsPerHour float64            // Futures funding cost charged on open notional per hour (default: 0)
-	MonthlyTargetPct  float64            // Goal controller monthly return target in % (default: 7)
-	TargetWinRatePct  float64            // Goal controller win-rate target in % (default: 60)
+	InitialCapital         float64            // Initial paper money in USDT (default: 100,000.00)
+	TargetDuration         time.Duration      // Target autonomous duration (default: 14 * 24 * time.Hour = 336h)
+	TargetDurationExplicit bool               // Preserve TargetDuration instead of deriving it from WindowPreset
+	Symbols                []string           // Instruments traded (default: BTCUSDT, ETHUSDT)
+	MaxDrawdownPct         float64            // Max allowable drawdown % before circuit breaker halts (default: 2.0%)
+	MakerFeeBps            float64            // Maker fee/rebate in bps (default: 0.0)
+	TakerFeeBps            float64            // Taker fee in bps (default: 4.0)
+	KylesLambda            float64            // Slippage coefficient on taker orders (bps per unit volume, default: 0.25)
+	StateFile              string             // Path to checkpoint state (default: data/paper/dryrun_state.json)
+	JournalFile            string             // Path to trade journal (default: data/paper/dryrun_journal.jsonl)
+	CheckpointFreq         time.Duration      // Interval to save state (default: 5 * time.Second)
+	OrderLatency           time.Duration      // Feed + order placement latency before maker order is active (default: 50ms)
+	EnableAllModels        bool               // Re-enable models disabled by ablation gate in the ensemble (default: false)
+	ExtendOnShutdown       bool               // Automatically extend target end time by offline duration upon shutdown/power-cycle recovery (default: true)
+	FlattenOnShutdown      bool               // Automatically liquidate all open positions to cash at current mark price on shutdown (default: true)
+	WindowPreset           string             // Window preset: "7d" (last week), "30d" (last month), "14d" (2 weeks)
+	BaseLeverage           float64            // Nominal base leverage multiplier (default: 2.5x)
+	MaxLeverage            float64            // Maximum allowable leverage ceiling (default: 5.0x)
+	EnableMacroShield      bool               // Zero-cost macro calendar event shield (default: true)
+	MacroSyncURL           string             // Optional custom URL for macro calendar sync (default: ForexFactory free feed)
+	EnableNewsPipeline     bool               // Macro and micro news intelligence pipeline with time-decay & exploit defense (default: true)
+	NewsSyncURL            string             // Optional custom URL for news feed ingestion
+	DataDir                string             // Root data directory (default: "data")
+	TargetProfitBps        float64            // Net target profit margin per swing in bps (default: 25.0 bps = 0.25%)
+	EntryOffsetBps         float64            // Minimum maker entry distance from mid in bps (default: 12.5 bps = 0.125%)
+	StopLossBps            float64            // Structural invalidation stop loss in bps (default: 75.0 bps = 0.75%)
+	CleanReset             bool               // Reset cumulative historical win/loss stats on start
+	EnableTaker            bool               // Opt-in to tactical taker executions on high-conviction momentum (default: false)
+	MonthlyGainCapPct      float64            // Soft ceiling for monthly profit target; triggers capital preservation when reached (default: 15.0%)
+	SpotOnly               bool               // Spot-only cash account mode: disable naked shorting, long inventory only (default: false)
+	TaxRatePct             float64            // Estimated income/capital gains tax rate percentage (default: 35.0% for US/CA)
+	ZeroFeeMaker           bool               // Zero-fee tier on major pairs (e.g. Binance.US BTC/USD, BTC/USDT, BTC/USDC)
+	ClipFraction           float64            // Fraction of max symbol allocation per quote clip (default: 0.45 = 45%)
+	BuyThreshold           float64            // Directional conviction entry threshold (default: 0.65; dynamic up to 0.72 on thin bids)
+	SellThreshold          float64            // Directional conviction short entry threshold (default: 0.35; dynamic down to 0.28 on heavy bids)
+	Debug                  bool               // Enable verbose real-time MFT decision matrix logging (default: false)
+	TickSizes              map[string]float64 // Per-symbol venue price tick overrides (e.g. Binance.US BTCUSDT = 0.01)
+	TargetFloorFrac        float64            // Take-profit decays to this fraction of the target, never lower (default: 0.80)
+	MaxHoldMinutes         float64            // Time stop: exit a losing position held longer than this (default: 45; <0 disables)
+	ContractSizes          map[string]float64 // Futures contract size per symbol (e.g. BTC nano = 0.01); empty = spot lots
+	VPINBucketUSDK         map[string]float64 // Per-symbol-prefix VPIN bucket in $k (venue-dependent); empty = vpinBucketUSDK
+	FundingBpsPerHour      float64            // Futures funding cost charged on open notional per hour (default: 0)
+	MonthlyTargetPct       float64            // Goal controller monthly return target in % (default: 7)
+	TargetWinRatePct       float64            // Goal controller win-rate target in % (default: 60)
 	// ExpectancyBreakerMinTrades > 0 stops new entries (exits still run) once at least this many round trips
 	// have closed and the upper 95% bound of mean net bps per trade is below zero. 0 disables it.
 	ExpectancyBreakerMinTrades int
 	// MFTEntriesOff stops all new medium-frequency entries (exits still run); the trend core ledger is unaffected.
-	MFTEntriesOff bool
-	DisableCloudParams bool              // Ignore optimal_params.json hot-reloads (cloud/backtest-tuned overrides)
+	MFTEntriesOff      bool
+	DisableCloudParams bool // Ignore optimal_params.json hot-reloads (cloud/backtest-tuned overrides)
 }
 
 // DefaultDryRunConfig returns standard institutional configuration for the 2-week run.
@@ -86,60 +88,60 @@ func DefaultDryRunConfig(dataDir string) DryRunConfig {
 	}
 	paperDir := filepath.Join(dataDir, "paper")
 	return DryRunConfig{
-		InitialCapital:    200.00,
-		TargetDuration:    14 * 24 * time.Hour,
-		Symbols:           []string{"BTCUSDT", "ETHUSDT"},
-		MaxDrawdownPct:    2.0,
-		MakerFeeBps:       1.5, // Realistic Binance Spot/Futures retail maker fee (1.5 bps = 0.015% cost per fill)
-		TakerFeeBps:       4.0,
-		KylesLambda:       0.25,
-		StateFile:         filepath.Join(paperDir, "dryrun_state.json"),
-		JournalFile:       filepath.Join(paperDir, "dryrun_journal.jsonl"),
-		CheckpointFreq:    5 * time.Second,
-		OrderLatency:      120 * time.Millisecond, // Realistic US-to-Tokyo exchange fiber latency (120ms)
-		ExtendOnShutdown:  true,
-		FlattenOnShutdown: true,
-		BaseLeverage:      2.5,
-		MaxLeverage:       3.5,
+		InitialCapital:     200.00,
+		TargetDuration:     14 * 24 * time.Hour,
+		Symbols:            []string{"BTCUSDT", "ETHUSDT"},
+		MaxDrawdownPct:     2.0,
+		MakerFeeBps:        1.5, // Realistic Binance Spot/Futures retail maker fee (1.5 bps = 0.015% cost per fill)
+		TakerFeeBps:        4.0,
+		KylesLambda:        0.25,
+		StateFile:          filepath.Join(paperDir, "dryrun_state.json"),
+		JournalFile:        filepath.Join(paperDir, "dryrun_journal.jsonl"),
+		CheckpointFreq:     5 * time.Second,
+		OrderLatency:       120 * time.Millisecond, // Realistic US-to-Tokyo exchange fiber latency (120ms)
+		ExtendOnShutdown:   true,
+		FlattenOnShutdown:  true,
+		BaseLeverage:       2.5,
+		MaxLeverage:        3.5,
 		EnableMacroShield:  true,
 		EnableNewsPipeline: true,
 		DataDir:            dataDir,
-		TargetProfitBps:   50.0, // Quant hedge fund swing target (>= 50 bps per swing, completely eliminating fee drag)
-		EntryOffsetBps:    2.5,  // Patient maker entry at inside touch/queue level
-		StopLossBps:       60.0, // Structural stop-loss protecting against crashes
-		MonthlyGainCapPct: 15.0, // Hard ceiling for monthly profit target (preserves banked gains)
-		SpotOnly:          false,
-		TaxRatePct:        35.0, // Default 35% estimated tax reserve for US/CA
-		ZeroFeeMaker:      false, // Default standard maker fee (1.5 bps); opt-in to zero-fee BTC maker via --zero-fee-btc
-		ClipFraction:      0.45,  // 45% clip sizing for small spot cash accounts ($50-$75 per clip on $200 capital)
-		BuyThreshold:      0.65,  // Directional entry threshold (dynamic up to 0.72 on thin bids)
-		SellThreshold:     0.35,  // Short entry threshold (dynamic down to 0.28 on heavy bids)
-		CleanReset:        false,
-		EnableTaker:       false,
-		Debug:             false,
-		TargetFloorFrac:   0.80,
-		MonthlyTargetPct:  7.0,
-		TargetWinRatePct:  60.0,
-		MaxHoldMinutes:    45,
+		TargetProfitBps:    50.0, // Quant hedge fund swing target (>= 50 bps per swing, completely eliminating fee drag)
+		EntryOffsetBps:     2.5,  // Patient maker entry at inside touch/queue level
+		StopLossBps:        60.0, // Structural stop-loss protecting against crashes
+		MonthlyGainCapPct:  15.0, // Hard ceiling for monthly profit target (preserves banked gains)
+		SpotOnly:           false,
+		TaxRatePct:         35.0,  // Default 35% estimated tax reserve for US/CA
+		ZeroFeeMaker:       false, // Default standard maker fee (1.5 bps); opt-in to zero-fee BTC maker via --zero-fee-btc
+		ClipFraction:       0.45,  // 45% clip sizing for small spot cash accounts ($50-$75 per clip on $200 capital)
+		BuyThreshold:       0.65,  // Directional entry threshold (dynamic up to 0.72 on thin bids)
+		SellThreshold:      0.35,  // Short entry threshold (dynamic down to 0.28 on heavy bids)
+		CleanReset:         false,
+		EnableTaker:        false,
+		Debug:              false,
+		TargetFloorFrac:    0.80,
+		MonthlyTargetPct:   7.0,
+		TargetWinRatePct:   60.0,
+		MaxHoldMinutes:     45,
 	}
 }
 
 // Position tracks an individual symbol's inventory and execution metrics.
 type Position struct {
 	Symbol          string  `json:"symbol"`
-	Size            float64 `json:"size"`                        // Quantity (positive: long, negative: short)
-	AvgEntryPrice   float64 `json:"avg_entry_price"`             // Volume-weighted entry price
-	MarkPrice       float64 `json:"mark_price"`                  // Latest mid price
-	UnrealizedPnL   float64 `json:"unrealized_pnl"`              // Mark-to-market PnL
-	RealizedPnL     float64 `json:"realized_pnl"`                // Cumulative realized PnL
-	TotalTrades     int64   `json:"total_trades"`                // Total completed fills
-	MakerTrades     int64   `json:"maker_trades"`                // Maker fills
-	TakerTrades     int64   `json:"taker_trades"`                // Taker fills
-	TotalVolumeUSDT float64 `json:"total_volume_usdt"`           // Cumulative traded notional
-	PeakPrice       float64 `json:"peak_price,omitempty"`         // Peak favorable price achieved during position lifecycle
-	TrailingStop    float64 `json:"trailing_stop,omitempty"`       // Dynamic locked-in trailing stop price
-	HoldingSec      float64 `json:"holding_sec,omitempty"`         // Current position holding duration in seconds
-	EntryFeesUSDT   float64 `json:"entry_fees_usdt,omitempty"`     // Fees/funding paid on the open inventory, charged to the round trip on close
+	Size            float64 `json:"size"`                      // Quantity (positive: long, negative: short)
+	AvgEntryPrice   float64 `json:"avg_entry_price"`           // Volume-weighted entry price
+	MarkPrice       float64 `json:"mark_price"`                // Latest mid price
+	UnrealizedPnL   float64 `json:"unrealized_pnl"`            // Mark-to-market PnL
+	RealizedPnL     float64 `json:"realized_pnl"`              // Cumulative realized PnL
+	TotalTrades     int64   `json:"total_trades"`              // Total completed fills
+	MakerTrades     int64   `json:"maker_trades"`              // Maker fills
+	TakerTrades     int64   `json:"taker_trades"`              // Taker fills
+	TotalVolumeUSDT float64 `json:"total_volume_usdt"`         // Cumulative traded notional
+	PeakPrice       float64 `json:"peak_price,omitempty"`      // Peak favorable price achieved during position lifecycle
+	TrailingStop    float64 `json:"trailing_stop,omitempty"`   // Dynamic locked-in trailing stop price
+	HoldingSec      float64 `json:"holding_sec,omitempty"`     // Current position holding duration in seconds
+	EntryFeesUSDT   float64 `json:"entry_fees_usdt,omitempty"` // Fees/funding paid on the open inventory, charged to the round trip on close
 }
 
 // TradeRecord represents an individual executed paper trade for the journal.
@@ -157,6 +159,7 @@ type TradeRecord struct {
 	PnLRealized float64   `json:"pnl_realized"`
 	Strategy    string    `json:"strategy"`
 	DataSource  string    `json:"data_source"` // "live" or "fallback"
+	JournalSeq  uint64    `json:"journal_seq,omitempty"`
 }
 
 // ActiveMakerOrder tracks an active resting limit maker order in the paper book.
@@ -177,56 +180,59 @@ type ActiveMakerOrder struct {
 
 // DryRunState is the checkpointable state of the 14-day paper trading engine.
 type DryRunState struct {
-	StartTime         time.Time            `json:"start_time"`
-	TargetEndTime     time.Time            `json:"target_end_time"`
-	LastCheckpoint    time.Time            `json:"last_checkpoint"`
-	InitialCapital    float64              `json:"initial_capital"`
-	Cash              float64              `json:"cash"`
-	Equity            float64              `json:"equity"`
-	PeakEquity        float64              `json:"peak_equity"`
-	RealizedPnL       float64              `json:"realized_pnl"`
-	UnrealizedPnL     float64              `json:"unrealized_pnl"`
-	TotalReturnPct    float64              `json:"total_return_pct"`
-	MaxDrawdownPct    float64              `json:"max_drawdown_pct"`
-	CircuitHalted     bool                 `json:"circuit_halted"`
-	CircuitHaltReason string               `json:"circuit_halt_reason"`
-	TotalTrades       int64                `json:"total_trades"`
-	WinningTrades     int64                `json:"winning_trades"`
-	LosingTrades      int64                `json:"losing_trades"`
-	WinRate           float64              `json:"win_rate"`
-	SharpeRatio       float64              `json:"sharpe_ratio"`
-	Positions         map[string]*Position `json:"positions"`
-	DailyReturns      []float64            `json:"daily_returns"`
-	DaysElapsed       int                  `json:"days_elapsed"`
-	TargetDays        int                  `json:"target_days"`              // Total days in target evaluation window (e.g. 7, 14, 30)
-	WindowPreset      string               `json:"window_preset"`            // "7d" (last week), "30d" (last month), "14d" (2 weeks)
-	HoursRemaining    float64              `json:"hours_remaining"`
-	DataSource             string               `json:"data_source"`              // "live" or "fallback"
-	RejectedTicks          int64                `json:"rejected_ticks"`           // Impossible prints dropped by the bad-tick guard
-	FeedDownSeconds        float64              `json:"feed_down_seconds"`        // Cumulative duration market feed was disconnected
-	QuotingPaused          bool                 `json:"quoting_paused"`           // True when quoting/matching paused due to feed down
-	OfflineDowntimeSeconds float64              `json:"offline_downtime_seconds"` // Cumulative time system was shut down / offline
-	ShutdownCount          int                  `json:"shutdown_count"`           // Number of power-cycles/resumptions survived
-	LastResumeTime         time.Time                     `json:"last_resume_time"`         // Timestamp of latest recovery after shutdown
-	Leverage               DynamicLeverageState          `json:"leverage"`                 // Real-time automatic dynamic leverage and regime
-	Macro                  macro.MacroState              `json:"macro"`                    // Zero-cost macro calendar event shield telemetry
-	NewsSentiment          *macro.NewsSentimentReport    `json:"news_sentiment,omitempty"` // Macro/micro news intelligence & exploit defense
-	ActiveOrders           map[string][]ActiveMakerOrder `json:"active_orders,omitempty"`   // Currently resting maker limit orders in the book
-	ScalpingState          map[string]ScalpingRegimeState `json:"scalping_state,omitempty"` // Per-symbol scalping viability & regime
-	SelfAdaptation         SelfAdaptationState           `json:"self_adaptation"`          // Autonomous parameter backtesting & hot-reloading
-	Coinbase               *CoinbaseSignalState          `json:"coinbase_signal,omitempty"` // Real-time institutional lead-lag oracle
-	SpotOnly               bool                          `json:"spot_only"`                 // Cash-only spot account mode (no naked shorting)
-	TaxRatePct             float64                       `json:"tax_rate_pct"`              // Estimated income/capital gains tax rate (e.g. 35.0%)
-	EstimatedTaxUSDT       float64                       `json:"estimated_tax_usdt"`        // Cumulative estimated tax reserve
-	AfterTaxEquity         float64                       `json:"after_tax_equity"`          // Equity net of estimated tax reserve
-	AfterTaxReturnPct      float64                       `json:"after_tax_return_pct"`      // Post-tax return percentage
+	StartTime              time.Time                        `json:"start_time"`
+	TargetEndTime          time.Time                        `json:"target_end_time"`
+	LastCheckpoint         time.Time                        `json:"last_checkpoint"`
+	InitialCapital         float64                          `json:"initial_capital"`
+	Cash                   float64                          `json:"cash"`
+	Equity                 float64                          `json:"equity"`
+	PeakEquity             float64                          `json:"peak_equity"`
+	RealizedPnL            float64                          `json:"realized_pnl"`
+	UnrealizedPnL          float64                          `json:"unrealized_pnl"`
+	TotalReturnPct         float64                          `json:"total_return_pct"`
+	MaxDrawdownPct         float64                          `json:"max_drawdown_pct"`
+	CircuitHalted          bool                             `json:"circuit_halted"`
+	CircuitHaltReason      string                           `json:"circuit_halt_reason"`
+	TotalTrades            int64                            `json:"total_trades"`
+	WinningTrades          int64                            `json:"winning_trades"`
+	LosingTrades           int64                            `json:"losing_trades"`
+	WinRate                float64                          `json:"win_rate"`
+	SharpeRatio            float64                          `json:"sharpe_ratio"`
+	Positions              map[string]*Position             `json:"positions"`
+	DailyReturns           []float64                        `json:"daily_returns"`
+	DaysElapsed            int                              `json:"days_elapsed"`
+	TargetDays             int                              `json:"target_days"`   // Total days in target evaluation window (e.g. 7, 14, 30)
+	WindowPreset           string                           `json:"window_preset"` // "7d" (last week), "30d" (last month), "14d" (2 weeks)
+	HoursRemaining         float64                          `json:"hours_remaining"`
+	DataSource             string                           `json:"data_source"`                  // "live" or "fallback"
+	RejectedTicks          int64                            `json:"rejected_ticks"`               // Impossible prints dropped by the bad-tick guard
+	FeedDownSeconds        float64                          `json:"feed_down_seconds"`            // Cumulative duration market feed was disconnected
+	QuotingPaused          bool                             `json:"quoting_paused"`               // True when quoting/matching paused due to feed down
+	OfflineDowntimeSeconds float64                          `json:"offline_downtime_seconds"`     // Cumulative time system was shut down / offline
+	ShutdownCount          int                              `json:"shutdown_count"`               // Number of power-cycles/resumptions survived
+	LastResumeTime         time.Time                        `json:"last_resume_time"`             // Timestamp of latest recovery after shutdown
+	Leverage               DynamicLeverageState             `json:"leverage"`                     // Real-time automatic dynamic leverage and regime
+	Macro                  macro.MacroState                 `json:"macro"`                        // Zero-cost macro calendar event shield telemetry
+	NewsSentiment          *macro.NewsSentimentReport       `json:"news_sentiment,omitempty"`     // Macro/micro news intelligence & exploit defense
+	ActiveOrders           map[string][]ActiveMakerOrder    `json:"active_orders,omitempty"`      // Currently resting maker limit orders in the book
+	ScalpingState          map[string]ScalpingRegimeState   `json:"scalping_state,omitempty"`     // Per-symbol scalping viability & regime
+	SelfAdaptation         SelfAdaptationState              `json:"self_adaptation"`              // Autonomous parameter backtesting & hot-reloading
+	Coinbase               *CoinbaseSignalState             `json:"coinbase_signal,omitempty"`    // Real-time institutional lead-lag oracle
+	SpotOnly               bool                             `json:"spot_only"`                    // Cash-only spot account mode (no naked shorting)
+	TaxRatePct             float64                          `json:"tax_rate_pct"`                 // Estimated income/capital gains tax rate (e.g. 35.0%)
+	EstimatedTaxUSDT       float64                          `json:"estimated_tax_usdt"`           // Cumulative estimated tax reserve
+	AfterTaxEquity         float64                          `json:"after_tax_equity"`             // Equity net of estimated tax reserve
+	AfterTaxReturnPct      float64                          `json:"after_tax_return_pct"`         // Post-tax return percentage
 	QuantOrchestrator      *orchestrator.OrchestratorReport `json:"quant_orchestrator,omitempty"` // Latency-adaptive multi-strategy orchestration
-	Goal                   GoalState                     `json:"goal"`                     // Self-adjusting monthly-target controller
-	Expectancy             ExpectancyState               `json:"expectancy"`               // Net bps per trade by exit reason vs breakeven
-	TrendGate              *TrendGateState               `json:"trend_gate,omitempty"`     // Daily SMA50 regime gating new MFT entries
-	ExpectancyBreakerOn    bool                          `json:"expectancy_breaker_on"`    // New entries stopped: negative edge confirmed
-	Latency                LatencySnapshot               `json:"latency"`                  // Measured venue latency and chosen strategy regime
-	MFTDiagnostics         map[string]MFTDiagnosticSnapshot `json:"mft_diagnostics,omitempty"` // Real-time MFT decision telemetry per symbol
+	Goal                   GoalState                        `json:"goal"`                         // Self-adjusting monthly-target controller
+	Expectancy             ExpectancyState                  `json:"expectancy"`                   // Net bps per trade by exit reason vs breakeven
+	TrendGate              *TrendGateState                  `json:"trend_gate,omitempty"`         // Daily SMA50 regime gating new MFT entries
+	ExpectancyBreakerOn    bool                             `json:"expectancy_breaker_on"`        // New entries stopped: negative edge confirmed
+	Latency                LatencySnapshot                  `json:"latency"`                      // Measured venue latency and chosen strategy regime
+	MFTDiagnostics         map[string]MFTDiagnosticSnapshot `json:"mft_diagnostics,omitempty"`    // Real-time MFT decision telemetry per symbol
+	LastJournalSeq         uint64                           `json:"last_journal_seq,omitempty"`
+	LastJournalTimestamp   time.Time                        `json:"last_journal_timestamp,omitempty"`
+	LastFundingAccrual     time.Time                        `json:"last_funding_accrual,omitempty"`
 }
 
 // MFTDiagnosticSnapshot captures a real-time observability snapshot of medium-frequency
@@ -266,12 +272,12 @@ type MFTDiagnosticSnapshot struct {
 
 // ScalpingRegimeState reports per-symbol scalping viability and mode (Scalp vs Patient Swing).
 type ScalpingRegimeState struct {
-	ScalpingEnabled bool    `json:"scalping_enabled"`
-	Regime          string  `json:"regime"` // "ACTIVE_SCALP", "PATIENT_SWING", "DISABLED_LEAK_GUARD"
-	Reason          string  `json:"reason"`
-	ConsecutiveLoss int     `json:"consecutive_losses"`
-	RollingWinRate  float64 `json:"rolling_win_rate"`
-	RollingPnlUSDT  float64 `json:"rolling_pnl_usdt"`
+	ScalpingEnabled  bool    `json:"scalping_enabled"`
+	Regime           string  `json:"regime"` // "ACTIVE_SCALP", "PATIENT_SWING", "DISABLED_LEAK_GUARD"
+	Reason           string  `json:"reason"`
+	ConsecutiveLoss  int     `json:"consecutive_losses"`
+	RollingWinRate   float64 `json:"rolling_win_rate"`
+	RollingPnlUSDT   float64 `json:"rolling_pnl_usdt"`
 	TargetInventory  float64 `json:"target_inventory"`
 	FairValue        float64 `json:"fair_value"`
 	MultiFactorScore float64 `json:"multi_factor_score,omitempty"`
@@ -289,7 +295,7 @@ type SelfAdaptationState struct {
 // 16-feature streaming extraction, VPIN toxicity, Kyle's Lambda, Hawkes intensity,
 // and MicrostructureCircuitBreaker so multi-asset price/depth scales never cross-contaminate.
 type SymbolMicrostructure struct {
-	bookBuf marketdata.L2OrderBook // reusable book copy; only touched by the single market-event consumer
+	bookBuf      marketdata.L2OrderBook // reusable book copy; only touched by the single market-event consumer
 	Symbol       string
 	CircuitBrk   *experiment.MicrostructureCircuitBreaker
 	VpinCalc     *common.VPINCalculator
@@ -305,30 +311,31 @@ type SymbolMicrostructure struct {
 	NumPrevAsks int
 	HasPrevBook bool
 
-	PrevMid     float64
-	Ofi1s       float64
-	Ofi5s       float64
-	Ofi30s      float64
-	Mlofi1s     float64
-	Mlofi5s     float64
-	Ret1sBps    float64
-	Ret5sBps    float64
-	VolVarBps      float64
-	TradeBuy5s     float64
-	TradeSell5s    float64
+	PrevMid          float64
+	Ofi1s            float64
+	Ofi5s            float64
+	Ofi30s           float64
+	Mlofi1s          float64
+	Mlofi5s          float64
+	Ret1sBps         float64
+	Ret5sBps         float64
+	VolVarBps        float64
+	TradeBuy5s       float64
+	TradeSell5s      float64
 	TradeRate1s      float64
 	InventorySince   time.Time
 	BidCooldownUntil time.Time
 	AskCooldownUntil time.Time
 
 	// Multi-Horizon Quant Hedge Fund Alpha Tracking
-	MidHistory []MidPricePoint
-	Ret1mBps   float64
-	Ret5mBps   float64
-	Ret15mBps  float64
-	AtrBps     float64
-	OBI        float64 // Order book depth imbalance: (bid5 - ask5) / (bid5 + ask5)
-	Conviction float64 // Quant directional conviction score in [0.0, 1.0]
+	MidHistory         []MidPricePoint
+	Ret1mBps           float64
+	Ret5mBps           float64
+	Ret15mBps          float64
+	AtrBps             float64
+	OBI                float64 // Order book depth imbalance: (bid5 - ask5) / (bid5 + ask5)
+	Conviction         float64 // Quant directional conviction score in [0.0, 1.0]
+	ConvictionOverride float64 // Optional test-only fixed conviction override in (0.0, 1.0)
 
 	// Delta-Neutral Funding Carry Tracker
 	FundingTracker *common.FundingCarryTracker
@@ -435,13 +442,15 @@ type AutonomousRecalibrator func(ctx context.Context, symbol string, currentCapi
 
 // DryRunEngine orchestrates the 14-day autonomous dry run.
 type DryRunEngine struct {
-	tickFilters map[string]*tickFilter // bad-print guard per symbol (guarded by mu)
-	cfg       DryRunConfig
-	ring      *engine.SPSCRing
-	stream    MarketFeed
-	journal   *os.File
-	journalCh chan []byte
-	journalWg sync.WaitGroup
+	tickFilters      map[string]*tickFilter // bad-print guard per symbol (guarded by mu)
+	cfg              DryRunConfig
+	ring             *engine.SPSCRing
+	stream           MarketFeed
+	journal          *os.File
+	journalCh        chan []byte
+	journalWg        sync.WaitGroup
+	journalSyncCount atomic.Int64
+	journalDropped   atomic.Int64
 
 	mu    sync.RWMutex
 	state DryRunState
@@ -477,7 +486,9 @@ type DryRunEngine struct {
 	recentFills           []TradeRecord
 	running               atomic.Bool
 	stopCh                chan struct{}
+	subCancel             context.CancelFunc
 	wg                    sync.WaitGroup
+	recalibWg             sync.WaitGroup
 
 	// Autonomous self-improving recalibration
 	recalibrator    AutonomousRecalibrator
@@ -530,11 +541,15 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	}
 
 	// Guarantee ext4 parent directory dentry is committed to physical storage
+	syncParentDir(dir)
+	return nil
+}
+
+func syncParentDir(dir string) {
 	if df, err := os.Open(dir); err == nil {
 		_ = df.Sync()
 		_ = df.Close()
 	}
-	return nil
 }
 
 // sanitizeJournalTail validates that the journal file ends cleanly with a newline.
@@ -572,18 +587,36 @@ func sanitizeJournalTail(path string) error {
 	}
 
 	// File was truncated mid-line on power cut or contains trailing null bytes.
-	// Find the last clean newline character.
-	lastNL := bytes.LastIndexByte(buf, '\n')
-	if lastNL == -1 {
-		// Entire tail has no newline; truncate file to start fresh
-		return f.Truncate(0)
+	// Scan backwards from EOF in chunks until we find the last newline so >4KB trailing nulls
+	// never wipe an entire multi-week journal.
+	const chunkSize = int64(4096)
+	pos := stat.Size()
+	for pos > 0 {
+		start := pos - chunkSize
+		if start < 0 {
+			start = 0
+		}
+		n := int(pos - start)
+		chunk := make([]byte, n)
+		if _, err := f.ReadAt(chunk, start); err != nil && err != io.EOF {
+			return err
+		}
+		if lastNL := bytes.LastIndexByte(chunk, '\n'); lastNL != -1 {
+			validSize := start + int64(lastNL) + 1
+			if validSize < stat.Size() {
+				if err := f.Truncate(validSize); err != nil {
+					return err
+				}
+				return f.Sync()
+			}
+			return nil
+		}
+		pos = start
 	}
-
-	validSize := offset + int64(lastNL) + 1
-	if validSize < stat.Size() {
-		return f.Truncate(validSize)
+	if err := f.Truncate(0); err != nil {
+		return err
 	}
-	return nil
+	return f.Sync()
 }
 
 // MarketFeed is the primary market-data source the engine reads book state and liveness from
@@ -591,7 +624,7 @@ func sanitizeJournalTail(path string) error {
 type MarketFeed interface {
 	IsConnected() bool
 	IsFallback() bool
-	Stats() (total, depths, trades, gaps, reconnects, fallbacks uint64, lastNs int64)
+	Stats() (total, depths, trades, gaps, reconnects, fallbacks uint64, lastNs, lastRealNs int64)
 	GetL2Book(symbol string) (*marketdata.L2OrderBook, bool)
 	// CopyL2Book copies the symbol's book into dst without allocating (hot path).
 	CopyL2Book(symbol string, dst *marketdata.L2OrderBook) bool
@@ -658,15 +691,25 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 	if math.IsNaN(cfg.InitialCapital) || math.IsInf(cfg.InitialCapital, 0) || cfg.InitialCapital <= 0 {
 		cfg.InitialCapital = 1000.00
 	}
+	preserveTargetDuration := cfg.TargetDurationExplicit || (cfg.TargetDuration > 0 &&
+		cfg.TargetDuration != 7*24*time.Hour &&
+		cfg.TargetDuration != 14*24*time.Hour &&
+		cfg.TargetDuration != 30*24*time.Hour)
 	switch strings.ToLower(strings.TrimSpace(cfg.WindowPreset)) {
 	case "7d", "1w", "week", "last_week", "last-week":
-		cfg.TargetDuration = 7 * 24 * time.Hour
+		if !preserveTargetDuration {
+			cfg.TargetDuration = 7 * 24 * time.Hour
+		}
 		cfg.WindowPreset = "7d"
 	case "30d", "1m", "month", "last_month", "last-month":
-		cfg.TargetDuration = 30 * 24 * time.Hour
+		if !preserveTargetDuration {
+			cfg.TargetDuration = 30 * 24 * time.Hour
+		}
 		cfg.WindowPreset = "30d"
 	case "14d", "2w", "2week", "two_weeks":
-		cfg.TargetDuration = 14 * 24 * time.Hour
+		if !preserveTargetDuration {
+			cfg.TargetDuration = 14 * 24 * time.Hour
+		}
 		cfg.WindowPreset = "14d"
 	default:
 		if cfg.TargetDuration <= 0 {
@@ -814,7 +857,12 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		// Secondary persistence fallback: reconstruct complete state from append-only trade journal
 		if recState, jErr := e.recoverStateFromJournal(); jErr == nil && recState != nil {
 			e.state = *recState
-			_ = e.saveCheckpoint() // Re-persist reconstructed clean checkpoint to disk
+			e.mu.Lock()
+			e.restoreSymbolMicroStateLocked(time.Now())
+			e.mu.Unlock()
+			if saveErr := e.saveCheckpoint(); saveErr != nil {
+				log.Printf("[DryRunEngine] saveCheckpoint after journal recovery failed: %v", saveErr)
+			}
 		} else {
 			// Initialize fresh state if neither checkpoint nor journal exists
 			now := time.Now()
@@ -857,6 +905,9 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 		if e.state.WindowPreset == "" {
 			e.state.WindowPreset = cfg.WindowPreset
 		}
+		if !cfg.CleanReset {
+			e.replayJournalSinceCursor()
+		}
 	}
 
 	// Clean reset option: clears contaminated legacy trade counts, win rate, realized PnL, positions, and archives old journal
@@ -879,17 +930,24 @@ func NewDryRunEngine(cfg DryRunConfig, ring *engine.SPSCRing, stream *MarketStre
 				_ = os.Rename(cfg.JournalFile, cfg.JournalFile+".legacy")
 			}
 		}
-		_ = e.saveCheckpoint()
+		if saveErr := e.saveCheckpoint(); saveErr != nil {
+			log.Printf("[DryRunEngine] saveCheckpoint after clean reset failed: %v", saveErr)
+		}
 	}
+
+	// Sync riskSafeguard peak equity and drawdown from restored/initialized state
+	e.syncRiskSafeguardFromState()
 
 	// Ensure journal directory exists and start asynchronous background writer
 	if cfg.JournalFile != "" {
 		_ = sanitizeJournalTail(cfg.JournalFile)
-		_ = os.MkdirAll(filepath.Dir(cfg.JournalFile), 0o755)
+		jDir := filepath.Dir(cfg.JournalFile)
+		_ = os.MkdirAll(jDir, 0o755)
 		f, err := os.OpenFile(cfg.JournalFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open dry run journal %s: %w", cfg.JournalFile, err)
 		}
+		syncParentDir(jDir)
 		e.journal = f
 		e.journalCh = make(chan []byte, 1024)
 		e.journalWg.Add(1)
@@ -960,23 +1018,71 @@ func (e *DryRunEngine) updateTaxReservesLocked() {
 	}
 }
 
+// recomputeEquityLocked recomputes per-position UnrealizedPnL, portfolio UnrealizedPnL,
+// Equity, PeakEquity, MaxDrawdownPct, TotalReturnPct, and tax reserves. Caller must hold e.mu.
+func (e *DryRunEngine) recomputeEquityLocked() {
+	var totalUnrealized float64
+	for _, p := range e.state.Positions {
+		if p == nil {
+			continue
+		}
+		if math.Abs(p.Size) > 1e-8 && p.MarkPrice > 0 {
+			p.UnrealizedPnL = p.Size * (p.MarkPrice - p.AvgEntryPrice)
+		} else {
+			p.UnrealizedPnL = 0
+		}
+		totalUnrealized += p.UnrealizedPnL
+	}
+	e.state.UnrealizedPnL = totalUnrealized
+	e.state.Equity = e.state.Cash + totalUnrealized
+
+	if e.state.Equity > e.state.PeakEquity {
+		e.state.PeakEquity = e.state.Equity
+	}
+	if e.state.PeakEquity > 0 {
+		dd := (e.state.PeakEquity - e.state.Equity) / e.state.PeakEquity * 100.0
+		if dd > e.state.MaxDrawdownPct {
+			e.state.MaxDrawdownPct = dd
+		}
+	}
+	if e.state.InitialCapital > 0 {
+		e.state.TotalReturnPct = (e.state.Equity - e.state.InitialCapital) / e.state.InitialCapital * 100.0
+	}
+	e.updateTaxReservesLocked()
+}
+
+// resetInventorySinceOnZeroOrFlipLocked clears InventorySince when a position hits or crosses zero.
+// Caller must hold e.mu.
+func (e *DryRunEngine) resetInventorySinceOnZeroOrFlipLocked(symbol string, prevSize, newSize float64) {
+	if math.Abs(newSize) < 1e-7 || (prevSize > 1e-7 && newSize < -1e-7) || (prevSize < -1e-7 && newSize > 1e-7) {
+		if sm := e.symMicro[strings.ToUpper(symbol)]; sm != nil {
+			sm.InventorySince = time.Time{}
+		}
+	}
+}
+
 // Start launches the strategy evaluation loop, periodic state checkpointing, and independent feed watchdog.
 func (e *DryRunEngine) Start(ctx context.Context) {
 	if e.running.Swap(true) {
 		return
 	}
 
+	subCtx, cancel := context.WithCancel(ctx)
+	e.mu.Lock()
+	e.subCancel = cancel
+	e.mu.Unlock()
+
 	if e.macroGuardian != nil {
-		e.macroGuardian.Start(ctx)
+		e.macroGuardian.Start(subCtx)
 	}
 	if e.newsPipeline != nil {
-		e.newsPipeline.Start(ctx)
+		e.newsPipeline.Start(subCtx)
 	}
 
 	e.wg.Add(3)
-	go e.runExecutionLoop(ctx)
-	go e.runCheckpointLoop(ctx)
-	go e.runFeedWatchdog(ctx)
+	go e.runExecutionLoop(subCtx)
+	go e.runCheckpointLoop(subCtx)
+	go e.runFeedWatchdog(subCtx)
 }
 
 // Stop terminates the engine, cancels all resting orders, optionally auto-liquidates open inventory to cash, and checkpoints state.
@@ -984,8 +1090,16 @@ func (e *DryRunEngine) Stop() {
 	if !e.running.Swap(false) {
 		return
 	}
+	e.mu.Lock()
+	cancel := e.subCancel
+	e.subCancel = nil
+	e.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	close(e.stopCh)
 	e.wg.Wait()
+	e.recalibWg.Wait()
 
 	if e.macroGuardian != nil {
 		e.macroGuardian.Stop()
@@ -1008,7 +1122,9 @@ func (e *DryRunEngine) Stop() {
 	}
 	e.mu.Unlock()
 
-	_ = e.saveCheckpoint()
+	if err := e.saveCheckpoint(); err != nil {
+		log.Printf("[DryRunEngine] saveCheckpoint on stop failed: %v", err)
+	}
 	if e.journalCh != nil {
 		close(e.journalCh)
 		e.journalWg.Wait()
@@ -1084,26 +1200,51 @@ func (e *DryRunEngine) emergencyFlattenLocked(reason string) {
 }
 
 // runJournalWriter provides non-blocking, asynchronous serialization of trade records to the journal file
-// with periodic fsync flushes to physical storage to guard against power-cut data loss.
+// and fsyncs after each drained batch to eliminate the power-cut data-loss window.
 func (e *DryRunEngine) runJournalWriter() {
 	defer e.journalWg.Done()
 	if e.journal == nil {
 		return
 	}
-	syncTicker := time.NewTicker(2 * time.Second)
-	defer syncTicker.Stop()
-
 	for {
-		select {
-		case line, ok := <-e.journalCh:
-			if !ok {
-				_ = e.journal.Sync()
-				_ = e.journal.Close()
-				return
+		line, ok := <-e.journalCh
+		if !ok {
+			if err := e.journal.Sync(); err != nil {
+				log.Printf("[DryRunEngine] journal sync on close failed: %v", err)
 			}
-			_, _ = e.journal.Write(line)
-		case <-syncTicker.C:
-			_ = e.journal.Sync()
+			if err := e.journal.Close(); err != nil {
+				log.Printf("[DryRunEngine] journal close failed: %v", err)
+			}
+			return
+		}
+		if _, err := e.journal.Write(line); err != nil {
+			log.Printf("[DryRunEngine] journal write failed: %v", err)
+		}
+		closed := false
+	drain:
+		for {
+			select {
+			case next, ok := <-e.journalCh:
+				if !ok {
+					closed = true
+					break drain
+				}
+				if _, err := e.journal.Write(next); err != nil {
+					log.Printf("[DryRunEngine] journal write failed: %v", err)
+				}
+			default:
+				break drain
+			}
+		}
+		if err := e.journal.Sync(); err != nil {
+			log.Printf("[DryRunEngine] journal sync failed: %v", err)
+		}
+		e.journalSyncCount.Add(1)
+		if closed {
+			if err := e.journal.Close(); err != nil {
+				log.Printf("[DryRunEngine] journal close failed: %v", err)
+			}
+			return
 		}
 	}
 }
@@ -1148,7 +1289,11 @@ func (e *DryRunEngine) checkFeedLiveness() {
 				e.activeOrders[sym] = nil
 			}
 		}
-		e.state.FeedDownSeconds += 0.10
+		// Avoid double-counting when processMarketEvent is actively receiving fallback ticks
+		// and incrementing FeedDownSeconds by exact inter-tick elapsed time.
+		if e.state.DataSource != "fallback" || feedStale {
+			e.state.FeedDownSeconds += 0.10
+		}
 	}
 }
 
@@ -1161,13 +1306,26 @@ func (e *DryRunEngine) State() DryRunState {
 	// Deep copy positions
 	cp.Positions = make(map[string]*Position, len(e.state.Positions))
 	for k, v := range e.state.Positions {
+		if v == nil {
+			continue
+		}
 		posCopy := *v
 		cp.Positions[k] = &posCopy
 	}
 	cp.DailyReturns = append([]float64(nil), e.state.DailyReturns...)
 	cp.Goal.RecentTradeBps = append([]float64(nil), e.state.Goal.RecentTradeBps...)
 
-	// Deep copy active resting maker orders for UI & telemetry
+	// Deep copy Expectancy.ByReason to prevent concurrent map read/write races on State() snapshots.
+	if len(e.state.Expectancy.ByReason) > 0 {
+		byReason := make(map[string]*ExitStats, len(e.state.Expectancy.ByReason))
+		for k, v := range e.state.Expectancy.ByReason {
+			if v != nil {
+				stCopy := *v
+				byReason[k] = &stCopy
+			}
+		}
+		cp.Expectancy.ByReason = byReason
+	}
 	cp.ActiveOrders = make(map[string][]ActiveMakerOrder, len(e.activeOrders))
 	for sym, ords := range e.activeOrders {
 		if len(ords) > 0 {
@@ -1310,7 +1468,8 @@ func (e *DryRunEngine) RecentFills() []TradeRecord {
 // StreamStats returns real-time event counts from the public WebSocket ingestor.
 func (e *DryRunEngine) StreamStats() (total, depths, trades, gaps, reconnects, fallbacks uint64, lastNs int64) {
 	if e.stream != nil {
-		return e.stream.Stats()
+		total, depths, trades, gaps, reconnects, fallbacks, lastNs, _ = e.stream.Stats()
+		return total, depths, trades, gaps, reconnects, fallbacks, lastNs
 	}
 	return 0, 0, 0, 0, 0, 0, 0
 }
@@ -1335,7 +1494,9 @@ func (e *DryRunEngine) runCheckpointLoop(ctx context.Context) {
 			e.updateLatencyStateLocked()
 			e.maybeEvaluateGoalLocked(now)
 			e.mu.Unlock()
-			_ = e.saveCheckpoint()
+			if err := e.saveCheckpoint(); err != nil {
+				log.Printf("[DryRunEngine] periodic checkpoint failed: %v", err)
+			}
 		}
 	}
 }
@@ -1465,10 +1626,19 @@ func (e *DryRunEngine) maybeTriggerAutoRecalibrationLocked(symbol string) {
 	capVal := e.state.Equity
 	dDir := e.cfg.DataDir
 
+	e.recalibWg.Add(1)
 	go func() {
+		defer e.recalibWg.Done()
 		defer e.recalibrating.Store(false)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
+		go func() {
+			select {
+			case <-e.stopCh:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
 
 		err := recal(ctx, symbol, capVal, dDir)
 		if err != nil {
@@ -1528,9 +1698,12 @@ func (e *DryRunEngine) saveCheckpoint() error {
 			}
 			e.state.HoursRemaining = rem.Hours()
 
-			// Daily returns tracking at day rollover
+			// Daily returns tracking at day rollover (pad any multi-day offline gap once with 0.0)
 			dayIndex := int(elapsed.Hours() / 24.0)
 			if dayIndex > len(e.state.DailyReturns) && dayIndex <= maxDays {
+				for len(e.state.DailyReturns) < dayIndex-1 {
+					e.state.DailyReturns = append(e.state.DailyReturns, 0.0)
+				}
 				prevEquity := e.state.InitialCapital
 				if len(e.state.DailyReturns) > 0 {
 					eq := e.state.InitialCapital
@@ -1625,6 +1798,7 @@ func (e *DryRunEngine) saveCheckpoint() error {
 		cbSnap := e.cbOracle.Snapshot()
 		e.state.Coinbase = &cbSnap
 	}
+	e.state.LastFundingAccrual = e.lastFundingAccrual
 
 	data, err := json.MarshalIndent(e.state, "", "  ")
 	e.mu.Unlock()
@@ -1636,9 +1810,16 @@ func (e *DryRunEngine) saveCheckpoint() error {
 		return nil
 	}
 
-	// Rotate existing valid checkpoint to .bak for dual-slot crash safety
-	if _, err := os.Stat(e.cfg.StateFile); err == nil {
-		_ = os.Rename(e.cfg.StateFile, e.cfg.StateFile+".bak")
+	// Rotate existing valid checkpoint to .bak for dual-slot crash safety.
+	// Only overwrite .bak if the current primary file is valid JSON so a corrupt primary never destroys .bak.
+	if oldBytes, err := os.ReadFile(e.cfg.StateFile); err == nil {
+		if trimmed := bytes.Trim(oldBytes, "\x00\r\n \t"); len(trimmed) > 0 && json.Valid(trimmed) {
+			if bakErr := atomicWriteFile(e.cfg.StateFile+".bak", oldBytes, 0o644); bakErr != nil {
+				log.Printf("[DryRunEngine] checkpoint .bak rotation failed: %v", bakErr)
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		log.Printf("[DryRunEngine] checkpoint read before .bak rotation failed: %v", err)
 	}
 
 	// Write atomically with fsync and directory sync
@@ -1668,6 +1849,8 @@ func (e *DryRunEngine) loadCheckpoint() error {
 	var unmarshalErr error
 	if len(cleanData) > 0 {
 		unmarshalErr = json.Unmarshal(cleanData, &st)
+	} else {
+		unmarshalErr = fmt.Errorf("empty checkpoint file %s", e.cfg.StateFile)
 	}
 
 	if len(cleanData) == 0 || unmarshalErr != nil {
@@ -1680,12 +1863,16 @@ func (e *DryRunEngine) loadCheckpoint() error {
 				if err := json.Unmarshal(cleanBak, &st); err == nil {
 					unmarshalErr = nil
 					_ = os.Rename(e.cfg.StateFile, e.cfg.StateFile+".corrupted")
+				} else {
+					unmarshalErr = err
 				}
+			} else {
+				unmarshalErr = fmt.Errorf("empty backup checkpoint file %s.bak", e.cfg.StateFile)
 			}
 		}
 		if unmarshalErr != nil {
 			_ = os.Rename(e.cfg.StateFile, e.cfg.StateFile+".corrupted")
-			return os.ErrNotExist
+			return fmt.Errorf("corrupt or empty checkpoint %s: %w", e.cfg.StateFile, unmarshalErr)
 		}
 	}
 
@@ -1730,6 +1917,8 @@ func (e *DryRunEngine) loadCheckpoint() error {
 
 	e.mu.Lock()
 	e.state = st
+	e.lastFundingAccrual = st.LastFundingAccrual
+	e.restoreSymbolMicroStateLocked(now)
 	e.mu.Unlock()
 
 	// Pre-load recent fills from journal tail so in-memory blotter is warm on startup
@@ -1763,8 +1952,51 @@ func (e *DryRunEngine) loadCheckpoint() error {
 	return nil
 }
 
-// recoverStateFromJournal replays dryrun_journal.jsonl to reconstruct complete state if checkpoint was lost or corrupted.
-func (e *DryRunEngine) recoverStateFromJournal() (*DryRunState, error) {
+// syncRiskSafeguardFromState aligns the intraday CircuitBreaker's equity watermark and drawdown
+// with the loaded or recovered DryRunState.
+func (e *DryRunEngine) syncRiskSafeguardFromState() {
+	if e.riskSafeguard == nil {
+		return
+	}
+	e.mu.RLock()
+	peak := e.state.PeakEquity
+	eq := e.state.Equity
+	e.mu.RUnlock()
+
+	e.riskSafeguard.PeakEquity = peak
+	e.riskSafeguard.CurrentEquity = eq
+	if peak > 0 && eq < peak {
+		dd := (peak - eq) / peak * 100.0
+		e.riskSafeguard.CurrentDrawdownPct = dd
+		e.riskSafeguard.DrawdownBps = dd * 100.0
+	} else {
+		e.riskSafeguard.CurrentDrawdownPct = 0
+		e.riskSafeguard.DrawdownBps = 0
+	}
+}
+
+// restoreSymbolMicroStateLocked restores per-symbol runtime microstructure state
+// (InventorySince and scalping regime/loss-streak state) from persisted DryRunState.
+// Caller must hold e.mu.
+func (e *DryRunEngine) restoreSymbolMicroStateLocked(now time.Time) {
+	for sym, ss := range e.state.ScalpingState {
+		sm := e.getOrCreateSymbolMicro(sym)
+		sm.ScalpingDisabled = !ss.ScalpingEnabled
+		sm.ScalpingDisabledReason = ss.Reason
+		sm.ConsecutiveLosses = ss.ConsecutiveLoss
+	}
+	for sym, pos := range e.state.Positions {
+		if pos != nil && math.Abs(pos.Size) > 1e-8 && pos.HoldingSec > 0 {
+			sm := e.getOrCreateSymbolMicro(sym)
+			if sm.InventorySince.IsZero() {
+				sm.InventorySince = now.Add(-time.Duration(pos.HoldingSec * float64(time.Second)))
+			}
+		}
+	}
+}
+
+// readJournalRecords parses all valid TradeRecords from e.cfg.JournalFile.
+func (e *DryRunEngine) readJournalRecords() ([]TradeRecord, error) {
 	if e.cfg.JournalFile == "" {
 		return nil, os.ErrNotExist
 	}
@@ -1785,6 +2017,197 @@ func (e *DryRunEngine) recoverStateFromJournal() (*DryRunState, error) {
 		if err := json.Unmarshal(line, &rec); err == nil && rec.Symbol != "" {
 			records = append(records, rec)
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+// applyJournalRecord replays a single TradeRecord onto st, replicating EntryFeesUSDT pro-rata logic,
+// winLossEpsilon scratch classification, and journal cursor tracking.
+func applyJournalRecord(st *DryRunState, r TradeRecord) {
+	if st.Positions == nil {
+		st.Positions = make(map[string]*Position)
+	}
+	pos := st.Positions[r.Symbol]
+	if pos == nil {
+		pos = &Position{Symbol: r.Symbol}
+		st.Positions[r.Symbol] = pos
+	}
+
+	st.Cash += r.PnLRealized
+	st.RealizedPnL += r.PnLRealized
+	st.TotalTrades++
+	pos.TotalTrades++
+	pos.RealizedPnL += r.PnLRealized
+	pos.TotalVolumeUSDT += r.ValueUSDT
+
+	if r.Role == "MAKER" {
+		pos.MakerTrades++
+	} else {
+		pos.TakerTrades++
+	}
+
+	oldSize := pos.Size
+	prevAbsSize := math.Abs(oldSize)
+	closeQty := 0.0
+	isClosing := false
+	if r.Side == "BUY" && oldSize < -1e-8 {
+		isClosing = true
+		closeQty = math.Min(-oldSize, r.Size)
+	} else if r.Side == "SELL" && oldSize > 1e-8 {
+		isClosing = true
+		closeQty = math.Min(oldSize, r.Size)
+	} else if strings.Contains(r.Side, "LIQUIDATE") {
+		isClosing = true
+		closeQty = prevAbsSize
+	}
+
+	if r.Side == "BUY" {
+		newSize := pos.Size + r.Size
+		if math.Abs(newSize) < 1e-7 {
+			newSize = 0.0
+			pos.AvgEntryPrice = 0.0
+			pos.PeakPrice = 0.0
+			pos.TrailingStop = 0.0
+			pos.HoldingSec = 0.0
+		} else if newSize > 0 {
+			if pos.Size >= 0 {
+				pos.AvgEntryPrice = (pos.AvgEntryPrice*pos.Size + r.Price*r.Size) / newSize
+			} else {
+				pos.AvgEntryPrice = r.Price
+				pos.PeakPrice = r.Price
+				pos.TrailingStop = 0.0
+				pos.HoldingSec = 0.0
+			}
+			if pos.PeakPrice <= 0 {
+				pos.PeakPrice = r.Price
+			}
+		}
+		pos.Size = newSize
+	} else if r.Side == "SELL" {
+		newSize := pos.Size - r.Size
+		if math.Abs(newSize) < 1e-7 {
+			newSize = 0.0
+			pos.AvgEntryPrice = 0.0
+			pos.PeakPrice = 0.0
+			pos.TrailingStop = 0.0
+			pos.HoldingSec = 0.0
+		} else if newSize < 0 {
+			if pos.Size <= 0 {
+				pos.AvgEntryPrice = (pos.AvgEntryPrice*(-pos.Size) + r.Price*r.Size) / (-newSize)
+			} else {
+				pos.AvgEntryPrice = r.Price
+				pos.PeakPrice = r.Price
+				pos.TrailingStop = 0.0
+				pos.HoldingSec = 0.0
+			}
+			if pos.PeakPrice <= 0 {
+				pos.PeakPrice = r.Price
+			}
+		}
+		pos.Size = newSize
+	} else if strings.Contains(r.Side, "LIQUIDATE") {
+		pos.Size = 0.0
+		pos.AvgEntryPrice = 0.0
+		pos.PeakPrice = 0.0
+		pos.TrailingStop = 0.0
+		pos.HoldingSec = 0.0
+	}
+
+	roundTripPnL := r.PnLRealized
+	closeFee := r.FeeUSDT
+	openFee := 0.0
+	if r.Size > 0 {
+		closeFee = r.FeeUSDT * closeQty / r.Size
+		openFee = r.FeeUSDT - closeFee
+	}
+	if isClosing && prevAbsSize > 0 {
+		entryShare := pos.EntryFeesUSDT * math.Min(1.0, closeQty/prevAbsSize)
+		pos.EntryFeesUSDT -= entryShare
+		roundTripPnL = (r.PnLRealized + r.FeeUSDT - closeFee) - entryShare
+	}
+	if math.Abs(pos.Size) < 1e-7 {
+		pos.EntryFeesUSDT = 0
+	}
+	if openFee > 0 && math.Abs(pos.Size) > 1e-7 {
+		pos.EntryFeesUSDT += openFee
+	}
+
+	if isClosing {
+		switch {
+		case roundTripPnL > winLossEpsilon:
+			st.WinningTrades++
+		case roundTripPnL < -winLossEpsilon:
+			st.LosingTrades++
+		default:
+			// Scratch: neither a win nor a loss
+		}
+	}
+
+	st.Equity = st.Cash
+	if st.Equity > st.PeakEquity {
+		st.PeakEquity = st.Equity
+	}
+	if st.PeakEquity > 0 {
+		dd := (st.PeakEquity - st.Equity) / st.PeakEquity * 100.0
+		if dd > st.MaxDrawdownPct {
+			st.MaxDrawdownPct = dd
+		}
+	}
+
+	if r.JournalSeq > st.LastJournalSeq {
+		st.LastJournalSeq = r.JournalSeq
+	} else if r.JournalSeq == 0 {
+		st.LastJournalSeq++
+	}
+	if r.Timestamp.After(st.LastJournalTimestamp) {
+		st.LastJournalTimestamp = r.Timestamp
+	}
+}
+
+// replayJournalSinceCursor replays any journal records newer than the loaded checkpoint's
+// sequence/timestamp cursor onto e.state.
+func (e *DryRunEngine) replayJournalSinceCursor() {
+	records, err := e.readJournalRecords()
+	if err != nil || len(records) == 0 {
+		return
+	}
+
+	e.mu.Lock()
+	replayed := 0
+	for _, r := range records {
+		isNewer := false
+		if r.JournalSeq > 0 && (e.state.LastJournalSeq > 0 || e.state.TotalTrades == 0) {
+			isNewer = r.JournalSeq > e.state.LastJournalSeq
+		} else if !e.state.LastJournalTimestamp.IsZero() {
+			isNewer = r.Timestamp.After(e.state.LastJournalTimestamp)
+		} else if !e.state.LastCheckpoint.IsZero() {
+			isNewer = r.Timestamp.After(e.state.LastCheckpoint)
+		}
+		if !isNewer {
+			continue
+		}
+		applyJournalRecord(&e.state, r)
+		replayed++
+	}
+	if replayed > 0 {
+		if closed := e.state.WinningTrades + e.state.LosingTrades; closed > 0 {
+			e.state.WinRate = float64(e.state.WinningTrades) / float64(closed) * 100.0
+		} else if e.state.TotalTrades > 0 {
+			e.state.WinRate = float64(e.state.WinningTrades) / float64(e.state.TotalTrades) * 100.0
+		}
+		e.recomputeEquityLocked()
+	}
+	e.mu.Unlock()
+}
+
+// recoverStateFromJournal replays dryrun_journal.jsonl to reconstruct complete state if checkpoint was lost or corrupted.
+func (e *DryRunEngine) recoverStateFromJournal() (*DryRunState, error) {
+	records, err := e.readJournalRecords()
+	if err != nil {
+		return nil, err
 	}
 	if len(records) == 0 {
 		return nil, os.ErrNotExist
@@ -1816,105 +2239,7 @@ func (e *DryRunEngine) recoverStateFromJournal() (*DryRunState, error) {
 	}
 
 	for _, r := range records {
-		pos := st.Positions[r.Symbol]
-		if pos == nil {
-			pos = &Position{Symbol: r.Symbol}
-			st.Positions[r.Symbol] = pos
-		}
-
-		st.Cash += r.PnLRealized
-		st.RealizedPnL += r.PnLRealized
-		st.TotalTrades++
-		pos.TotalTrades++
-		pos.RealizedPnL += r.PnLRealized
-		pos.TotalVolumeUSDT += r.ValueUSDT
-
-		if r.Role == "MAKER" {
-			pos.MakerTrades++
-		} else {
-			pos.TakerTrades++
-		}
-
-		oldSize := pos.Size
-		isClosing := false
-		if r.Side == "BUY" && oldSize < -1e-8 {
-			isClosing = true
-		} else if r.Side == "SELL" && oldSize > 1e-8 {
-			isClosing = true
-		} else if strings.Contains(r.Side, "LIQUIDATE") {
-			isClosing = true
-		}
-
-		if r.Side == "BUY" {
-			newSize := pos.Size + r.Size
-			if math.Abs(newSize) < 1e-7 {
-				newSize = 0.0
-				pos.AvgEntryPrice = 0.0
-				pos.PeakPrice = 0.0
-				pos.TrailingStop = 0.0
-				pos.HoldingSec = 0.0
-			} else if newSize > 0 {
-				if pos.Size >= 0 {
-					pos.AvgEntryPrice = (pos.AvgEntryPrice*pos.Size + r.Price*r.Size) / newSize
-				} else {
-					pos.AvgEntryPrice = r.Price
-					pos.PeakPrice = r.Price
-					pos.TrailingStop = 0.0
-					pos.HoldingSec = 0.0
-				}
-				if pos.PeakPrice <= 0 {
-					pos.PeakPrice = r.Price
-				}
-			}
-			pos.Size = newSize
-		} else if r.Side == "SELL" {
-			newSize := pos.Size - r.Size
-			if math.Abs(newSize) < 1e-7 {
-				newSize = 0.0
-				pos.AvgEntryPrice = 0.0
-				pos.PeakPrice = 0.0
-				pos.TrailingStop = 0.0
-				pos.HoldingSec = 0.0
-			} else if newSize < 0 {
-				if pos.Size <= 0 {
-					pos.AvgEntryPrice = (pos.AvgEntryPrice*(-pos.Size) + r.Price*r.Size) / (-newSize)
-				} else {
-					pos.AvgEntryPrice = r.Price
-					pos.PeakPrice = r.Price
-					pos.TrailingStop = 0.0
-					pos.HoldingSec = 0.0
-				}
-				if pos.PeakPrice <= 0 {
-					pos.PeakPrice = r.Price
-				}
-			}
-			pos.Size = newSize
-		} else if strings.Contains(r.Side, "LIQUIDATE") {
-			pos.Size = 0.0
-			pos.AvgEntryPrice = 0.0
-			pos.PeakPrice = 0.0
-			pos.TrailingStop = 0.0
-			pos.HoldingSec = 0.0
-		}
-
-		if isClosing {
-			if r.PnLRealized > 0 {
-				st.WinningTrades++
-			} else {
-				st.LosingTrades++
-			}
-		}
-
-		st.Equity = st.Cash
-		if st.Equity > st.PeakEquity {
-			st.PeakEquity = st.Equity
-		}
-		if st.PeakEquity > 0 {
-			dd := (st.PeakEquity - st.Equity) / st.PeakEquity * 100.0
-			if dd > st.MaxDrawdownPct {
-				st.MaxDrawdownPct = dd
-			}
-		}
+		applyJournalRecord(st, r)
 	}
 
 	if st.TotalTrades > 0 {
@@ -1957,6 +2282,9 @@ func (e *DryRunEngine) recoverStateFromJournal() (*DryRunState, error) {
 // runExecutionLoop consumes MarketEvents from SPSCRing and evaluates quantitative signals.
 func (e *DryRunEngine) runExecutionLoop(ctx context.Context) {
 	defer e.wg.Done()
+	if e.ring == nil {
+		return
+	}
 
 	var eventCount uint64
 
@@ -2089,30 +2417,11 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 		e.state.Positions[symbol] = pos
 	}
 	pos.MarkPrice = price
-	if pos.Size != 0 {
-		pos.UnrealizedPnL = pos.Size * (price - pos.AvgEntryPrice)
-	} else {
-		pos.UnrealizedPnL = 0
-	}
-
-	// Recompute total portfolio equity
-	var totalUnrealized float64
-	for _, p := range e.state.Positions {
-		totalUnrealized += p.UnrealizedPnL
-	}
-	e.state.UnrealizedPnL = totalUnrealized
-	e.state.Equity = e.state.Cash + totalUnrealized
-
-	if e.state.Equity > e.state.PeakEquity {
-		e.state.PeakEquity = e.state.Equity
-	}
+	e.recomputeEquityLocked()
 
 	// Check hard portfolio max drawdown circuit breaker
 	if e.state.PeakEquity > 0 {
 		dd := (e.state.PeakEquity - e.state.Equity) / e.state.PeakEquity * 100.0
-		if dd > e.state.MaxDrawdownPct {
-			e.state.MaxDrawdownPct = dd
-		}
 		if dd >= e.cfg.MaxDrawdownPct && !e.state.CircuitHalted {
 			e.state.CircuitHalted = true
 			e.state.CircuitHaltReason = fmt.Sprintf("Emergency Circuit Breaker: Max Drawdown breached (%.2f%% >= %.2f%%)", dd, e.cfg.MaxDrawdownPct)
@@ -2122,11 +2431,6 @@ func (e *DryRunEngine) processMarketEvent(ev *engine.MarketEvent) {
 			e.emergencyFlattenLocked("Circuit_Breaker_Drawdown_Breach")
 		}
 	}
-
-	if e.state.InitialCapital > 0 {
-		e.state.TotalReturnPct = (e.state.Equity - e.state.InitialCapital) / e.state.InitialCapital * 100.0
-	}
-	e.updateTaxReservesLocked()
 	sm := e.getOrCreateSymbolMicro(symbol)
 
 	// Update TCA multi-horizon markouts on incoming live market tick
@@ -2294,10 +2598,12 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	var curBids [10]marketdata.PriceLevel
 	var curAsks [10]marketdata.PriceLevel
 	hasLiveBook := false
+	isL1Only := false
 
 	if e.stream != nil {
 		if book := &sm.bookBuf; e.stream.CopyL2Book(symbol, book) && book.NumBids > 0 && book.NumAsks > 0 {
 			hasLiveBook = true
+			isL1Only = book.NumBids <= 1 && book.NumAsks <= 1
 			b0 := book.Bids[0]
 			a0 := book.Asks[0]
 			bestBid = b0.Price
@@ -2491,6 +2797,27 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 
 	// Per-symbol VPIN & Microstructure Circuit Breaker Check (Soft Quoting Gate)
 	liveVpin := sm.VpinCalc.VPIN()
+	if hasLiveBook {
+		if isL1Only {
+			// L1-only feeds (e.g. Coinbase ticker/L1) have 1 level and typical 5-10 bps spreads:
+			// disable depth_collapse_80pct on single-level books and keep an adaptive spread baseline >= 5 bps.
+			sm.CircuitBrk.DepthDropThreshold = 1.01
+			if sm.CircuitBrk.MedianSpread < 5.0 {
+				sm.CircuitBrk.MedianSpread = 5.0
+			}
+		} else {
+			sm.CircuitBrk.DepthDropThreshold = 0.80
+			if sm.CircuitBrk.LastTimeNs == 0 && spreadBps > 0 {
+				sm.CircuitBrk.MedianSpread = math.Max(1.0, spreadBps)
+			}
+		}
+		if spreadBps > 0 && spreadBps < 3.0*sm.CircuitBrk.MedianSpread {
+			sm.CircuitBrk.MedianSpread = 0.995*sm.CircuitBrk.MedianSpread + 0.005*math.Max(1.0, spreadBps)
+			if isL1Only && sm.CircuitBrk.MedianSpread < 5.0 {
+				sm.CircuitBrk.MedianSpread = 5.0
+			}
+		}
+	}
 	softGatePaused, _ := sm.CircuitBrk.CheckWithTime(spreadBps, top5Depth, liveVpin, now.UnixNano())
 	e.mu.Unlock()
 
@@ -2572,7 +2899,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		e.mu.Unlock()
 	}
 
-	// Populate full 16-feature microstructure vector for current tick
+	// Populate full 16-feature microstructure vector and snapshot risk state under e.mu.RLock
+	e.mu.RLock()
 	var x [common.FeatureCount]float64
 	x[0] = imbL1
 	x[1] = imbL5
@@ -2596,7 +2924,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	if sm.HawkesEst != nil {
 		hkRatio = sm.HawkesEst.BranchingRatio()
 	}
-	e.mu.RLock()
+	atrBps := sm.AtrBps
 	peakEq := e.state.PeakEquity
 	currEq := e.state.Equity
 	isHalted := e.state.CircuitHalted
@@ -2664,24 +2992,29 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	levState := e.leverageCtrl.Compute(spreadBps, liveVpin, hkRatio, ddPct, isHalted)
 
 	// Compute institutional volatility-targeted Fractional Kelly clip size and max symbol inventory cap
-	clipQty, maxInvQty := e.leverageCtrl.ComputeVolatilityKellySize(symbol, currEq, midPrice, sm.AtrBps, e.cfg.StopLossBps, len(e.cfg.Symbols))
-	if macroSt.LeverageMultiplier > 0 && macroSt.LeverageMultiplier < 1.0 {
+	clipQty, maxInvQty := e.leverageCtrl.ComputeVolatilityKellySize(symbol, currEq, midPrice, atrBps, e.cfg.StopLossBps, len(e.cfg.Symbols))
+	isFutures := len(e.cfg.ContractSizes) > 0 && !e.cfg.SpotOnly
+	if macroSt.LeverageMultiplier <= 0 {
+		clipQty, maxInvQty = 0, 0
+	} else if macroSt.LeverageMultiplier < 1.0 {
 		clipQty *= macroSt.LeverageMultiplier
 		maxInvQty *= macroSt.LeverageMultiplier
 	}
-	if len(e.cfg.ContractSizes) > 0 && !e.cfg.SpotOnly {
+	if isFutures {
 		// Leveraged futures account: size by risk at the stop, cap by leverage, whole contracts.
-		clipQty, maxInvQty = e.applyFuturesSizing(symbol, currEq, midPrice, levState.EffectiveLeverage*goalLevMult, sm.AtrBps)
-		if macroSt.LeverageMultiplier > 0 && macroSt.LeverageMultiplier < 1.0 {
-			if cs := e.contractSize(symbol); cs > 0 {
-				clipQty = math.Floor(clipQty*macroSt.LeverageMultiplier/cs+1e-9) * cs
-				maxInvQty = math.Floor(maxInvQty*macroSt.LeverageMultiplier/cs+1e-9) * cs
+		if macroSt.LeverageMultiplier > 0 {
+			clipQty, maxInvQty = e.applyFuturesSizing(symbol, currEq, midPrice, levState.EffectiveLeverage*goalLevMult, atrBps)
+			if macroSt.LeverageMultiplier < 1.0 {
+				if cs := e.contractSize(symbol); cs > 0 {
+					clipQty = math.Floor(clipQty*macroSt.LeverageMultiplier/cs+1e-9) * cs
+					maxInvQty = math.Floor(maxInvQty*macroSt.LeverageMultiplier/cs+1e-9) * cs
+				}
 			}
 		}
 		if clipQty <= 0 {
 			clipQty, maxInvQty = 0, 0
 		}
-	} else if currEq < 5.0 {
+	} else if macroSt.LeverageMultiplier <= 0 || currEq < 5.0 {
 		clipQty = 0
 		maxInvQty = 0
 	} else if clipQty <= 0 {
@@ -2694,6 +3027,17 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 
 	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if !isFutures && clipQty > 0 && midPrice > 0 && currEq >= 5.05 && clipQty*midPrice < 5.05 {
+		if !e.cfg.SpotOnly || e.unencumberedSpotCashLocked(nil) >= 5.05 {
+			clipQty = 5.05 / midPrice
+			if maxInvQty < clipQty {
+				maxInvQty = clipQty
+			}
+		}
+	}
+
 	e.state.Leverage = levState
 	sm.LastMid = midPrice
 	pos := e.state.Positions[symbol]
@@ -2712,7 +3056,6 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	} else {
 		sm.InventorySince = time.Time{}
 	}
-	e.mu.Unlock()
 
 	// Tribeca Institutional Dynamic Target Inventory (q*):
 	// Sized by directional alpha conviction and high funding carry APR.
@@ -2767,7 +3110,6 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		}
 	}
 
-	e.mu.Lock()
 	var metaPred float64
 	if sm.HasPrevPreds {
 		metaPred, _ = sm.AdaHedge.UpdateAndCombine(tickRetBps, sm.PrevPreds, currPreds)
@@ -2807,7 +3149,6 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			tcaPenaltyBps = math.Min(1.25, math.Abs(tcaSnap.MeanMarkout1sBps)*0.5)
 		}
 	}
-	e.mu.Unlock()
 
 	// Proportional inventory skew restoring force relative to institutional target q*:
 	// In Avellaneda-Stoikov, inventory risk scales with gamma * sigma^2.
@@ -2904,8 +3245,8 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 	}
 	zTotal := 0.18*zMom + 0.12*zLeadLag + 0.12*zMeta + 0.10*zOBI + 0.13*zMF + 0.20*zBlend + 0.15*zNews
 	convictionUp := 1.0 / (1.0 + math.Exp(-1.8*zTotal))
-	if sm.Conviction > 0 && math.Abs(sm.Conviction-0.50) > 1e-4 {
-		convictionUp = sm.Conviction
+	if sm.ConvictionOverride > 0 {
+		convictionUp = sm.ConvictionOverride
 	}
 	if convictionUp > 0.99 {
 		convictionUp = 0.99
@@ -3257,9 +3598,6 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 		targetBid = targetAsk - tick
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if forceExitReason != "" {
 		if p := e.state.Positions[symbol]; p != nil && math.Abs(p.Size) > 1e-8 {
 			e.takerExitLocked(symbol, bestBid, bestAsk, midPrice, forceExitReason)
@@ -3326,7 +3664,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			continue
 		}
 		// In spot-only mode, if unencumbered cash is insufficient for resting BUY quote, cancel immediately
-		if e.cfg.SpotOnly && ord.Side == "BUY" && currentInv >= 0 && e.state.Cash < ord.Size*ord.Price {
+		if e.cfg.SpotOnly && ord.Side == "BUY" && currentInv >= 0 && e.unencumberedSpotCashLocked(ord) < ord.Size*ord.Price {
 			ord.CancelingUntil = now.Add(cancelLatency)
 			keptOrders = append(keptOrders, ord)
 			continue
@@ -3359,9 +3697,10 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			keptOrders = append(keptOrders, ord)
 			continue
 		}
-		// Preserve FIFO queue priority: only cancel & replace if target price moved > 2.5 bps.
+		// Preserve FIFO queue priority: only cancel & replace if target price moved > cancelReplaceBps.
+		cancelReplaceBps := math.Max(2.5, feeFloorBps*1.05)
 		devBps := math.Abs(ord.Price-target) / target * 1e4
-		if devBps > 2.5 {
+		if devBps > cancelReplaceBps {
 			ord.CancelingUntil = now.Add(cancelLatency)
 			keptOrders = append(keptOrders, ord)
 			continue
@@ -3447,7 +3786,7 @@ func (e *DryRunEngine) evaluateQuotesAndGating(symbol string, midPrice float64, 
 			allowBuy = false
 		}
 		// Spot-only cash account: buying requires having sufficient unencumbered cash!
-		if e.cfg.SpotOnly && e.state.Cash < buySize*targetBid {
+		if e.cfg.SpotOnly && e.unencumberedSpotCashLocked(nil) < buySize*targetBid {
 			allowBuy = false
 		}
 	}
@@ -3731,10 +4070,18 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 	valUSDT := orderPrice * qty
 	feeUSDT := valUSDT * (e.makerFeeBps(symbol) * 1e-4)
 
+	if e.state.Positions == nil {
+		e.state.Positions = make(map[string]*Position)
+	}
 	pos := e.state.Positions[symbol]
+	if pos == nil {
+		pos = &Position{Symbol: symbol}
+		e.state.Positions[symbol] = pos
+	}
 	realizedPnL := 0.0
 	isClosing := false
 
+	prevSize := pos.Size
 	prevAbsSize := math.Abs(pos.Size)
 	closeQty := 0.0
 	if side == "BUY" {
@@ -3837,7 +4184,8 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 	if isClosing { // Round-trip closing fill
 		e.recordCloseOutcomeLocked(symbol, roundTripPnL, closeQty*orderPrice, "MAKER_EXIT", true)
 	}
-	e.updateTaxReservesLocked()
+	e.resetInventorySinceOnZeroOrFlipLocked(symbol, prevSize, pos.Size)
+	e.recomputeEquityLocked()
 
 	dataSource := e.state.DataSource
 	if dataSource == "" {
@@ -3865,20 +4213,78 @@ func (e *DryRunEngine) executeMakerFillLocked(symbol string, orderPrice, qty flo
 
 // simulateTakerFillLocked simulates an aggressive taker order. Caller must hold e.mu.
 func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, alphaBps float64) {
+	if midPrice <= 0 {
+		return
+	}
 	side := "BUY"
+	if alphaBps < 0 {
+		side = "SELL"
+	}
 	effLev := 2.5
 	if e.state.Leverage.EffectiveLeverage > 0 {
 		effLev = e.state.Leverage.EffectiveLeverage
 	}
 	qty := 0.005
-	if e.leverageCtrl != nil && midPrice > 0 {
+	maxInvQty := 0.0
+	sm := e.symMicro[strings.ToUpper(symbol)]
+	if e.leverageCtrl != nil {
 		qty = e.leverageCtrl.ComputeOrderSize(e.state.Equity, effLev*0.5, midPrice, len(e.cfg.Symbols))
+		atrBps := 35.0
+		if sm != nil && sm.AtrBps > 0 {
+			atrBps = sm.AtrBps
+		}
+		_, maxInvQty = e.leverageCtrl.ComputeVolatilityKellySize(symbol, e.state.Equity, midPrice, atrBps, e.cfg.StopLossBps, len(e.cfg.Symbols))
 	}
 	if qty <= 0 {
 		qty = 0.001
 	}
-	if alphaBps < 0 {
-		side = "SELL"
+
+	if e.state.Positions == nil {
+		e.state.Positions = make(map[string]*Position)
+	}
+	pos := e.state.Positions[symbol]
+	if pos == nil {
+		pos = &Position{Symbol: symbol}
+		e.state.Positions[symbol] = pos
+	}
+	prevSize := pos.Size
+	now := time.Now()
+
+	// Cooldown enforcement for opening/increasing exposure
+	if sm != nil {
+		if side == "BUY" && prevSize >= 0 && !sm.BidCooldownUntil.IsZero() && now.Before(sm.BidCooldownUntil) {
+			return
+		}
+		if side == "SELL" && prevSize <= 0 && !sm.AskCooldownUntil.IsZero() && now.Before(sm.AskCooldownUntil) {
+			return
+		}
+	}
+
+	// Spot-only & max inventory enforcement
+	if side == "SELL" {
+		if e.cfg.SpotOnly {
+			if prevSize <= 1e-7 {
+				return
+			}
+			if qty > prevSize {
+				qty = prevSize
+			}
+		} else if maxInvQty > 0 && prevSize-qty < -maxInvQty {
+			if prevSize <= -maxInvQty {
+				return
+			}
+			qty = prevSize + maxInvQty
+		}
+	} else {
+		if maxInvQty > 0 && prevSize+qty > maxInvQty {
+			if prevSize >= maxInvQty {
+				return
+			}
+			qty = maxInvQty - prevSize
+		}
+	}
+	if qty <= 1e-7 {
+		return
 	}
 
 	// Kyle's lambda slippage: slippage = lambda * sqrt(order_volume)
@@ -3889,16 +4295,51 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 	}
 
 	valUSDT := execPrice * qty
+	if e.cfg.SpotOnly && side == "BUY" && prevSize >= 0 && e.unencumberedSpotCashLocked(nil) < valUSDT {
+		return
+	}
+	if e.preTradeGuard != nil {
+		posMap := make(map[string]float64, len(e.state.Positions))
+		markMap := make(map[string]float64, len(e.state.Positions))
+		for s, p := range e.state.Positions {
+			if p != nil {
+				posMap[s] = p.Size
+				if p.MarkPrice > 0 {
+					markMap[s] = p.MarkPrice
+				} else {
+					markMap[s] = midPrice
+				}
+			}
+		}
+		if markMap[symbol] <= 0 {
+			markMap[symbol] = midPrice
+		}
+		e.preTradeGuard.UpdatePortfolioState(e.state.Equity, e.state.PeakEquity, posMap, markMap, now)
+
+		isReduce := (side == "BUY" && prevSize < -1e-7 && qty <= -prevSize+1e-7) || (side == "SELL" && prevSize > 1e-7 && qty <= prevSize+1e-7)
+		ordReq := guardrails.OrderRequest{
+			Symbol:       symbol,
+			Side:         side,
+			Price:        execPrice,
+			Quantity:     qty,
+			IsReduceOnly: isReduce,
+		}
+		if err := e.preTradeGuard.ValidateOrder(ordReq, midPrice, midPrice, now); err != nil {
+			return
+		}
+	}
+
 	feeUSDT := valUSDT * (e.cfg.TakerFeeBps * 1e-4)
 
-	pos := e.state.Positions[symbol]
+	prevAbsSize := math.Abs(prevSize)
 	realizedPnL := 0.0
 	isClosing := false
+	closeQty := 0.0
 
 	if side == "BUY" {
 		if pos.Size < -1e-7 {
 			isClosing = true
-			closeQty := math.Min(-pos.Size, qty)
+			closeQty = math.Min(-pos.Size, qty)
 			realizedPnL = closeQty * (pos.AvgEntryPrice - execPrice)
 		}
 		newSize := pos.Size + qty
@@ -3925,7 +4366,7 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 	} else {
 		if pos.Size > 1e-7 {
 			isClosing = true
-			closeQty := math.Min(pos.Size, qty)
+			closeQty = math.Min(pos.Size, qty)
 			realizedPnL = closeQty * (execPrice - pos.AvgEntryPrice)
 		}
 		newSize := pos.Size - qty
@@ -3954,6 +4395,24 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 	netRealizedPnL := realizedPnL - feeUSDT
 	e.state.Cash += netRealizedPnL
 
+	roundTripPnL := netRealizedPnL
+	closeFee := 0.0
+	if qty > 0 {
+		closeFee = feeUSDT * closeQty / qty
+	}
+	openFee := feeUSDT - closeFee
+	if isClosing && prevAbsSize > 0 {
+		entryShare := pos.EntryFeesUSDT * math.Min(1.0, closeQty/prevAbsSize)
+		pos.EntryFeesUSDT -= entryShare
+		roundTripPnL = (realizedPnL - closeFee) - entryShare
+	}
+	if math.Abs(pos.Size) < 1e-7 {
+		pos.EntryFeesUSDT = 0
+	}
+	if openFee > 0 && math.Abs(pos.Size) > 1e-7 {
+		pos.EntryFeesUSDT += openFee
+	}
+
 	pos.RealizedPnL += netRealizedPnL
 	pos.TotalTrades++
 	pos.TakerTrades++
@@ -3972,19 +4431,10 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 	e.state.RealizedPnL += netRealizedPnL
 	e.state.TotalTrades++
 	if isClosing {
-		if netRealizedPnL > 0 {
-			e.state.WinningTrades++
-		} else {
-			e.state.LosingTrades++
-		}
+		e.recordCloseOutcomeLocked(symbol, roundTripPnL, closeQty*execPrice, "TAKER_FILL", true)
 	}
-
-	if closed := e.state.WinningTrades + e.state.LosingTrades; closed > 0 {
-		e.state.WinRate = float64(e.state.WinningTrades) / float64(closed) * 100.0
-	} else if e.state.TotalTrades > 0 {
-		e.state.WinRate = float64(e.state.WinningTrades) / float64(e.state.TotalTrades) * 100.0
-	}
-	e.updateTaxReservesLocked()
+	e.resetInventorySinceOnZeroOrFlipLocked(symbol, prevSize, pos.Size)
+	e.recomputeEquityLocked()
 
 	dataSource := e.state.DataSource
 	if dataSource == "" {
@@ -4010,7 +4460,33 @@ func (e *DryRunEngine) simulateTakerFillLocked(symbol string, midPrice float64, 
 	e.appendTradeRecord(rec)
 }
 
+// unencumberedSpotCashLocked returns available cash in SpotOnly mode after subtracting
+// open long cost basis across all positions and resting (non-canceling) BUY order notionals
+// (optionally excluding excludeOrd). Caller must hold e.mu.
+func (e *DryRunEngine) unencumberedSpotCashLocked(excludeOrd *ActiveMakerOrder) float64 {
+	avail := e.state.Cash
+	for _, p := range e.state.Positions {
+		if p != nil && p.Size > 1e-8 && p.AvgEntryPrice > 0 {
+			avail -= p.Size * p.AvgEntryPrice
+		}
+	}
+	for _, ords := range e.activeOrders {
+		for _, o := range ords {
+			if o == nil || o == excludeOrd || !o.CancelingUntil.IsZero() {
+				continue
+			}
+			if o.Side == "BUY" && o.Size > 0 && o.Price > 0 {
+				avail -= o.Size * o.Price
+			}
+		}
+	}
+	return avail
+}
+
 func (e *DryRunEngine) appendTradeRecord(rec TradeRecord) {
+	e.state.LastJournalSeq++
+	rec.JournalSeq = e.state.LastJournalSeq
+
 	if len(e.recentFills) >= 30 {
 		e.recentFills = e.recentFills[1:]
 	}
@@ -4022,10 +4498,16 @@ func (e *DryRunEngine) appendTradeRecord(rec TradeRecord) {
 		if err == nil {
 			select {
 			case e.journalCh <- append(line, '\n'):
+				if !rec.Timestamp.IsZero() {
+					e.state.LastJournalTimestamp = rec.Timestamp
+				}
 			default:
 				// Buffer full fallback: drop non-critical journal line to preserve event-loop latency
+				e.journalDropped.Add(1)
 			}
 		}
+	} else if !rec.Timestamp.IsZero() {
+		e.state.LastJournalTimestamp = rec.Timestamp
 	}
 }
 

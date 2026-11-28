@@ -1899,7 +1899,7 @@ const indexHTML = `<!doctype html>
 (function(){
   "use strict";
   var $ = function(id){ return document.getElementById(id); };
-  var state = { mode: "standard", models: [], experiments: [], searches: [], datasets: [] };
+  var state = { mode: "simple", models: [], experiments: [], searches: [], datasets: [] };
 
   function num(v, d){ return (v === null || v === undefined || isNaN(v)) ? "-" : Number(v).toFixed(d !== undefined ? d : 2); }
   function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
@@ -2202,7 +2202,7 @@ const indexHTML = `<!doctype html>
   }
 
   $("btnToggleMode").addEventListener("click", function(){
-    var next = (state.mode === "standard") ? "advanced" : "standard";
+    var next = (state.mode === "advanced") ? "simple" : "advanced";
     setMode(next);
     fetch("/api/mode", {
       method: "POST",
@@ -3763,7 +3763,9 @@ const indexHTML = `<!doctype html>
         logsLoaded = true;
         var box = $("logViewer");
         if (data.lines && data.lines.length) {
-          box.textContent = data.lines.join("\n");
+          box.textContent = data.lines.map(function(l){
+            return typeof l === "string" ? l : (l && l.text != null ? l.text : String(l));
+          }).join("\n");
           box.scrollTop = box.scrollHeight;
         } else {
           box.textContent = "No log lines match query.";

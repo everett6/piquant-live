@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,45 @@ import (
 	"piquant-live/internal/secrets"
 	"piquant-live/internal/telemetry"
 )
+
+func TestValidateDryRunFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "negative capital", args: []string{"--capital", "-1"}},
+		{name: "zero drawdown", args: []string{"--max-drawdown", "0"}},
+		{name: "drawdown above 100", args: []string{"--max-drawdown", "101"}},
+		{name: "negative duration", args: []string{"--duration-hours", "-1"}},
+		{name: "overflowing duration", args: []string{"--duration-hours", "1e20"}},
+		{name: "max leverage below base", args: []string{"--base-leverage", "3", "--max-leverage", "2"}},
+		{name: "empty symbols", args: []string{"--symbols", "  "}},
+		{name: "empty symbol entry", args: []string{"--symbols", "BTCUSDT,,ETHUSDT"}},
+		{name: "unknown window", args: []string{"--window", "forever"}},
+		{name: "unknown region", args: []string{"--region", "mars"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("dry-run", flag.ContinueOnError)
+			f := addDryRunFlags(fs)
+			if err := fs.Parse(tt.args); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateDryRunFlags(f); err == nil {
+				t.Fatal("expected invalid dry-run configuration to be rejected")
+			}
+		})
+	}
+
+	fs := flag.NewFlagSet("dry-run", flag.ContinueOnError)
+	f := addDryRunFlags(fs)
+	if err := fs.Parse(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDryRunFlags(f); err != nil {
+		t.Fatalf("default dry-run configuration should be valid: %v", err)
+	}
+}
 
 // A Pi 3B must default to the dashboard, a Pi 5 to the engine, and a
 // workstation to something useful. A wrong default is silent at runtime, so it
@@ -253,4 +293,3 @@ func TestNewsCLI(t *testing.T) {
 		t.Fatalf("runNews --ingest failed: %v", err)
 	}
 }
-

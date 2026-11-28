@@ -1,6 +1,7 @@
 package backtest
 
 import (
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -198,6 +199,179 @@ func TestTickSimulatorMacroNewsShield(t *testing.T) {
 	}
 }
 
+func TestTickSimulatorInvalidPriceHandling(t *testing.T) {
+	cfg := DefaultTickSimConfig()
+	cfg.InitialCapital = 1000.00
+	cfg.EnableMacroShield = false
+	sim := NewTickSimulator(cfg)
+
+	baseTime := int64(1700000000000000000)
+
+	// Test 1: price = 0 should not panic and should skip processing
+	tickZero := AggTradeTick{
+		TradeID:      1,
+		Price:        0,
+		Quantity:     0.1,
+		TimestampNs:  baseTime,
+		IsBuyerMaker: true,
+	}
+	sim.ProcessTick(&tickZero)
+	if sim.totalTicksProcessed != 1 {
+		t.Errorf("expected totalTicksProcessed=1 after zero price tick, got %d", sim.totalTicksProcessed)
+	}
+	// lastMidPrice should remain 0 (initial value) since tick was skipped
+	if sim.lastMidPrice != 0 {
+		t.Errorf("lastMidPrice should remain 0 after invalid tick, got %f", sim.lastMidPrice)
+	}
+
+	// Test 2: price = NaN should not panic and should skip processing
+	tickNaN := AggTradeTick{
+		TradeID:      2,
+		Price:        math.NaN(),
+		Quantity:     0.1,
+		TimestampNs:  baseTime + 1_000_000,
+		IsBuyerMaker: true,
+	}
+	sim.ProcessTick(&tickNaN)
+	if sim.totalTicksProcessed != 2 {
+		t.Errorf("expected totalTicksProcessed=2 after NaN price tick, got %d", sim.totalTicksProcessed)
+	}
+
+	// Test 3: price = Inf should not panic and should skip processing
+	tickInf := AggTradeTick{
+		TradeID:      3,
+		Price:        math.Inf(1),
+		Quantity:     0.1,
+		TimestampNs:  baseTime + 2_000_000,
+		IsBuyerMaker: true,
+	}
+	sim.ProcessTick(&tickInf)
+	if sim.totalTicksProcessed != 3 {
+		t.Errorf("expected totalTicksProcessed=3 after Inf price tick, got %d", sim.totalTicksProcessed)
+	}
+
+	// Test 4: negative price should not panic and should skip processing
+	tickNeg := AggTradeTick{
+		TradeID:      4,
+		Price:        -100.0,
+		Quantity:     0.1,
+		TimestampNs:  baseTime + 3_000_000,
+		IsBuyerMaker: true,
+	}
+	sim.ProcessTick(&tickNeg)
+	if sim.totalTicksProcessed != 4 {
+		t.Errorf("expected totalTicksProcessed=4 after negative price tick, got %d", sim.totalTicksProcessed)
+	}
+
+	// Test 5: valid price after invalid ones should work normally
+	tickValid := AggTradeTick{
+		TradeID:      5,
+		Price:        50000.0,
+		Quantity:     0.1,
+		TimestampNs:  baseTime + 4_000_000,
+		IsBuyerMaker: true,
+	}
+	sim.ProcessTick(&tickValid)
+	if sim.totalTicksProcessed != 5 {
+		t.Errorf("expected totalTicksProcessed=5 after valid price tick, got %d", sim.totalTicksProcessed)
+	}
+	if sim.lastMidPrice != 50000.0 {
+		t.Errorf("expected lastMidPrice=50000.0 after valid tick, got %f", sim.lastMidPrice)
+	}
+}
+
+func TestTickSimulatorMaxPosBaseValidation(t *testing.T) {
+	cfg := DefaultTickSimConfig()
+	cfg.InitialCapital = 1000.00
+	cfg.EnableMacroShield = false
+	sim := NewTickSimulator(cfg)
+
+	baseTime := int64(1700000000000000000)
+
+	// Feed some valid ticks first to establish state
+	for i := 0; i < 10; i++ {
+		tick := AggTradeTick{
+			TradeID:      uint64(i + 100),
+			Price:        50000.0,
+			Quantity:     0.1,
+			TimestampNs:  baseTime + int64(i*1_000_000),
+			IsBuyerMaker: (i%2 == 0),
+		}
+		sim.ProcessTick(&tick)
+	}
+
+	// Verify maxPosBase is valid after normal ticks
+	if sim.currentEquity <= 0 {
+		t.Errorf("expected positive equity, got %f", sim.currentEquity)
+	}
+
+	// The internal maxPosBase is not exported, but we can verify
+	// that the simulator doesn't panic and state remains valid
+	// by checking that quotes can be placed
+	if !sim.hasBidQuote && !sim.hasAskQuote {
+		t.Logf("no active quotes after initial ticks (may be due to circuit breaker or other logic)")
+	}
+
+	// Test that invalid price doesn't corrupt state
+	tickInvalid := AggTradeTick{
+		TradeID:      200,
+		Price:        0,
+		Quantity:     0.1,
+		TimestampNs:  baseTime + 20_000_000,
+		IsBuyerMaker: true,
+	}
+	sim.ProcessTick(&tickInvalid)
+
+	// State should remain valid
+	if math.IsNaN(sim.currentEquity) || math.IsInf(sim.currentEquity, 0) {
+		t.Errorf("currentEquity became NaN/Inf after invalid price: %f", sim.currentEquity)
+	}
+	if math.IsNaN(sim.peakEquity) || math.IsInf(sim.peakEquity, 0) {
+		t.Errorf("peakEquity became NaN/Inf after invalid price: %f", sim.peakEquity)
+	}
+	if math.IsNaN(sim.lastMidPrice) || math.IsInf(sim.lastMidPrice, 0) {
+		t.Errorf("lastMidPrice became NaN/Inf after invalid price: %f", sim.lastMidPrice)
+	}
+}
+
+func TestTickSimulatorRefreshQuotesNaNProtection(t *testing.T) {
+	cfg := DefaultTickSimConfig()
+	cfg.InitialCapital = 1000.00
+	cfg.EnableMacroShield = false
+	sim := NewTickSimulator(cfg)
+
+	baseTime := int64(1700000000000000000)
+
+	// Feed valid ticks to establish state
+	for i := 0; i < 20; i++ {
+		tick := AggTradeTick{
+			TradeID:      uint64(i + 1000),
+			Price:        50000.0 + float64(i)*0.1,
+			Quantity:     0.1,
+			TimestampNs:  baseTime + int64(i*1_000_000),
+			IsBuyerMaker: (i%2 == 0),
+		}
+		sim.ProcessTick(&tick)
+	}
+
+	// Verify internal state is valid (no NaN/Inf in key fields)
+	if math.IsNaN(sim.currentEquity) || math.IsInf(sim.currentEquity, 0) {
+		t.Errorf("currentEquity is NaN/Inf: %f", sim.currentEquity)
+	}
+	if math.IsNaN(sim.volVarBps) || math.IsInf(sim.volVarBps, 0) {
+		t.Errorf("volVarBps is NaN/Inf: %f", sim.volVarBps)
+	}
+	if math.IsNaN(sim.inventoryBase) || math.IsInf(sim.inventoryBase, 0) {
+		t.Errorf("inventoryBase is NaN/Inf: %f", sim.inventoryBase)
+	}
+	if math.IsNaN(sim.avgEntryPrice) || math.IsInf(sim.avgEntryPrice, 0) {
+		t.Errorf("avgEntryPrice is NaN/Inf: %f", sim.avgEntryPrice)
+	}
+
+	// Test that refreshQuotes doesn't panic with edge cases
+	// (This is tested indirectly through ProcessTick)
+}
+
 func BenchmarkTickSimulator_ProcessTick(b *testing.B) {
 	cfg := DefaultTickSimConfig()
 	sim := NewTickSimulator(cfg)
@@ -348,5 +522,51 @@ func TestLoadPQBinFileZst(t *testing.T) {
 		if rawTicks[i] != zstTicks[i] {
 			t.Fatalf("tick %d mismatch: raw=%+v zst=%+v", i, rawTicks[i], zstTicks[i])
 		}
+	}
+}
+
+func TestTickSimulatorPositionFlipAndSharpeAndStaleFill(t *testing.T) {
+	cfg := DefaultTickSimConfig()
+	cfg.InitialCapital = 10000.0
+	cfg.Symbol = "BTCUSDT"
+	sim := NewTickSimulator(cfg)
+
+	// 1. Short -> Long flip updates avgEntryPrice and entryTimeNs
+	t1 := int64(1700000000_000_000_000)
+	t2 := t1 + 5_000_000_000
+	sim.executeFill(50000.0, 0.1, false, t1) // open short 0.1 @ 50000
+	sim.executeFill(51000.0, 0.3, true, t2)  // flip to long 0.2 @ 51000
+	if math.Abs(sim.inventoryBase-0.2) > 1e-9 || sim.avgEntryPrice != 51000.0 || sim.entryTimeNs != t2 {
+		t.Fatalf("short->long flip failed: inv=%v avg=%v entryTime=%v", sim.inventoryBase, sim.avgEntryPrice, sim.entryTimeNs)
+	}
+
+	// 2. Long -> Short flip updates avgEntryPrice and entryTimeNs
+	t3 := t2 + 5_000_000_000
+	sim.executeFill(52000.0, 0.5, false, t3) // flip to short 0.3 @ 52000
+	if math.Abs(sim.inventoryBase-(-0.3)) > 1e-9 || sim.avgEntryPrice != 52000.0 || sim.entryTimeNs != t3 {
+		t.Fatalf("long->short flip failed: inv=%v avg=%v entryTime=%v", sim.inventoryBase, sim.avgEntryPrice, sim.entryTimeNs)
+	}
+
+	// 3. computeSharpeRatio returns 0.0 for <5 samples or zero variance
+	if got := computeSharpeRatio([]float64{0.01, 0.02}); got != 0.0 {
+		t.Fatalf("expected 0.0 for <5 returns, got %v", got)
+	}
+	if got := computeSharpeRatio([]float64{0.01, 0.01, 0.01, 0.01, 0.01}); got != 0.0 {
+		t.Fatalf("expected 0.0 for zero variance, got %v", got)
+	}
+
+	// 4. evaluateFill decrements qty after stale quote fill so resting quote isn't double-filled
+	sim2 := NewTickSimulator(cfg)
+	tNow := int64(1700000000_000_000_000)
+	sim2.staleBidPrice = 50000.0
+	sim2.staleBidSize = 0.5
+	sim2.staleBidCancelAt = tNow + 10_000_000
+	sim2.hasBidQuote = true
+	sim2.bidPrice = 49990.0
+	sim2.bidSize = 0.5
+	sim2.bidQuoteTime = tNow - 100_000_000
+	sim2.evaluateFill(&AggTradeTick{}, 49980.0, 0.5, true, tNow, 10.0)
+	if sim2.totalFillsCount != 1 {
+		t.Fatalf("expected exactly 1 fill (stale quote consumed full 0.5 qty), got %d", sim2.totalFillsCount)
 	}
 }

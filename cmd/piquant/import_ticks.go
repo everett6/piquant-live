@@ -103,7 +103,10 @@ func runImportTicks(args []string) error {
 		if !*keepZip {
 			_ = os.Remove(zipPath)
 		}
-		st, _ := os.Stat(dst)
+		st, err := os.Stat(dst)
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", filepath.Base(dst), err)
+		}
 		fmt.Printf("[IMPORT] %s: %d ticks (%d out-of-order timestamps clamped), %.2f GB, %s\n", filepath.Base(dst),
 			n, clamped, float64(st.Size())/1e9, time.Since(t0).Round(time.Second))
 	}

@@ -84,8 +84,9 @@ type Storage struct {
 	Enabled       bool   `yaml:"enabled"`
 	Dir           string `yaml:"dir"`
 	FlushInterval string `yaml:"flush_interval"`
-	MaxFileBytes  int64  `yaml:"max_file_mb"` // 0 = 64 MiB per file
-	KeepFiles     int    `yaml:"keep_files"`  // 0 = keep all
+	MaxFileMB     int64  `yaml:"max_file_mb"` // 0 = 64 MiB per file
+	MaxFileBytes  int64  `yaml:"-"`
+	KeepFiles     int    `yaml:"keep_files"` // 0 = keep all
 }
 
 // Models sizes the model engines.
@@ -136,7 +137,9 @@ func (c *Config) Validate() error {
 	if c.Engine.RingSlotCap&(c.Engine.RingSlotCap-1) != 0 {
 		add("engine.ring_slot_cap must be a power of two, got %d", c.Engine.RingSlotCap)
 	}
-	if c.Engine.WatchdogKickMs == 0 {
+	if c.Engine.WatchdogKickMs < 0 {
+		add("engine.watchdog_kick_ms must be >= 0")
+	} else if c.Engine.WatchdogKickMs == 0 {
 		c.Engine.WatchdogKickMs = 500
 	}
 	switch c.Feed.Kind {
@@ -160,7 +163,7 @@ func (c *Config) Validate() error {
 	if len(c.Symbols) == 0 {
 		add("symbols: at least one symbol is required")
 	}
-	seen := map[uint16]bool{}
+	seen := map[string]bool{}
 	for i := range c.Symbols {
 		s := &c.Symbols[i]
 		if s.Name == "" {
@@ -169,10 +172,10 @@ func (c *Config) Validate() error {
 		if len(s.Name) > 16 {
 			add("symbols[%d]: name %q longer than 16 bytes", i, s.Name)
 		}
-		if seen[SymbolID(s.Name)] {
+		if seen[s.Name] {
 			add("symbols[%d]: duplicate symbol %q", i, s.Name)
 		}
-		seen[SymbolID(s.Name)] = true
+		seen[s.Name] = true
 		if s.VenueSym == "" {
 			s.VenueSym = strings.ToUpper(s.Name) + "USDT"
 		}
@@ -190,9 +193,18 @@ func (c *Config) Validate() error {
 		}
 	}
 	for name := range c.Targets {
-		if !seen[SymbolID(name)] {
+		if !seen[name] {
 			add("targets[%s]: no such symbol", name)
 		}
+	}
+	if c.Storage.MaxFileMB < 0 {
+		add("storage.max_file_mb must be >= 0")
+	}
+	if c.Storage.KeepFiles < 0 {
+		add("storage.keep_files must be >= 0")
+	}
+	if c.Storage.MaxFileMB > 0 && c.Storage.MaxFileBytes == 0 {
+		c.Storage.MaxFileBytes = c.Storage.MaxFileMB << 20
 	}
 	if c.Storage.Enabled {
 		if c.Storage.Dir == "" {
@@ -205,6 +217,7 @@ func (c *Config) Validate() error {
 			add("storage.flush_interval: %v", err)
 		}
 		if c.Storage.MaxFileBytes == 0 {
+			c.Storage.MaxFileMB = 64
 			c.Storage.MaxFileBytes = 64 << 20
 		}
 	}
@@ -224,6 +237,8 @@ func (c *Config) Validate() error {
 		if c.Models.BuyThreshold <= 0 || c.Models.BuyThreshold > 1 ||
 			c.Models.SellThreshold <= 0 || c.Models.SellThreshold > 1 {
 			add("models.buy_threshold and sell_threshold must be in (0,1]")
+		} else if c.Models.SellThreshold >= c.Models.BuyThreshold {
+			add("models.sell_threshold (%.4f) must be < models.buy_threshold (%.4f)", c.Models.SellThreshold, c.Models.BuyThreshold)
 		}
 	}
 	if c.Exec.Enabled {

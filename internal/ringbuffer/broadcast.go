@@ -173,15 +173,20 @@ func (r *Ring[T]) Close() { r.closed.Store(true) }
 func (r *Ring[T]) barrier() uint64 {
 	r.mu.Lock()
 	low := r.head.seq.Load()
+	// Copy subscriber positions to avoid holding lock during iteration
+	positions := make([]uint64, 0, len(r.subs))
 	for _, s := range r.subs {
 		if s.done {
 			continue
 		}
-		if p := s.load(); p < low {
+		positions = append(positions, s.load())
+	}
+	r.mu.Unlock()
+	for _, p := range positions {
+		if p < low {
 			low = p
 		}
 	}
-	r.mu.Unlock()
 	return low
 }
 
@@ -202,6 +207,9 @@ func (r *Ring[T]) Publish(v T) (uint64, bool) {
 // TryPublish commits v at the next position when no live consumer is a full
 // ring behind. It never blocks.
 func (r *Ring[T]) TryPublish(v T) (uint64, bool) {
+	if r.closed.Load() {
+		return 0, false
+	}
 	h := r.head.seq.Load()
 	if h-r.barrier() >= r.maxLag {
 		r.lag.v.Add(1)

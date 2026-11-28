@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"piquant-live/internal/alert"
-	"piquant-live/internal/carry"
 	"piquant-live/internal/execution"
 	"piquant-live/internal/quant/guardrails"
 	"piquant-live/internal/trend"
+	"piquant-live/internal/trendcache"
 )
 
 // PlannedOrder captures one asset leg's rebalance calculation prior to LiveRouter submission.
@@ -101,11 +101,101 @@ func runExecute(ctx context.Context, args []string) error {
 	}
 	report, err := executeWithOptions(ctx, opts)
 	if len(report.Venue) > 0 {
-		if b, merr := json.MarshalIndent(report, "", " "); merr == nil {
-			fmt.Println(string(b))
+		b, merr := json.MarshalIndent(report, "", " ")
+		if merr != nil {
+			return errors.Join(err, fmt.Errorf("marshal execute report: %w", merr))
 		}
+		fmt.Println(string(b))
 	}
 	return err
+}
+
+var knownPortfolioSelectors = map[string]struct{}{
+	"":                                      {},
+	"q42":                                   {},
+	"q42_dualspeed":                         {},
+	"q42_dualspeed_60_40_carry_spot":        {},
+	"q42_balanced":                          {},
+	"q42_balanced_50_50_carry_spot":         {},
+	"q44":                                   {},
+	"q44_bh_harvester":                      {},
+	"q44_bh_vol_harvester_1x_2p5x_spot":     {},
+	"q44_barbell":                           {},
+	"q44_barbell_1x_bh_2p5x_dualspeed_spot": {},
+	"q51":                                   {},
+	"q51_volparity":                         {},
+	"q51_btc_eth_sol_volparity_spot":        {},
+	"q56":                                   {},
+	"q56_quantum_fast":                      {},
+	"q56_quantum_fast_carry_spot":           {},
+	"q57":                                   {},
+	"q57_hrp_hurst":                         {},
+	"q57_hrp_conformal":                     {},
+	"q57_hrp_hurst_conformal":               {},
+	"q57_hrp_hurst_conformal_carry_spot":    {},
+	"s36":                                   {},
+	"s36_spot":                              {},
+	"s36_qd_carry_blend_spot":               {},
+	"s36_fut":                               {},
+	"s36_qd_carry_blend_fut":                {},
+}
+
+func isFinite(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
+func validateExecuteOptions(opts executeOptions) error {
+	key := strings.ToLower(strings.TrimSpace(opts.portfolio))
+	if _, ok := knownPortfolioSelectors[key]; !ok {
+		return fmt.Errorf("unknown portfolio %q (supported: q42_dualspeed, q42_balanced, q44_bh_harvester, q44_barbell, q51_volparity, q56_quantum_fast, q57_hrp_hurst, s36_spot, s36_fut)", opts.portfolio)
+	}
+	if !isFinite(opts.maxDailyUSD) || opts.maxDailyUSD <= 0 {
+		return fmt.Errorf("--max-daily-usd must be a finite value > 0 (got %v)", opts.maxDailyUSD)
+	}
+	if !isFinite(opts.maxOrderUSD) || opts.maxOrderUSD <= 0 {
+		return fmt.Errorf("--max-order-usd must be a finite value > 0 (got %v)", opts.maxOrderUSD)
+	}
+	if !isFinite(opts.taxRatePct) || opts.taxRatePct < 0 || opts.taxRatePct > 100 {
+		return fmt.Errorf("--tax-rate-pct must be in [0, 100] (got %v)", opts.taxRatePct)
+	}
+	if !isFinite(opts.maxDrawdownPct) || opts.maxDrawdownPct <= 0 || opts.maxDrawdownPct > 100 {
+		return fmt.Errorf("--max-drawdown-pct must be in (0, 100] (got %v)", opts.maxDrawdownPct)
+	}
+	if opts.orderTTL < 0 {
+		return fmt.Errorf("--order-ttl must be >= 0 (got %v)", opts.orderTTL)
+	}
+	if !isFinite(opts.navUSD) || opts.navUSD < 0 {
+		return fmt.Errorf("--nav must be a finite value >= 0 (got %v)", opts.navUSD)
+	}
+	if opts.maxQuoteAge < 0 {
+		return fmt.Errorf("--max-quote-age must be >= 0 (got %v)", opts.maxQuoteAge)
+	}
+	if !isFinite(opts.expectedEdgeBps) {
+		return fmt.Errorf("--expected-edge-bps must be finite (got %v)", opts.expectedEdgeBps)
+	}
+	if !isFinite(opts.roundTripFeeBps) || opts.roundTripFeeBps < 0 {
+		return fmt.Errorf("--round-trip-fee-bps must be a finite value >= 0 (got %v)", opts.roundTripFeeBps)
+	}
+	if !isFinite(opts.spreadBps) || opts.spreadBps < 0 {
+		return fmt.Errorf("--spread-bps must be a finite value >= 0 (got %v)", opts.spreadBps)
+	}
+	if !isFinite(opts.safetyMarginBps) || opts.safetyMarginBps < 0 {
+		return fmt.Errorf("--safety-margin-bps must be a finite value >= 0 (got %v)", opts.safetyMarginBps)
+	}
+	if !isFinite(opts.rebalanceBufferPct) || opts.rebalanceBufferPct < 0 || opts.rebalanceBufferPct > 100 {
+		return fmt.Errorf("--rebalance-buffer-pct must be in [0, 100] (got %v)", opts.rebalanceBufferPct)
+	}
+	if !isFinite(opts.maxPingMs) || opts.maxPingMs < 0 {
+		return fmt.Errorf("--max-ping-ms must be a finite value >= 0 (got %v)", opts.maxPingMs)
+	}
+	return nil
+}
+
+func normalizeQuoteMid(q execution.Quote) execution.Quote {
+	if (!isFinite(q.Mid) || q.Mid <= 0) && isFinite(q.Bid) && isFinite(q.Ask) && q.Bid > 0 && q.Ask > 0 {
+		q.Mid = 0.5 * (q.Bid + q.Ask)
+	}
+	return q
 }
 
 func parseExecuteOptions(args []string) (executeOptions, error) {
@@ -153,37 +243,44 @@ func parseExecuteOptions(args []string) (executeOptions, error) {
 		resolvedHWM = filepath.Join(*dataDir, "paper", "exec_hwm.json")
 	}
 
-	return executeOptions{
-		dryRun:          *dryRun,
-		venue:           *venue,
-		portfolio:       *portfolio,
-		dir:             *dir,
-		carryDir:        *carryDir,
-		dtb3Path:        *dtb3Path,
-		dataDir:         *dataDir,
-		envPath:         *envPath,
-		journalPath:     resolvedJournal,
-		hwmPath:         resolvedHWM,
-		maxDailyUSD:     *maxDailyUSD,
-		maxOrderUSD:     *maxOrderUSD,
-		maxQuoteAge:     *maxQuoteAge,
-		maxDrawdownPct:  *maxDrawdownPct,
-		navUSD:          *navUSD,
-		expectedEdgeBps: *expectedEdgeBps,
-		roundTripFeeBps: *roundTripFeeBps,
-		spreadBps:       *spreadBps,
+	opts := executeOptions{
+		dryRun:             *dryRun,
+		venue:              *venue,
+		portfolio:          *portfolio,
+		dir:                *dir,
+		carryDir:           *carryDir,
+		dtb3Path:           *dtb3Path,
+		dataDir:            *dataDir,
+		envPath:            *envPath,
+		journalPath:        resolvedJournal,
+		hwmPath:            resolvedHWM,
+		maxDailyUSD:        *maxDailyUSD,
+		maxOrderUSD:        *maxOrderUSD,
+		maxQuoteAge:        *maxQuoteAge,
+		maxDrawdownPct:     *maxDrawdownPct,
+		navUSD:             *navUSD,
+		expectedEdgeBps:    *expectedEdgeBps,
+		roundTripFeeBps:    *roundTripFeeBps,
+		spreadBps:          *spreadBps,
 		safetyMarginBps:    *safetyMarginBps,
 		taxRatePct:         *taxRatePct,
 		rebalanceBufferPct: *rebalanceBufferPct,
 		pingProbe:          *pingProbe,
-		maxPingMs:       *maxPingMs,
-		orderTTL:        *orderTTL,
-		confirmLive:     *confirmLive,
-		alertEnv:        *alertEnv,
-	}, nil
+		maxPingMs:          *maxPingMs,
+		orderTTL:           *orderTTL,
+		confirmLive:        *confirmLive,
+		alertEnv:           *alertEnv,
+	}
+	if err := validateExecuteOptions(opts); err != nil {
+		return executeOptions{}, err
+	}
+	return opts, nil
 }
 
 func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport, error) {
+	if err := validateExecuteOptions(opts); err != nil {
+		return ExecuteReport{}, err
+	}
 	// Safety check FIRST: live mode requires both CLI token and environment arming flag.
 	liveArmed := !opts.dryRun &&
 		opts.confirmLive == execution.LiveArmConfirmToken &&
@@ -222,9 +319,6 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 		plan := execution.PlanForLatency(venues, time.Now().UTC())
 		pingPlan = &plan
 		maxPingMs := opts.maxPingMs
-		if maxPingMs <= 0 {
-			maxPingMs = 1500.0
-		}
 		allFailed := true
 		for _, v := range venues {
 			if v.Successes > 0 {
@@ -232,7 +326,7 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 				break
 			}
 		}
-		if allFailed || plan.BestHTTPMedianMs <= 0 || plan.BestHTTPMedianMs > maxPingMs {
+		if allFailed || plan.BestHTTPMedianMs <= 0 || (maxPingMs > 0 && plan.BestHTTPMedianMs > maxPingMs) {
 			var err error
 			if allFailed {
 				err = fmt.Errorf("%w: all %d ping probe endpoint(s) failed", execution.ErrHighLatency, len(endpoints))
@@ -252,7 +346,10 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 		}
 	}
 
-	st, err := trend.Load(filepath.Join(opts.dir, "trend_state.json"))
+	// Use shared trend cache for consistent caching across CLI tools
+	trendCache := trendcache.NewTrendCache()
+
+	st, err := trendCache.GetTrendState(filepath.Join(opts.dir, "trend_state.json"))
 	if err != nil {
 		return ExecuteReport{
 			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
@@ -268,8 +365,32 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 	if st == nil {
 		st = trend.NewState("")
 	}
-	cState, _ := carry.Load(filepath.Join(opts.carryDir, "carry_state.json"))
-	rates, _ := trend.LoadDTB3Rates(opts.dtb3Path)
+	cState, cerr := trendCache.GetCarryState(filepath.Join(opts.carryDir, "carry_state.json"))
+	if cerr != nil && !errors.Is(cerr, os.ErrNotExist) {
+		return ExecuteReport{
+			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+			DryRun:       opts.dryRun,
+			LiveArmed:    liveArmed,
+			Venue:        venueName,
+			Portfolio:    opts.portfolio,
+			HWMPath:      hwmPath,
+			PingPlan:     pingPlan,
+			Errors:       []string{fmt.Sprintf("load carry state: %v", cerr)},
+		}, cerr
+	}
+	rates, rerr := trendCache.GetDTB3Rates(opts.dtb3Path)
+	if rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+		return ExecuteReport{
+			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+			DryRun:       opts.dryRun,
+			LiveArmed:    liveArmed,
+			Venue:        venueName,
+			Portfolio:    opts.portfolio,
+			HWMPath:      hwmPath,
+			PingPlan:     pingPlan,
+			Errors:       []string{fmt.Sprintf("load DTB3 rates: %v", rerr)},
+		}, rerr
+	}
 	blend, ok := trend.SelectBlend(st, cState, rates, opts.portfolio, pingPlan)
 	if !ok {
 		err := fmt.Errorf("portfolio %q unavailable in trend state", opts.portfolio)
@@ -311,7 +432,21 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 	}
 
 	host, _ := os.Hostname()
-	alertCfg, _ := alert.LoadEnv(opts.alertEnv)
+	alertCfg, aerr := alert.LoadEnv(opts.alertEnv)
+	if aerr != nil && !errors.Is(aerr, os.ErrNotExist) && !opts.dryRun {
+		err = fmt.Errorf("load alert env %s: %w", opts.alertEnv, aerr)
+		return ExecuteReport{
+			TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+			DryRun:       opts.dryRun,
+			LiveArmed:    liveArmed,
+			Venue:        venueClient.Name(),
+			Portfolio:    opts.portfolio,
+			BlendName:    blend.Name,
+			HWMPath:      hwmPath,
+			PingPlan:     pingPlan,
+			Errors:       []string{err.Error()},
+		}, err
+	}
 	alerter := &alert.Alerter{
 		Cfg:      alertCfg,
 		Source:   host,
@@ -434,6 +569,12 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 				Errors:       []string{err.Error()},
 			}, err
 		}
+	}
+
+	btcQuote = normalizeQuoteMid(btcQuote)
+	ethQuote = normalizeQuoteMid(ethQuote)
+	if needSOL {
+		solQuote = normalizeQuoteMid(solQuote)
 	}
 
 	nav := opts.navUSD
@@ -647,10 +788,26 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 	availUSD := balances["USD"]
 	var submitErrs []error
 	for _, leg := range legs {
+		leg.quote = normalizeQuoteMid(leg.quote)
 		targetUSD := nav * (leg.targetPct / 100.0)
 		currentQty := balances[leg.asset]
+		if !isFinite(leg.quote.Mid) || leg.quote.Mid <= 0 {
+			plan := PlannedOrder{
+				Symbol:        leg.symbol,
+				Asset:         leg.asset,
+				TargetPct:     leg.targetPct,
+				TargetUSD:     roundCents(targetUSD),
+				CurrentQty:    currentQty,
+				SkippedReason: "invalid_quote_mid",
+			}
+			report.Plans = append(report.Plans, plan)
+			qErr := fmt.Errorf("%s: invalid quote mid %.6f", leg.symbol, leg.quote.Mid)
+			report.Errors = append(report.Errors, qErr.Error())
+			submitErrs = append(submitErrs, qErr)
+			continue
+		}
 		currentPct := 0.0
-		if nav > 0 && leg.quote.Mid > 0 {
+		if nav > 0 {
 			currentPct = (currentQty * leg.quote.Mid / nav) * 100.0
 		}
 		targetQty := targetUSD / leg.quote.Mid

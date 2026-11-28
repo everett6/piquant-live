@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"os"
@@ -13,31 +14,38 @@ import (
 	"piquant-live/internal/paper"
 )
 
+func TestRunMonitorRejectsInvalidInterval(t *testing.T) {
+	ctx := context.Background()
+	if err := runMonitor(ctx, []string{"--interval", "0s"}); err == nil {
+		t.Fatal("expected zero monitor interval to be rejected")
+	}
+}
+
 func TestMonitorRenderFrame(t *testing.T) {
 	now := time.Now()
 	st := &paper.DryRunState{
-		StartTime:         now.Add(-24 * time.Hour),
-		TargetEndTime:     now.Add(6 * 24 * time.Hour),
-		LastCheckpoint:    now,
-		InitialCapital:    200.00,
-		Cash:              199.65,
-		Equity:            199.40,
-		PeakEquity:        200.00,
-		RealizedPnL:       -0.34,
-		UnrealizedPnL:     -0.26,
-		TotalReturnPct:    -0.30,
-		MaxDrawdownPct:    0.30,
-		TotalTrades:       34,
-		WinningTrades:     5,
-		LosingTrades:      11,
-		WinRate:           31.2,
-		SharpeRatio:       1.45,
-		DaysElapsed:       2,
-		TargetDays:        7,
-		WindowPreset:      "7d",
-		HoursRemaining:    144.0,
-		DataSource:        "live",
-		FeedDownSeconds:   0.0,
+		StartTime:       now.Add(-24 * time.Hour),
+		TargetEndTime:   now.Add(6 * 24 * time.Hour),
+		LastCheckpoint:  now,
+		InitialCapital:  200.00,
+		Cash:            199.65,
+		Equity:          199.40,
+		PeakEquity:      200.00,
+		RealizedPnL:     -0.34,
+		UnrealizedPnL:   -0.26,
+		TotalReturnPct:  -0.30,
+		MaxDrawdownPct:  0.30,
+		TotalTrades:     34,
+		WinningTrades:   5,
+		LosingTrades:    11,
+		WinRate:         31.2,
+		SharpeRatio:     1.45,
+		DaysElapsed:     2,
+		TargetDays:      7,
+		WindowPreset:    "7d",
+		HoursRemaining:  144.0,
+		DataSource:      "live",
+		FeedDownSeconds: 0.0,
 		Positions: map[string]*paper.Position{
 			"BTCUSDT": {
 				Symbol:        "BTCUSDT",
@@ -153,6 +161,14 @@ func TestMonitorWaitingFrame(t *testing.T) {
 	}
 	if !strings.Contains(out, "WAITING FOR ACTIVE DRY RUN CHECKPOINT") {
 		t.Errorf("expected waiting notice, got:\n%s", out)
+	}
+
+	for _, w := range []int{0, 10, 61} {
+		var narrow bytes.Buffer
+		renderWaitingFrame(&narrow, err, w, "/tmp/piquant-data", "")
+		if !strings.Contains(narrow.String(), "CONNECTING TO ENGINE") {
+			t.Errorf("width=%d: expected waiting frame header", w)
+		}
 	}
 }
 

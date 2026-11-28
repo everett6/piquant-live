@@ -115,7 +115,7 @@ func TestLiveBinanceUSStream(t *testing.T) {
 		}
 	}()
 	<-ctx.Done()
-	total, depths, trades, gaps, recons, _, _ := ing.Stats()
+	total, depths, trades, gaps, recons, _, _, _ := ing.Stats()
 	t.Logf("events=%d depths=%d trades=%d gaps=%d reconnects=%d", total, depths, trades, gaps, recons)
 	for _, s := range syms {
 		b, ok := ing.GetL2Book(s)

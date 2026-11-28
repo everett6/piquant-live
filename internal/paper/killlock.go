@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"piquant-live/internal/durable"
 )
 
 // KillLockName is the file written next to the checkpoint when a circuit breaker trips. While it exists the
@@ -45,11 +47,19 @@ func ReadKillLock(stateFile string) (KillLock, error) {
 }
 
 func writeKillLock(stateFile string, kl KillLock) error {
-	b, err := json.MarshalIndent(kl, "", "  ")
-	if err != nil {
-		return err
+	return durable.WriteJSON(KillLockPath(stateFile), kl, "  ")
+}
+
+// WriteKillLock persists a kill lock marker alongside stateFile.
+func WriteKillLock(stateFile, reason string, at time.Time) error {
+	if stateFile == "" {
+		return nil
 	}
-	return writeFileAtomic(KillLockPath(stateFile), append(b, '\n'))
+	return writeKillLock(stateFile, KillLock{
+		Reason:  reason,
+		Trigger: "reconcile",
+		At:      at.UTC(),
+	})
 }
 
 // writeKillLockLocked persists the lock for the current halt. Caller MUST hold e.mu.
@@ -149,7 +159,7 @@ func Unlock(stateFile string) (UnlockResult, error) {
 		if err != nil {
 			return res, err
 		}
-		if err := writeFileAtomic(p, out); err != nil {
+		if err := durable.WriteFile(p, out, 0o644); err != nil {
 			return res, err
 		}
 		res.Files = append(res.Files, p)
@@ -160,12 +170,4 @@ func Unlock(stateFile string) (UnlockResult, error) {
 		}
 	}
 	return res, nil
-}
-
-func writeFileAtomic(path string, b []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }

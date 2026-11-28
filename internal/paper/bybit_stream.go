@@ -132,16 +132,39 @@ func (b *BybitStreamIngestor) IsConnected() bool {
 	return b.connected.Load()
 }
 
+// IsFallback reports whether a fallback synthetic generator is active (always false for Bybit).
+func (b *BybitStreamIngestor) IsFallback() bool {
+	return false
+}
+
 // Stats returns a snapshot of Bybit stream metrics.
-func (b *BybitStreamIngestor) Stats() (total, depths, trades, gaps, reconnects, fallbacks uint64, lastNs int64) {
+func (b *BybitStreamIngestor) Stats() (total, depths, trades, gaps, reconnects, fallbacks uint64, lastNs, lastRealNs int64) {
 	return b.stats.TotalEvents.Load(),
 		b.stats.DepthUpdates.Load(),
 		b.stats.Trades.Load(),
 		b.stats.GapsDetected.Load(),
 		b.stats.Reconnects.Load(),
 		b.stats.FallbackTicks.Load(),
-		b.stats.LastEventNs.Load()
+		b.stats.LastEventNs.Load(),
+		b.stats.LastRealEventNs.Load()
 }
+
+// CopyL2Book copies the symbol's book into dst without allocating (engine hot path).
+func (b *BybitStreamIngestor) CopyL2Book(symbol string, dst *marketdata.L2OrderBook) bool {
+	b.booksMu.RLock()
+	defer b.booksMu.RUnlock()
+	book, ok := b.books[symbol]
+	if !ok {
+		book, ok = b.books[strings.ToUpper(symbol)]
+	}
+	if !ok {
+		return false
+	}
+	*dst = *book
+	return true
+}
+
+var _ MarketFeed = (*BybitStreamIngestor)(nil)
 
 // GetL2Book returns a clone of the in-memory Bybit L2 book for a symbol.
 func (b *BybitStreamIngestor) GetL2Book(symbol string) (*marketdata.L2OrderBook, bool) {
@@ -271,6 +294,8 @@ func (b *BybitStreamIngestor) connectAndStream(ctx context.Context) error {
 
 	b.connected.Store(true)
 
+	var writeMu sync.Mutex
+
 	// Keepalive ping loop
 	pingCtx, pingCancel := context.WithCancel(ctx)
 	defer pingCancel()
@@ -283,7 +308,10 @@ func (b *BybitStreamIngestor) connectAndStream(ctx context.Context) error {
 			case <-pingCtx.Done():
 				return
 			case <-ticker.C:
-				if err := sendWSText(conn, `{"op":"ping"}`); err != nil {
+				writeMu.Lock()
+				err := sendWSText(conn, `{"op":"ping"}`)
+				writeMu.Unlock()
+				if err != nil {
 					return
 				}
 			}
@@ -291,6 +319,7 @@ func (b *BybitStreamIngestor) connectAndStream(ctx context.Context) error {
 	}()
 
 	// Frame read loop
+	var reassemblyBuf []byte
 	for {
 		select {
 		case <-ctx.Done():
@@ -298,7 +327,7 @@ func (b *BybitStreamIngestor) connectAndStream(ctx context.Context) error {
 		default:
 		}
 
-		payload, op, err := readWSFrame(br)
+		payload, op, fin, err := readWSFrame(br)
 		if err != nil {
 			return err
 		}
@@ -307,14 +336,36 @@ func (b *BybitStreamIngestor) connectAndStream(ctx context.Context) error {
 			return io.EOF
 		}
 		if op == 0x9 { // Ping frame -> send Pong
+			writeMu.Lock()
 			_ = sendWSPong(conn, payload)
+			writeMu.Unlock()
 			continue
 		}
-		if op != 0x1 && op != 0x2 { // Text or binary only
+		if op == 0xA { // Pong frame
 			continue
 		}
-
-		b.HandleStreamPayload(payload)
+		if op == 0x0 { // Continuation frame
+			if reassemblyBuf == nil {
+				continue
+			}
+			reassemblyBuf = append(reassemblyBuf, payload...)
+			if fin {
+				b.HandleStreamPayload(reassemblyBuf)
+				reassemblyBuf = nil
+			}
+			continue
+		}
+		if op == 0x1 || op == 0x2 { // Text or binary
+			if reassemblyBuf != nil {
+				reassemblyBuf = nil
+			}
+			if fin {
+				b.HandleStreamPayload(payload)
+			} else {
+				reassemblyBuf = payload
+			}
+			continue
+		}
 	}
 }
 
@@ -360,9 +411,9 @@ func (b *BybitStreamIngestor) handleOrderbookPayload(payload []byte, nowNs int64
 		// Delta update
 		book.ApplyDelta(delta)
 	}
+	mid, hasMid := book.MidPrice()
 	b.booksMu.Unlock()
 
-	mid, hasMid := book.MidPrice()
 	if !hasMid && len(delta.Bids) > 0 && len(delta.Asks) > 0 {
 		mid = (delta.Bids[0].Price + delta.Asks[0].Price) * 0.5
 	}
@@ -393,6 +444,7 @@ func (b *BybitStreamIngestor) handleOrderbookPayload(payload []byte, nowNs int64
 
 	b.stats.DepthUpdates.Add(1)
 	b.stats.TotalEvents.Add(1)
+	b.stats.LastRealEventNs.Store(nowNs)
 }
 
 func (b *BybitStreamIngestor) handleTradePayload(payload []byte, nowNs int64) {
@@ -431,6 +483,7 @@ func (b *BybitStreamIngestor) handleTradePayload(payload []byte, nowNs int64) {
 
 		b.stats.Trades.Add(1)
 		b.stats.TotalEvents.Add(1)
+		b.stats.LastRealEventNs.Store(nowNs)
 	})
 }
 

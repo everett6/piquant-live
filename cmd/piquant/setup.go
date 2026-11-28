@@ -46,7 +46,6 @@ func runSetup(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	_ = nonInteractive
 	in := bufio.NewReader(os.Stdin)
 
 	store, warning, err := secrets.Open(pathFor(*dir))
@@ -76,7 +75,7 @@ func runSetup(ctx context.Context, args []string) error {
 	// two boards need opposite answers and a wrong one is silent otherwise.
 	if *role == "" {
 		fmt.Printf("\n  This board will act as the %s.\n", describeRole(run.Role))
-		if !confirm(in, "Use this role?", true) {
+		if !*nonInteractive && !confirm(in, "Use this role?", true) {
 			fmt.Println("  choose 1) dashboard (Raspberry Pi 3B)  2) agent (Raspberry Pi 5)")
 			switch strings.TrimSpace(readLine(in)) {
 			case "1":
