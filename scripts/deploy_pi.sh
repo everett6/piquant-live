@@ -102,6 +102,7 @@ scp -q \
   "$WORK/research/quant_lab/micro_news_features.py" \
   "$WORK/research/quant_lab/refresh_daily_csv.py" \
   "$WORK/research/quant_lab/shadow_paper_eval.py" \
+  "$WORK/research/quant_lab/decay_cusum.py" \
   "$WORK/research/quant_lab/mft_lft_fund.py" \
   "$WORK/research/quant_lab/quantum_meta_alpha.py" \
   "$WORK/research/quant_lab/fast_universal_alpha.py" \
@@ -111,5 +112,10 @@ scp -q \
   "$WORK/research/quant_lab/run_round57.py" \
   "$PI:PiQuant/piquant-live/research/quant_lab/"
 [ -f "$WORK/research/quant_lab/results/micro_tox_mlp.npz" ] && scp -q "$WORK/research/quant_lab/results/micro_tox_mlp.npz" "$PI:PiQuant/piquant-live/research/quant_lab/results/"
+# The nightly piquant-discover job imports these; a module missing from the list above fails here, not at 16:35.
+if ! $SSH "cd ~/PiQuant/piquant-live/research/quant_lab && ~/prereg22-env/bin/python3 -c 'import auto_discover, shadow_paper_eval, refresh_daily_csv, run_round56, run_round57'"; then
+  echo "ERROR: synced research scripts do not import on the Pi (a module is missing from the scp list)" >&2
+  exit 1
+fi
 $SSH "printf '%s\n' '$V' > ~/PiQuant/piquant-live/.synced_commit && sync"
 echo "synced research/quant_lab scripts and .synced_commit ($V) to $PI"
