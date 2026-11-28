@@ -121,10 +121,16 @@ PY
 )
 scp -q "${SYNC[@]/#/$WORK/}" "$PI:PiQuant/piquant-live/research/quant_lab/"
 [ -f "$WORK/research/quant_lab/results/micro_tox_mlp.npz" ] && scp -q "$WORK/research/quant_lab/results/micro_tox_mlp.npz" "$PI:PiQuant/piquant-live/research/quant_lab/results/"
-# The nightly piquant-discover job imports these; a module missing from the list above fails here, not at 16:35.
-if ! $SSH "cd ~/PiQuant/piquant-live/research/quant_lab && ~/prereg22-env/bin/python3 -c 'import auto_discover, feature_store, multimodal_features, micro_news_features, refresh_daily_csv, shadow_paper_eval, decay_cusum, mft_lft_fund, quantum_meta_alpha, fast_universal_alpha, run_round56, hrp_hurst_alpha, kalman_yz_alpha, run_round57'"; then
-  echo "ERROR: synced research scripts do not import on the Pi (a module is missing from the scp list)" >&2
+# The nightly piquant-discover job runs these three: if they don't import, fail here, not at 16:35.
+PYBIN='~/prereg22-env/bin/python3'
+QL='~/PiQuant/piquant-live/research/quant_lab'
+if ! $SSH "cd $QL && $PYBIN -c 'import auto_discover, shadow_paper_eval, refresh_daily_csv'"; then
+  echo "ERROR: the nightly research scripts do not import on the Pi" >&2
   exit 1
 fi
+# Other entry points are run by hand; report the ones that can't import (e.g. scipy is not installed there).
+for m in $ENTRY; do
+  $SSH "cd $QL && $PYBIN -c 'import $m'" >/dev/null 2>&1 || echo "warning: $m does not import on the Pi"
+done
 $SSH "printf '%s\n' '$V' > ~/PiQuant/piquant-live/.synced_commit && sync"
 echo "synced research/quant_lab scripts and .synced_commit ($V) to $PI"
