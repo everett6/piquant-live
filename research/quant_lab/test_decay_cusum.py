@@ -46,3 +46,28 @@ def test_health_rule():
     assert DC.classify_health_cusum(5, -2.0, {**c, "alarm": True}) == "KILLED"
     assert DC.classify_health_cusum(20, -2.0, {**c, "s": 5.0}) == "DECAYING"
     assert DC.classify_health_cusum(20, -2.0, c) == "HEALTHY"
+
+
+def test_max_drawdown_by_hand():
+    assert np.allclose(DC.max_drawdown_pct(np.array([0.1, -0.5, 0.2])), [-50.0])
+    assert np.allclose(DC.max_drawdown_pct(np.array([[0.1, 0.1], [-0.2, 0.0]])), [0.0, -20.0])
+
+
+def test_dd_limit_scales_with_vol_and_is_clamped_and_deterministic():
+    rng = np.random.default_rng(3)
+    z = rng.standard_normal(1095)
+    calm, mid, wild = (0.0005 + s * z for s in (0.002, 0.009, 0.05))
+    assert DC.dd_limit_pct(calm) == -10.0
+    assert DC.dd_limit_pct(wild) == -35.0
+    m = DC.dd_limit_pct(mid)
+    assert -35.0 < m < -10.0 and m == DC.dd_limit_pct(mid)
+    assert DC.dd_limit_pct(np.zeros(100)) is None
+
+
+def test_health_rule_v2():
+    c = {"alarm": False, "s": 0.0, "h": 10.0}
+    assert DC.classify_health_v2(5, -12.0, c, -20.0) == "WARMUP"
+    assert DC.classify_health_v2(5, -21.0, c, -20.0) == "KILLED"
+    assert DC.classify_health_v2(20, -2.0, {**c, "alarm": True}, -20.0) == "KILLED"
+    assert DC.classify_health_v2(20, -2.0, {**c, "s": 6.0}, -20.0) == "DECAYING"
+    assert DC.classify_health_v2(20, -19.0, c, -20.0) == "HEALTHY"

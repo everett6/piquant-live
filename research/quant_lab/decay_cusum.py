@@ -100,3 +100,43 @@ def classify_health_cusum(live_days: int, live_max_dd_pct: float, cusum: dict[st
     if cusum["s"] >= 0.5 * cusum["h"]:
         return "DECAYING"
     return "HEALTHY"
+
+
+# PREREG61: drawdown kill scaled to the candidate's own volatility. Constants fixed by PREREG61; do not tune.
+DD_PATHS = 2000
+DD_HORIZON = 730
+DD_PCTL = 5.0
+DD_CLAMP = (-35.0, -10.0)
+DD_SEED = 61
+
+
+def max_drawdown_pct(r: np.ndarray) -> np.ndarray:
+    """Max drawdown (%) of each row of daily returns (peak starts at 1)."""
+    eq = np.cumprod(np.maximum(1.0 + np.atleast_2d(r), 1e-12), axis=1)
+    peak = np.maximum(1.0, np.maximum.accumulate(eq, axis=1))
+    return np.min(eq / peak - 1.0, axis=1) * 100.0
+
+
+def dd_limit_pct(ref: np.ndarray) -> float | None:
+    """5th percentile of 730-day max drawdowns of healthy bootstrap paths (mean shifted to mu0), clamped."""
+    p = reference_params(ref)
+    if p is None:
+        return None
+    r = np.asarray(ref, dtype=float)
+    r = r[np.isfinite(r)][-REF_DAYS:]
+    healthy = r - r.mean() + p["mu0"]
+    rng = np.random.default_rng(DD_SEED)
+    paths = healthy[rng.integers(0, len(healthy), size=(DD_PATHS, DD_HORIZON))]
+    lim = float(np.percentile(max_drawdown_pct(paths), DD_PCTL))
+    return float(np.clip(lim, *DD_CLAMP))
+
+
+def classify_health_v2(live_days: int, live_max_dd_pct: float, cusum: dict[str, Any], dd_limit: float) -> str:
+    """PREREG61 health rule (used only once its calibration has passed)."""
+    if live_max_dd_pct < dd_limit or cusum["alarm"]:
+        return "KILLED"
+    if live_days < 14:
+        return "WARMUP"
+    if cusum["s"] >= 0.5 * cusum["h"]:
+        return "DECAYING"
+    return "HEALTHY"

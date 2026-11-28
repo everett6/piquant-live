@@ -34,6 +34,8 @@ DEFAULT_SHADOW_PATH = os.path.join(HERE, "results", "shadow_candidates.json")
 DEFAULT_OUT_PATH = os.path.join(HERE, "results", "shadow_paper_state.json")
 # PREREG60: the CUSUM decides health only if its synthetic calibration passed; otherwise informational.
 USE_CUSUM_HEALTH = False
+# PREREG61: vol-scaled drawdown kill + CUSUM decide health only if its calibration passed.
+USE_DD_V2_HEALTH = False
 
 
 def _to_utc_day(ts_val: Any) -> pd.Timestamp:
@@ -248,6 +250,12 @@ def evaluate_shadow_candidates(
                 metrics = compute_live_metrics(oos_ret)
                 cusum = DC.cusum_decay(net_ret[~oos_mask].to_numpy(), oos_ret.to_numpy())
                 metrics["cusum"] = cusum
+                dd_limit = DC.dd_limit_pct(net_ret[~oos_mask].to_numpy())
+                metrics["dd_limit_pct"] = None if dd_limit is None else round(dd_limit, 4)
+                if USE_DD_V2_HEALTH and cusum is not None and dd_limit is not None:
+                    metrics["health"] = DC.classify_health_v2(
+                        metrics["live_days"], metrics["live_max_dd_pct"], cusum, dd_limit
+                    )
                 if USE_CUSUM_HEALTH and cusum is not None:
                     metrics["health"] = DC.classify_health_cusum(
                         metrics["live_days"], metrics["live_max_dd_pct"], cusum

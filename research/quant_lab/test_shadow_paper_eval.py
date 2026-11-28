@@ -243,5 +243,6 @@ def test_dry_run_synth_writes_cusum_from_pre_admission_reference(tmp_path):
     c = SPE.evaluate_shadow_candidates(shadow_path=shadow_p, out_path=out_p, dry_run_synth=True)["candidates"][0]
     cu = c["cusum"]
     assert cu is not None and cu["h"] > 0 and cu["ref_days"] >= 180 and cu["s"] >= 0
+    assert -35.0 <= c["dd_limit_pct"] <= -10.0
     with open(out_p, encoding="utf-8") as fh:
         assert json.load(fh)["candidates"][0]["cusum"] == cu
