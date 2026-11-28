@@ -36,7 +36,7 @@ func runCollect(ctx context.Context, args []string) error {
 	backupKeep := fs.Int("backup-keep", 30, "nightly archives to keep")
 	mirrorRemote := fs.String("mirror-remote-dir", "piquant-collect",
 		"Pi tick-recording dir (relative to its home) mirrored nightly with rsync; empty = off")
-	mirrorPaths := fs.String("mirror-paths", "ticks,book,archive,clock_offsets.jsonl,ticks_status.json",
+	mirrorPaths := fs.String("mirror-paths", "ticks,book,archive,ticks_backfill,prices,clock_offsets.jsonl,ticks_status.json",
 		"entries of -mirror-remote-dir to mirror")
 	mirrorDest := fs.String("mirror-dest", filepath.Join(home, "piquant-backups", "pi-collect"),
 		"local folder for the tick-recording mirror")
