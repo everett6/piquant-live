@@ -16,7 +16,10 @@ IOSchedulingClass=idle
 MemoryMax=1800M
 TimeoutStartSec=900
 
-ExecStart=/bin/bash -lc 'YDAY=$(date -u -d yesterday +%%Y-%%m-%%d); (/usr/local/bin/piquant backfill-gaps --dir /home/everett/piquant-collect --from "$YDAY" --to "$YDAY" || true) && /home/everett/prereg22-env/bin/python3 research/quant_lab/refresh_daily_csv.py --fetch-public && /home/everett/prereg22-env/bin/python3 research/quant_lab/auto_discover.py --mode llamacpp --venue spot --n-candidates 6 --llama-threads 2 && (/home/everett/prereg22-env/bin/python3 research/quant_lab/auto_discover.py --mode openrouter --venue spot --n-candidates 6 || true) && /home/everett/prereg22-env/bin/python3 research/quant_lab/shadow_paper_eval.py'
+# Gap backfill: rescans the last 3 days so a run that was cut short is finished the next night, and is capped at
+# 6 min (SIGTERM flushes what it fetched) so a big outage cannot use the whole 15-min unit timeout and stop the
+# steps after it (2026-11-27: a 700k-trade gap ran into TimeoutStartSec and nothing else ran).
+ExecStart=/bin/bash -lc 'FROM=$(date -u -d "3 days ago" +%%Y-%%m-%%d); YDAY=$(date -u -d yesterday +%%Y-%%m-%%d); (timeout 360 /usr/local/bin/piquant backfill-gaps --dir /home/everett/piquant-collect --from "$FROM" --to "$YDAY" || true) && /home/everett/prereg22-env/bin/python3 research/quant_lab/refresh_daily_csv.py --fetch-public && /home/everett/prereg22-env/bin/python3 research/quant_lab/auto_discover.py --mode llamacpp --venue spot --n-candidates 6 --llama-threads 2 && (/home/everett/prereg22-env/bin/python3 research/quant_lab/auto_discover.py --mode openrouter --venue spot --n-candidates 6 || true) && /home/everett/prereg22-env/bin/python3 research/quant_lab/shadow_paper_eval.py'
 
 [Install]
 WantedBy=multi-user.target
