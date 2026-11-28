@@ -1,0 +1,69 @@
+{
+  "paths": 2000,
+  "seed": 60,
+  "scenarios": {
+    "H": {
+      "live_sharpe": 0.75,
+      "old": {
+        "kill_365": 0.7445,
+        "kill_730": 0.8595,
+        "median_days": 44.0
+      },
+      "new": {
+        "kill_365": 0.3995,
+        "kill_730": 0.686,
+        "median_days": 470.0
+      },
+      "median_h": 31.128
+    },
+    "Z": {
+      "live_sharpe": 0.0,
+      "old": {
+        "kill_365": 0.879,
+        "kill_730": 0.964,
+        "median_days": 33.0
+      },
+      "new": {
+        "kill_365": 0.611,
+        "kill_730": 0.886,
+        "median_days": 286.5
+      },
+      "median_h": 31.332
+    },
+    "N": {
+      "live_sharpe": -1.0,
+      "old": {
+        "kill_365": 0.9805,
+        "kill_730": 0.999,
+        "median_days": 30.0
+      },
+      "new": {
+        "kill_365": 0.892,
+        "kill_730": 0.995,
+        "median_days": 168.0
+      },
+      "median_h": 31.325
+    },
+    "C": {
+      "live_sharpe": -3.0,
+      "old": {
+        "kill_365": 1.0,
+        "kill_730": 1.0,
+        "median_days": 30.0
+      },
+      "new": {
+        "kill_365": 1.0,
+        "kill_730": 1.0,
+        "median_days": 89.0
+      },
+      "median_h": 31.141
+    }
+  },
+  "rules": {
+    "1_H_new_kill365_le_20pct": false,
+    "2_H_new_lt_old": true,
+    "3_N_new_kill730_ge_70pct": true,
+    "4_C_new_median_le_120d": true
+  },
+  "pass": false
+}

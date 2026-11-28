@@ -63,3 +63,23 @@ years to detect with any method, and the result is recorded as the honest detect
 
 Results go to `results/round60.json` (written by the script) and a "Result" section appended here.
 No variants of this detector (other haircuts, ARL0, windows) under any number if it fails.
+
+## Result (run once 2026-11-28, `results/round60.json`): FAIL
+
+| Scenario (live Sharpe) | Old: killed <=365 d | Old: median days | New: killed <=365 d | New: killed <=730 d | New: median days |
+|---|---|---|---|---|---|
+| H (0.75, healthy) | 74.5% | 44 | 40.0% | 68.6% | 470 |
+| Z (0.0, edge gone) | 87.9% | 33 | 61.1% | 88.6% | 287 |
+| N (-1.0) | 98.1% | 30 | 89.2% | 99.5% | 168 |
+| C (-3.0) | 100% | 30 | 100% | 100% | 89 |
+
+Rules: 1 FAIL (H 40.0% > 20%), 2 pass (40.0% < 74.5%), 3 pass (99.5% >= 70%), 4 pass (89 <= 120 days).
+Median h = 31.1.
+
+Verdict: FAIL. Per this pre-registration the CUSUM stays informational (`USE_CUSUM_HEALTH = False`) and
+`classify_health` is unchanged. No variants of this detector.
+
+Diagnostic after the verdict (not part of it, same seed and paths, scenario H, first 365 live days): the
+unchanged -15% drawdown kill alone fires on 39.8% of healthy paths; the CUSUM alone fires on 11.7%, under
+its 18% design rate. Rule 1 counted both together, so the failure comes from the shared drawdown rule, not
+from the CUSUM. Changing the drawdown kill would be a new, separate pre-registration.
