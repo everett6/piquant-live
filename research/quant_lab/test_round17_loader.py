@@ -65,3 +65,24 @@ def test_streaming_loaders_match_old(tmp_path, monkeypatch):
 def test_load_trades_no_files(tmp_path, monkeypatch):
     monkeypatch.setattr(R, "COLLECT", str(tmp_path))
     assert R.load_trades("BTC-USD").empty
+
+
+def test_rows_in_clock_wrong_windows_are_dropped(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "COLLECT", str(tmp_path))
+    monkeypatch.setattr(R, "START", pd.Timestamp("2026-01-01", tz="UTC"))
+    monkeypatch.setattr(R, "END", pd.Timestamp("2026-01-02", tz="UTC"))
+    d0 = R.ms(R.START)
+    with open(tmp_path / "clock_offsets.jsonl", "w") as f:
+        f.write(json.dumps({"at": "2026-01-01T00:20:03Z", "offset_ms": 1.5e8, "ok": False}) + "\n")  # wrong clock
+        f.write(json.dumps({"at": "2026-01-01T00:40:00Z", "offset_ms": 0, "ok": False}) + "\n")      # failed, unmeasured
+        f.write(json.dumps({"at": "2026-01-01T00:50:00Z", "offset_ms": 3.0, "ok": True}) + "\n")
+    assert R.clock_wrong_windows() == {d0 // 600_000 + 2}
+    tick = lambda t, i: {"t": t, "p": 1.0, "s": 1.0, "side": "b", "id": i}
+    _write(tmp_path / "ticks" / "BTC-USD" / "2026-01-01.jsonl.gz",
+           [tick(d0 + 19 * 60_000, 1), tick(d0 + 20 * 60_000 + 5_000, 2), tick(d0 + 41 * 60_000, 3)])
+    _write(tmp_path / "book" / "BTC-USD" / "2026-01-01.jsonl.gz",
+           [{"t": d0 + 25 * 60_000, "b": [[1.0, 1.0]], "a": [[1.1, 1.0]]},
+            {"t": d0 + 31 * 60_000, "b": [[1.0, 1.0]], "a": [[1.1, 1.0]]}])
+    assert R.load_trades("BTC-USD")["id"].tolist() == [1, 3]
+    assert R.load_books("BTC-USD")["t"].tolist() == [d0 + 31 * 60_000]
+    assert R18.load_books("BTC-USD")["t"].tolist() == [d0 + 31 * 60_000]

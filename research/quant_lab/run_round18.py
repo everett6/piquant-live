@@ -31,7 +31,8 @@ def load_books(product: str) -> pd.DataFrame:
         if b and a:
             out.append((r["t"], b[0][0], a[0][0], (b[0][0] + a[0][0]) / 2))
     df = pd.DataFrame(out, columns=["t", "bid_px", "ask_px", "mid"]).drop_duplicates("t").sort_values("t")
-    return df[(df["t"] >= R.ms(R.START)) & (df["t"] < R.ms(R.END))].reset_index(drop=True)
+    df = df[(df["t"] >= R.ms(R.START)) & (df["t"] < R.ms(R.END))]
+    return R.drop_clock_wrong(df).reset_index(drop=True)
 
 
 def book_gap_minutes(books: pd.DataFrame) -> set[int]:

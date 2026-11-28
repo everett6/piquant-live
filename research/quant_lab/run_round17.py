@@ -52,12 +52,35 @@ def read_days(kind: str, product: str) -> list[dict]:
     return list(iter_days(kind, product))
 
 
+def clock_wrong_windows() -> set[int]:
+    """10-minute windows (t // 600000) where a clock check MEASURED |offset| > 250 ms. Timestamps recorded in them
+    are unreliable, so their rows are dropped, not just kept from quoting (pre-run data check, see PREREG17):
+    after the 11-17 power loss the Pi booted with its clock 42.6 h behind and stamped 11-19 books as
+    11-17 07:20."""
+    out: set[int] = set()
+    p = os.path.join(COLLECT, "clock_offsets.jsonl")
+    if os.path.exists(p):
+        with open(p) as f:
+            for line in f:
+                r = json.loads(line)
+                if abs(r.get("offset_ms") or 0.0) > 250:
+                    out.add(ms(pd.Timestamp(r["at"])) // 600_000)
+    return out
+
+
+def drop_clock_wrong(df: pd.DataFrame, wrong: set[int] | None = None) -> pd.DataFrame:
+    wrong = clock_wrong_windows() if wrong is None else wrong
+    if df.empty or not wrong:
+        return df
+    return df[~(df["t"] // 600_000).isin(wrong)]
+
+
 def load_trades(product: str) -> pd.DataFrame:
     # Same result as pd.DataFrame(read_days(...)), built one day at a time so peak memory is one day of dicts.
     parts = [pd.DataFrame(rows) for rows in day_files("ticks", product)]
     df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=["t", "p", "s", "side", "id"])
     df = df.drop_duplicates("id").sort_values(["t", "id"]).reset_index(drop=True)
-    return df[(df["t"] >= ms(START)) & (df["t"] < ms(END))]
+    return drop_clock_wrong(df[(df["t"] >= ms(START)) & (df["t"] < ms(END))])
 
 
 def load_books(product: str) -> pd.DataFrame:
@@ -68,7 +91,7 @@ def load_books(product: str) -> pd.DataFrame:
             continue
         out.append((r["t"], b[0][0], b[0][1], sum(x[1] for x in b), sum(x[1] for x in a), (b[0][0] + a[0][0]) / 2))
     df = pd.DataFrame(out, columns=["t", "bid_px", "bid_sz", "bid_tot", "ask_tot", "mid"]).sort_values("t")
-    return df[(df["t"] >= ms(START)) & (df["t"] < ms(END))].reset_index(drop=True)
+    return drop_clock_wrong(df[(df["t"] >= ms(START)) & (df["t"] < ms(END))]).reset_index(drop=True)
 
 
 def bad_minutes(trades: pd.DataFrame, books: pd.DataFrame) -> set[int]:

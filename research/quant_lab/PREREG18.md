@@ -74,3 +74,7 @@ need a Kraken order connector, which does not exist.
 - **L2:** a weaker lead in that direction (Coinbase is the bigger venue). Net about −10 to −15 bps.
 - **F1:** gross a few bps either way. Net about −12 bps.
 - I expect none to pass. If any lead is tradable, it is the futures-cost route (L2), not Kraken spot.
+
+## Pre-run data check (2026-11-27)
+Same as PREREG17's note: book rows inside 10-minute windows where the clock log measured |offset| > 250 ms are
+dropped before the run (11-17 07:20 UTC holds 11-19 prices stamped 42.6 h early after a power loss).

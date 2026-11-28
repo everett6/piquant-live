@@ -99,3 +99,14 @@ A variant passes only if all of these hold:
   good fills, so the net improves by a few bps at most.
 - I expect none to pass. The scratch share should be 20–35%: the breakeven lock raises the win rate without
   making the mean positive.
+
+## Pre-run data check (2026-11-27, before any round-17 code reads real ticks)
+Found while checking the recorder, not from any signal or result: after the Pi lost power on 11-17 (~07:15 UTC)
+it booted at 11-19 ~01:59 UTC with its clock still at 11-17 07:20, and wrote ~20 s of book rows and one clock
+check (offset +153,549 s) stamped 11-17 07:20 before NTP corrected it. Those rows carry 11-19 prices (BTC 62,770
+vs 64,542 at 07:15), a fake -2.7% jump. Rule added before the run: rows (trades and books) inside any 10-minute
+window where clock_offsets.jsonl MEASURED |offset| > 250 ms are dropped, not only kept from quoting
+(`run_round17.clock_wrong_windows`, also used by run_round18). As of 11-27 that is 3 windows: 11-17 07:20 and
+11-19 10:10 and 10:20 UTC (-0.42 s). Windows with a failed but unmeasured check (network outages) are unchanged:
+quoting stays excluded there as registered. Separately, the loaders now stream day by day (the full window is
+~37M BTC trades, too big as one list); output is unchanged (synthetic equivalence test).
