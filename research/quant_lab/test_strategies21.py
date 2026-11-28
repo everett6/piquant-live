@@ -58,7 +58,7 @@ def test_vpin_buckets_split_and_rolling():
     assert len(bt) == 3200 and np.allclose(imb[:1600], 1.0) and np.allclose(imb[1600:], 0.0)
     assert bt[0] == D0 + 54                 # first bucket completes in second 53 (0-based), stamped at its end
     v = S.vpin_at(np.array([bt[48], bt[49], bt[1600 + 24], bt[-1]]), bt, imb)
-    assert np.isnan(v[0]) and v[1] == 1.0 and abs(v[2] - 25 / 50) < 1e-12 and v[3] == 0.0
+    assert np.isnan(v[0]) and abs(v[1] - 1.0) < 1e-12 and abs(v[2] - 25 / 50) < 1e-12 and abs(v[3]) < 1e-12
     # a boundary inside a second splits that second's buy and sell in proportion
     b2, s2 = np.zeros(86400), np.zeros(86400)
     b2[0], s2[1] = 1600.0, 1600.0           # V = 3200 / 1600 = 2: second 0 fills 800 buy buckets, then sells
