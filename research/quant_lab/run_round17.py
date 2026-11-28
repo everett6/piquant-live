@@ -31,27 +31,38 @@ def ms(ts: pd.Timestamp) -> int:
     return int(ts.timestamp() * 1000)
 
 
-def read_days(kind: str, product: str) -> list[dict]:
-    rows = []
+def day_files(kind: str, product: str):
+    """Yield one list of rows per recorded day file in [START, END). Missing days are printed and skipped."""
     for day in pd.date_range(START, END - pd.Timedelta(days=1), freq="D"):
         p = os.path.join(COLLECT, kind, product, day.strftime("%Y-%m-%d") + ".jsonl.gz")
         if not os.path.exists(p):
             print(f"missing {p}")
             continue
         with gzip.open(p, "rt") as f:
-            rows.extend(json.loads(line) for line in f if line.strip())
-    return rows
+            yield [json.loads(line) for line in f if line.strip()]
+
+
+def iter_days(kind: str, product: str):
+    """Stream rows day by day: the full window is ~37M BTC trades, ~20 GB as one list of dicts."""
+    for rows in day_files(kind, product):
+        yield from rows
+
+
+def read_days(kind: str, product: str) -> list[dict]:
+    return list(iter_days(kind, product))
 
 
 def load_trades(product: str) -> pd.DataFrame:
-    df = pd.DataFrame(read_days("ticks", product))
+    # Same result as pd.DataFrame(read_days(...)), built one day at a time so peak memory is one day of dicts.
+    parts = [pd.DataFrame(rows) for rows in day_files("ticks", product)]
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=["t", "p", "s", "side", "id"])
     df = df.drop_duplicates("id").sort_values(["t", "id"]).reset_index(drop=True)
     return df[(df["t"] >= ms(START)) & (df["t"] < ms(END))]
 
 
 def load_books(product: str) -> pd.DataFrame:
     out = []
-    for r in read_days("book", product):
+    for r in iter_days("book", product):
         b, a = r.get("b") or [], r.get("a") or []
         if not b or not a:
             continue

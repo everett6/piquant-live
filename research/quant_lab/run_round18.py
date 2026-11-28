@@ -26,7 +26,7 @@ HOLD_DAYS = (R.END - R.SPLIT).days
 
 def load_books(product: str) -> pd.DataFrame:
     out = []
-    for r in R.read_days("book", product):
+    for r in R.iter_days("book", product):
         b, a = r.get("b") or [], r.get("a") or []
         if b and a:
             out.append((r["t"], b[0][0], a[0][0], (b[0][0] + a[0][0]) / 2))
