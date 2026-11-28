@@ -95,25 +95,34 @@ REMOTE
 
 # Sync Python alpha-discovery scripts and .synced_commit only after the Go binary health check passes.
 $SSH "mkdir -p ~/PiQuant/piquant-live/research/quant_lab/results"
-scp -q \
-  "$WORK/research/quant_lab/auto_discover.py" \
-  "$WORK/research/quant_lab/feature_store.py" \
-  "$WORK/research/quant_lab/multimodal_features.py" \
-  "$WORK/research/quant_lab/micro_news_features.py" \
-  "$WORK/research/quant_lab/refresh_daily_csv.py" \
-  "$WORK/research/quant_lab/shadow_paper_eval.py" \
-  "$WORK/research/quant_lab/decay_cusum.py" \
-  "$WORK/research/quant_lab/mft_lft_fund.py" \
-  "$WORK/research/quant_lab/quantum_meta_alpha.py" \
-  "$WORK/research/quant_lab/fast_universal_alpha.py" \
-  "$WORK/research/quant_lab/run_round56.py" \
-  "$WORK/research/quant_lab/hrp_hurst_alpha.py" \
-  "$WORK/research/quant_lab/kalman_yz_alpha.py" \
-  "$WORK/research/quant_lab/run_round57.py" \
-  "$PI:PiQuant/piquant-live/research/quant_lab/"
+# Entry points the Pi runs; every local module they import (transitively) is synced with them, so a new
+# import can never be left behind.
+ENTRY="auto_discover feature_store multimodal_features micro_news_features refresh_daily_csv shadow_paper_eval decay_cusum mft_lft_fund quantum_meta_alpha fast_universal_alpha run_round56 hrp_hurst_alpha kalman_yz_alpha run_round57"
+mapfile -t SYNC < <(cd "$WORK/research/quant_lab" && python3 - $ENTRY <<'PY'
+import ast, os, sys
+local = {f[:-3] for f in os.listdir(".") if f.endswith(".py")}
+seen, todo = set(), list(sys.argv[1:])
+while todo:
+    m = todo.pop()
+    if m in seen:
+        continue
+    seen.add(m)
+    for n in ast.walk(ast.parse(open(m + ".py").read())):
+        if isinstance(n, ast.Import):
+            names = [a.name for a in n.names]
+        elif isinstance(n, ast.ImportFrom) and n.module and not n.level:
+            names = [n.module]
+        else:
+            continue
+        todo += [x.split(".")[0] for x in names if x.split(".")[0] in local]
+for m in sorted(seen):
+    print(f"research/quant_lab/{m}.py")
+PY
+)
+scp -q "${SYNC[@]/#/$WORK/}" "$PI:PiQuant/piquant-live/research/quant_lab/"
 [ -f "$WORK/research/quant_lab/results/micro_tox_mlp.npz" ] && scp -q "$WORK/research/quant_lab/results/micro_tox_mlp.npz" "$PI:PiQuant/piquant-live/research/quant_lab/results/"
 # The nightly piquant-discover job imports these; a module missing from the list above fails here, not at 16:35.
-if ! $SSH "cd ~/PiQuant/piquant-live/research/quant_lab && ~/prereg22-env/bin/python3 -c 'import auto_discover, shadow_paper_eval, refresh_daily_csv, run_round56, run_round57'"; then
+if ! $SSH "cd ~/PiQuant/piquant-live/research/quant_lab && ~/prereg22-env/bin/python3 -c 'import auto_discover, feature_store, multimodal_features, micro_news_features, refresh_daily_csv, shadow_paper_eval, decay_cusum, mft_lft_fund, quantum_meta_alpha, fast_universal_alpha, run_round56, hrp_hurst_alpha, kalman_yz_alpha, run_round57'"; then
   echo "ERROR: synced research scripts do not import on the Pi (a module is missing from the scp list)" >&2
   exit 1
 fi
