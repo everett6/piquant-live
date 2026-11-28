@@ -21,7 +21,7 @@ type LatencySnapshot struct {
 	EffectiveMs float64   `json:"effective_order_latency_ms"` // what the engine uses for order/cancel timing
 	OrderHost   string    `json:"order_host,omitempty"`
 	OrderP90Ms  float64   `json:"order_p90_ms,omitempty"`
-	Mode        string    `json:"strategy_mode,omitempty"`    // latency regime chosen by the orchestrator
+	Mode        string    `json:"strategy_mode,omitempty"` // latency regime chosen by the orchestrator
 }
 
 // latencyWindow is the number of recent probes kept for percentiles.

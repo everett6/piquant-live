@@ -8,20 +8,20 @@ import (
 type FairValueMode string
 
 const (
-	FairValueMidPrice            FairValueMode = "MID_PRICE"
-	FairValueMicroPrice          FairValueMode = "MICRO_PRICE"
-	FairValueMultiLevelDepth     FairValueMode = "MULTI_LEVEL_DEPTH"
-	FairValueCoinbaseLeadLag     FairValueMode = "COINBASE_LEAD_LAG"
+	FairValueMidPrice        FairValueMode = "MID_PRICE"
+	FairValueMicroPrice      FairValueMode = "MICRO_PRICE"
+	FairValueMultiLevelDepth FairValueMode = "MULTI_LEVEL_DEPTH"
+	FairValueCoinbaseLeadLag FairValueMode = "COINBASE_LEAD_LAG"
 )
 
 // TribecaFairValueEngine implements the institutional Fair Value and Dynamic Target Inventory
 // mechanics inspired by the flagship Tribeca market-making engine.
 // All calculations execute in 0 B/op and 0 allocs/op.
 type TribecaFairValueEngine struct {
-	Mode               FairValueMode
-	RiskAversionGamma  float64 // gamma (default: 0.10)
+	Mode                  FairValueMode
+	RiskAversionGamma     float64 // gamma (default: 0.10)
 	OrderBookDensityKappa float64 // kappa (default: 1.5)
-	MaxInventoryCap    float64 // Max allowed inventory units (e.g. 0.05 BTC)
+	MaxInventoryCap       float64 // Max allowed inventory units (e.g. 0.05 BTC)
 }
 
 // NewTribecaFairValueEngine initializes a Tribeca-style market making engine.

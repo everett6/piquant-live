@@ -172,13 +172,13 @@ type Guard struct {
 	Query    QueryFunc
 	OnCheck  func(Measurement, bool) // optional: called after every check with the new OK state
 
-	mu           sync.RWMutex
-	last         Measurement // latest check, good or not
-	good         Measurement // latest check with a usable answer
-	lastGood     time.Time
-	now          func() time.Time
-	lastCheck    time.Time   // wall-clock time of last check (for jump detection)
-	backoffMult  float64     // current backoff multiplier when !OK
+	mu          sync.RWMutex
+	last        Measurement // latest check, good or not
+	good        Measurement // latest check with a usable answer
+	lastGood    time.Time
+	now         func() time.Time
+	lastCheck   time.Time // wall-clock time of last check (for jump detection)
+	backoffMult float64   // current backoff multiplier when !OK
 }
 
 // NewGuard returns a guard with the owner's 250 ms limit and a 10-minute interval.

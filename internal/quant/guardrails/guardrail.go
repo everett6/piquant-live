@@ -25,19 +25,19 @@ var (
 
 // OrderRequest represents a pre-trade order candidate requiring compliance checks.
 type OrderRequest struct {
-	Symbol      string
-	Side        string // "BUY" or "SELL"
-	Price       float64
-	Quantity    float64
-	IsReduceOnly bool   // True if this order is closing existing inventory
+	Symbol       string
+	Side         string // "BUY" or "SELL"
+	Price        float64
+	Quantity     float64
+	IsReduceOnly bool // True if this order is closing existing inventory
 }
 
 // ExposureConfig holds limits for portfolio exposure and concentration.
 type ExposureConfig struct {
-	MaxGrossUSD        float64 // e.g. $10,000.00
-	MaxNetUSD          float64 // e.g. $5,000.00
+	MaxGrossUSD         float64 // e.g. $10,000.00
+	MaxNetUSD           float64 // e.g. $5,000.00
 	MaxConcentrationPct float64 // e.g. 80.0% (single asset gross / equity)
-	MaxOrderQtyUSD     float64 // e.g. $2,500.00 per single order
+	MaxOrderQtyUSD      float64 // e.g. $2,500.00 per single order
 }
 
 // GuardrailConfig defines all pre-trade parameters.
@@ -55,10 +55,10 @@ type GuardrailConfig struct {
 func DefaultGuardrailConfig() GuardrailConfig {
 	return GuardrailConfig{
 		Exposure: ExposureConfig{
-			MaxGrossUSD:        25000.0,
-			MaxNetUSD:          15000.0,
+			MaxGrossUSD:         25000.0,
+			MaxNetUSD:           15000.0,
 			MaxConcentrationPct: 80.0,
-			MaxOrderQtyUSD:     5000.0,
+			MaxOrderQtyUSD:      5000.0,
 		},
 		MaxDailyDrawdownPct:   2.0,   // -2.0% daily max trailing drawdown kill switch
 		FatFingerMaxDeviation: 0.015, // 1.5% (150 bps) price collar
@@ -76,20 +76,20 @@ type PreTradeGuard struct {
 	cfg GuardrailConfig
 
 	// Kill switch & drawdown tracking
-	peakEquity       float64
-	currentEquity    float64
+	peakEquity        float64
+	currentEquity     float64
 	killSwitchTripped bool
-	killSwitchReason string
-	lastPeakTime     time.Time
-	tradingLocked    bool
+	killSwitchReason  string
+	lastPeakTime      time.Time
+	tradingLocked     bool
 
 	// Token bucket rate limiter
-	tokens           float64
-	lastTokenRefill  time.Time
+	tokens          float64
+	lastTokenRefill time.Time
 
 	// Current portfolio snapshot for exposure checks
-	positions        map[string]float64 // symbol -> signed size
-	markPrices       map[string]float64 // symbol -> mark price
+	positions  map[string]float64 // symbol -> signed size
+	markPrices map[string]float64 // symbol -> mark price
 }
 
 // NewPreTradeGuard creates a thread-safe institutional pre-trade guard.

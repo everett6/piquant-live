@@ -8,21 +8,21 @@ import (
 type DecayStatus string
 
 const (
-	DecayHealthy  DecayStatus = "HEALTHY"
+	DecayHealthy   DecayStatus = "HEALTHY"
 	DecayThrottled DecayStatus = "THROTTLED"
 	DecaySuspended DecayStatus = "SUSPENDED_TO_TBILLS"
 )
 
 // SleeveAlphaHealth summarizes MFT alpha-decay diagnostics for a single strategy sleeve.
 type SleeveAlphaHealth struct {
-	Name            string      `json:"name"`
-	Days            int         `json:"days"`
-	Rolling30dSharpe float64    `json:"rolling_30d_sharpe"`
-	Rolling60dSharpe float64    `json:"rolling_60d_sharpe"`
-	EWMA20dNetBps   float64     `json:"ewma_20d_net_bps"`
-	Lag1Autocorr    float64     `json:"lag1_autocorr"`
-	ThrottleMult    float64     `json:"throttle_mult"`
-	Status          DecayStatus `json:"status"`
+	Name             string      `json:"name"`
+	Days             int         `json:"days"`
+	Rolling30dSharpe float64     `json:"rolling_30d_sharpe"`
+	Rolling60dSharpe float64     `json:"rolling_60d_sharpe"`
+	EWMA20dNetBps    float64     `json:"ewma_20d_net_bps"`
+	Lag1Autocorr     float64     `json:"lag1_autocorr"`
+	ThrottleMult     float64     `json:"throttle_mult"`
+	Status           DecayStatus `json:"status"`
 }
 
 // SelfImprovingAllocation is the daily output of the causal Multiplicative-Weights alpha-decay loop.

@@ -44,20 +44,20 @@ type VenueLatency struct {
 
 // PingExecutionPlan translates measured network latency into concrete strategy and execution guardrails.
 type PingExecutionPlan struct {
-	MeasuredAtUTC         string         `json:"measured_at_utc"`
-	BestVenue             string         `json:"best_venue"`
-	BestHTTPMedianMs      float64        `json:"best_http_median_ms"`
-	WorstHTTPP95Ms        float64        `json:"worst_http_p95_ms"`
-	CancelExposureMs      float64        `json:"cancel_exposure_ms"`
-	SubSecondMakerViable  bool           `json:"sub_second_maker_viable"`
-	RecommendedCadence    string         `json:"recommended_cadence"`
-	StaleBookGuardMs      int            `json:"stale_book_guard_ms"`
-	PostOnlyMakerTTLMs    int            `json:"post_only_maker_ttl_ms"`
-	TWAPSliceCount        int            `json:"twap_slice_count"`
-	TWAPSliceIntervalMs   int            `json:"twap_slice_interval_ms"`
-	PrimaryExecutionMode  string         `json:"primary_execution_mode"`
-	Guidance              string         `json:"guidance"`
-	Venues                []VenueLatency `json:"venues"`
+	MeasuredAtUTC        string         `json:"measured_at_utc"`
+	BestVenue            string         `json:"best_venue"`
+	BestHTTPMedianMs     float64        `json:"best_http_median_ms"`
+	WorstHTTPP95Ms       float64        `json:"worst_http_p95_ms"`
+	CancelExposureMs     float64        `json:"cancel_exposure_ms"`
+	SubSecondMakerViable bool           `json:"sub_second_maker_viable"`
+	RecommendedCadence   string         `json:"recommended_cadence"`
+	StaleBookGuardMs     int            `json:"stale_book_guard_ms"`
+	PostOnlyMakerTTLMs   int            `json:"post_only_maker_ttl_ms"`
+	TWAPSliceCount       int            `json:"twap_slice_count"`
+	TWAPSliceIntervalMs  int            `json:"twap_slice_interval_ms"`
+	PrimaryExecutionMode string         `json:"primary_execution_mode"`
+	Guidance             string         `json:"guidance"`
+	Venues               []VenueLatency `json:"venues"`
 }
 
 // ProbeEndpoints measures TCP connect and full HTTP round-trip latency for each endpoint concurrently.

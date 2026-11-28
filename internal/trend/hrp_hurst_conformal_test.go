@@ -245,7 +245,7 @@ func TestHRPWeights3x3ZeroVarianceAndNaN(t *testing.T) {
 	if math.Abs(w0-1.0/3.0) > 1e-12 || math.Abs(w1-1.0/3.0) > 1e-12 || math.Abs(w2-1.0/3.0) > 1e-12 {
 		t.Fatalf("all-zero HRP weights = (%v, %v, %v), want uniform 1/3", w0, w1, w2)
 	}
-	
+
 	// One active, two zero
 	r0 := make([]float64, n)
 	for i := 0; i < n; i++ {
@@ -255,7 +255,7 @@ func TestHRPWeights3x3ZeroVarianceAndNaN(t *testing.T) {
 	if math.Abs(a0-1.0) > 1e-12 || a1 != 0 || a2 != 0 {
 		t.Fatalf("1-active HRP weights = (%v, %v, %v), want (1, 0, 0)", a0, a1, a2)
 	}
-	
+
 	// NaN in returns -> treated as 0 deviation from mean
 	rNaN := make([]float64, n)
 	copy(rNaN, r0)
@@ -280,20 +280,20 @@ func TestRollingHurstVariogramEdgeCases(t *testing.T) {
 	if !ok || math.Abs(h-0.01) > 1e-9 {
 		t.Fatalf("flat prices Hurst = %v ok=%v, want 0.01", h, ok)
 	}
-	
+
 	// Very short history (< window) -> returns 0.5, false
 	short := makeOHLCDays("2026-01-01", []float64{100, 101, 102}, 0.01)
 	h, ok = rollingHurstVariogram(short, 64)
 	if ok || math.Abs(h-0.5) > 1e-9 {
 		t.Fatalf("short history Hurst = %v ok=%v, want 0.5 false", h, ok)
 	}
-	
+
 	// Window <= 16 -> returns 0.5, false
 	h, ok = rollingHurstVariogram(flat, 10)
 	if ok || math.Abs(h-0.5) > 1e-9 {
 		t.Fatalf("small window Hurst = %v ok=%v, want 0.5 false", h, ok)
 	}
-	
+
 	// Zero or negative close -> returns 0.5, false
 	badClose := makeOHLCDays("2026-01-01", []float64{100, 101, 0, 103}, 0.01)
 	h, ok = rollingHurstVariogram(badClose, 64)
@@ -311,7 +311,7 @@ func TestRollingBasketHurstVariogramEdgeCases(t *testing.T) {
 	if ok || math.Abs(h-0.5) > 1e-9 {
 		t.Fatalf("mismatched lengths Hurst = %v ok=%v, want 0.5 false", h, ok)
 	}
-	
+
 	// Zero close in any asset -> returns 0.5, false
 	hB = makeOHLCDays("2026-01-01", make([]float64, 70), 0.01)
 	hE = makeOHLCDays("2026-01-01", make([]float64, 70), 0.01)
@@ -338,19 +338,19 @@ func TestConformalConvictionGateScoreEdgeCases(t *testing.T) {
 	if g < conformalGateFloor || g > 1.0 || math.IsNaN(g) || math.IsInf(g, 0) {
 		t.Fatalf("Inf inputs gate = %v, want in [0.45, 1.0]", g)
 	}
-	
+
 	// Extreme values that could cause overflow in logistic
 	g = conformalConvictionGateScore(100.0, -100.0, 100.0)
 	if g < conformalGateFloor || g > 1.0 || math.IsNaN(g) || math.IsInf(g, 0) {
 		t.Fatalf("extreme inputs gate = %v, want in [0.45, 1.0]", g)
 	}
-	
+
 	// Trend preserve threshold
 	g = conformalConvictionGateScore(0.5, 0.0, conformalTrendPreserve)
 	if g != 1.0 {
 		t.Fatalf("trendPreserve gate = %v, want 1.0", g)
 	}
-	
+
 	// Entropy crisis floor with trendStrength < conformalTrendPreserve evaluates conformal gate in [0.45, 1.0]
 	g = conformalConvictionGateScore(0.5, conformalEntropyCrisisFloor, 0.5)
 	if g < conformalGateFloor || g > 1.0 || math.IsNaN(g) {
@@ -369,10 +369,10 @@ func TestConformalRegimeGateCausality(t *testing.T) {
 		hE[i].Close = 3000 * math.Exp(0.001*float64(i))
 		hS[i].Close = 150 * math.Exp(0.001*float64(i))
 	}
-	
+
 	// Gate at bar 80
 	gate80 := conformalRegimeGate(hB[:80], hE[:80], hS[:80])
-	
+
 	// Corrupt future bars
 	corruptB := append([]Day(nil), hB...)
 	corruptE := append([]Day(nil), hE...)
@@ -383,7 +383,7 @@ func TestConformalRegimeGateCausality(t *testing.T) {
 		corruptS[i].Close = 1e-6
 	}
 	gate80Corrupt := conformalRegimeGate(corruptB[:80], corruptE[:80], corruptS[:80])
-	
+
 	if gate80 != gate80Corrupt {
 		t.Fatalf("causality violation: gate80=%v vs gate80Corrupt=%v", gate80, gate80Corrupt)
 	}

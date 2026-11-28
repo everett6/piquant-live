@@ -34,25 +34,25 @@ type MultiFactorScore struct {
 // All inference executes in 0 B/op and 0 allocs/op.
 type MultiFactorModel struct {
 	// Ring buffers for time-series factor computations
-	windowSize  int
-	prices      []float64
-	volumes     []float64
-	count       int
-	head        int
+	windowSize int
+	prices     []float64
+	volumes    []float64
+	count      int
+	head       int
 
 	// EWMA accumulators
-	ewmaFast    float64 // Short alpha horizon (e.g. 10 ticks)
-	ewmaSlow    float64 // Long alpha horizon (e.g. 60 ticks)
-	ewmaAlphaF  float64
-	ewmaAlphaS  float64
+	ewmaFast   float64 // Short alpha horizon (e.g. 10 ticks)
+	ewmaSlow   float64 // Long alpha horizon (e.g. 60 ticks)
+	ewmaAlphaF float64
+	ewmaAlphaS float64
 
 	// Variance tracking
-	varAcc      float64
-	meanAcc     float64
+	varAcc  float64
+	meanAcc float64
 
 	// VWAP tracking
-	cumVol      float64
-	cumPV       float64
+	cumVol float64
+	cumPV  float64
 
 	// Adaptive Regime & Factor Weights
 	CurrentRegime MarketRegime

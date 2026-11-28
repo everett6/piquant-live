@@ -132,7 +132,7 @@ func runSchwab(ctx context.Context, args []string) error {
 			full.Name, specs, full.CarrySleevePct, *navUSD,
 		)
 		out := struct {
-			FullFund trend.FullFundSummary       `json:"q57_full_fund"`
+			FullFund trend.FullFundSummary         `json:"q57_full_fund"`
 			Schwab   execution.SchwabPortfolioPlan `json:"schwab"`
 		}{
 			FullFund: full,

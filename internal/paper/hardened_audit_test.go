@@ -410,7 +410,7 @@ func TestSpotOnlyModeAndTaxReserveAccounting(t *testing.T) {
 
 	// 5. Test cash gating in SpotOnly mode: if Cash < order value, cannot place BUY order
 	eng.mu.Lock()
-	pos.Size = 0.0 // Return to flat
+	pos.Size = 0.0       // Return to flat
 	eng.state.Cash = 1.0 // Only $1 cash left (cannot buy 0.001 BTC = $75)
 	eng.mu.Unlock()
 
@@ -438,8 +438,8 @@ func TestSpotOnlyModeAndTaxReserveAccounting(t *testing.T) {
 	eng.state.RealizedPnL = 20.0 // +$20 realized gains (10% on $200)
 	eng.updateTaxReservesLocked()
 
-	expectedTax := 20.0 * 0.35 // $7.00
-	expectedAfterTaxEquity := 220.0 - 7.00 // $213.00
+	expectedTax := 20.0 * 0.35                                // $7.00
+	expectedAfterTaxEquity := 220.0 - 7.00                    // $213.00
 	expectedAfterTaxReturn := (213.0 - 200.0) / 200.0 * 100.0 // +6.50%
 
 	if math.Abs(eng.state.EstimatedTaxUSDT-expectedTax) > 1e-4 {
@@ -632,6 +632,3 @@ func TestHoles46Through58(t *testing.T) {
 		t.Fatalf("Hole 58 failed: GenerateReport with NaN produced invalid text: %s", reportStr)
 	}
 }
-
-
-

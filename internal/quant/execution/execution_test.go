@@ -186,5 +186,3 @@ func TestHole38_ExecutionNaNProtection(t *testing.T) {
 		t.Fatalf("expected sum 10.0, got %v", sum)
 	}
 }
-
-

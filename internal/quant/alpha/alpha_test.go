@@ -192,4 +192,3 @@ func TestHoles47And56_AlphaPackage(t *testing.T) {
 		t.Fatalf("Hole 56 failed: MultiFactorModel did not recover from NaN variance accumulator: %+v", scoreMF)
 	}
 }
-

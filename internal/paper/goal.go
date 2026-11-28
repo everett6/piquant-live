@@ -14,12 +14,12 @@ import (
 type GoalState struct {
 	MonthlyTargetPct     float64   `json:"monthly_target_pct"`
 	TargetWinRatePct     float64   `json:"target_win_rate_pct"`
-	ExpectedByNowPct     float64   `json:"expected_by_now_pct"`  // compounded target pace at this point of the run
-	ReturnPct            float64   `json:"return_pct"`           // actual return since start
-	PaceGapPct           float64   `json:"pace_gap_pct"`         // actual - expected (negative = behind)
+	ExpectedByNowPct     float64   `json:"expected_by_now_pct"`   // compounded target pace at this point of the run
+	ReturnPct            float64   `json:"return_pct"`            // actual return since start
+	PaceGapPct           float64   `json:"pace_gap_pct"`          // actual - expected (negative = behind)
 	ProjectedMonthlyPct  float64   `json:"projected_monthly_pct"` // current return extrapolated to 30 days
-	LeverageMultiplier   float64   `json:"leverage_multiplier"`  // applied on top of dynamic leverage (capped by max)
-	ConvictionAdjust     float64   `json:"conviction_adjust"`    // added to buy / subtracted from sell thresholds
+	LeverageMultiplier   float64   `json:"leverage_multiplier"`   // applied on top of dynamic leverage (capped by max)
+	ConvictionAdjust     float64   `json:"conviction_adjust"`     // added to buy / subtracted from sell thresholds
 	RollingTrades        int       `json:"rolling_trades"`
 	RollingWinRatePct    float64   `json:"rolling_win_rate_pct"`
 	RollingExpectancyBps float64   `json:"rolling_expectancy_bps"` // mean round-trip PnL in bps of equity

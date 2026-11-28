@@ -25,24 +25,24 @@ type TickSimConfig struct {
 	Symbol             string  `json:"symbol"`
 	InitialCapital     float64 `json:"initial_capital"`
 	Months             int     `json:"months"`
-	MakerFeeBps        float64 `json:"maker_fee_bps"`         // Negative for rebate (e.g. -0.5 bps), or 0.0
-	TakerFeeBps        float64 `json:"taker_fee_bps"`         // Taker fee for emergency reduce-only hedges (e.g. 3.5 bps)
-	SimulatedLatencyMs float64 `json:"simulated_latency_ms"`  // Simulated tick-to-quote response latency (ms)
-	CancelLatencyMs    float64 `json:"cancel_latency_ms"`     // In-flight cancel propagation delay (ms, default 5.0)
-	AvgL1DepthBase     float64 `json:"avg_l1_depth_base"`      // Realistic top-of-book L1 depth ahead in base asset (default 1.5 BTC, 25.0 ETH)
-	BaseSpreadBps      float64 `json:"base_spread_bps"`       // Base half-spread (bps)
-	MinHalfSpreadBps   float64 `json:"min_half_spread_bps"`   // Minimum half-spread floor (bps, default 0.25)
-	TargetProfitBps    float64 `json:"target_profit_bps"`     // Dynamic profit ratchet starting net margin (bps, default 12.5)
-	StopLossBps        float64 `json:"stop_loss_bps"`         // Structural invalidation stop loss in bps (default 60.0)
-	Gamma              float64 `json:"gamma"`                 // GLFT inventory risk aversion parameter (default 0.001)
-	ClipFraction       float64 `json:"clip_fraction"`         // Order clip fraction of active margin (default 0.35)
-	BaseLeverage       float64 `json:"base_leverage"`         // Base leverage multiplier (default 2.50)
-	MaxLeverage        float64 `json:"max_leverage"`          // Maximum dynamic leverage cap (e.g. 3.50x; never 20x-50x)
-	KellyFraction      float64 `json:"kelly_fraction"`        // Fractional Kelly scaling (e.g. 0.35)
-	WarningDrawdownPct float64 `json:"warning_drawdown_pct"`  // Circuit breaker warning threshold (2.0%)
-	TrippedDrawdownPct float64 `json:"tripped_drawdown_pct"`  // Circuit breaker tripped threshold (3.5%)
-	EnableMacroShield  bool    `json:"enable_macro_shield"`   // Simulate Macro Guardian events (CPI, FOMC, NFP)
-	DataDir            string  `json:"data_dir"`               // Directory for macro cache and persistent logs
+	MakerFeeBps        float64 `json:"maker_fee_bps"`        // Negative for rebate (e.g. -0.5 bps), or 0.0
+	TakerFeeBps        float64 `json:"taker_fee_bps"`        // Taker fee for emergency reduce-only hedges (e.g. 3.5 bps)
+	SimulatedLatencyMs float64 `json:"simulated_latency_ms"` // Simulated tick-to-quote response latency (ms)
+	CancelLatencyMs    float64 `json:"cancel_latency_ms"`    // In-flight cancel propagation delay (ms, default 5.0)
+	AvgL1DepthBase     float64 `json:"avg_l1_depth_base"`    // Realistic top-of-book L1 depth ahead in base asset (default 1.5 BTC, 25.0 ETH)
+	BaseSpreadBps      float64 `json:"base_spread_bps"`      // Base half-spread (bps)
+	MinHalfSpreadBps   float64 `json:"min_half_spread_bps"`  // Minimum half-spread floor (bps, default 0.25)
+	TargetProfitBps    float64 `json:"target_profit_bps"`    // Dynamic profit ratchet starting net margin (bps, default 12.5)
+	StopLossBps        float64 `json:"stop_loss_bps"`        // Structural invalidation stop loss in bps (default 60.0)
+	Gamma              float64 `json:"gamma"`                // GLFT inventory risk aversion parameter (default 0.001)
+	ClipFraction       float64 `json:"clip_fraction"`        // Order clip fraction of active margin (default 0.35)
+	BaseLeverage       float64 `json:"base_leverage"`        // Base leverage multiplier (default 2.50)
+	MaxLeverage        float64 `json:"max_leverage"`         // Maximum dynamic leverage cap (e.g. 3.50x; never 20x-50x)
+	KellyFraction      float64 `json:"kelly_fraction"`       // Fractional Kelly scaling (e.g. 0.35)
+	WarningDrawdownPct float64 `json:"warning_drawdown_pct"` // Circuit breaker warning threshold (2.0%)
+	TrippedDrawdownPct float64 `json:"tripped_drawdown_pct"` // Circuit breaker tripped threshold (3.5%)
+	EnableMacroShield  bool    `json:"enable_macro_shield"`  // Simulate Macro Guardian events (CPI, FOMC, NFP)
+	DataDir            string  `json:"data_dir"`             // Directory for macro cache and persistent logs
 }
 
 // DefaultTickSimConfig returns institutional standard parameters for BTCUSDT tick backtesting.
@@ -98,7 +98,7 @@ type MonthlyTickMetric struct {
 
 // LatencyComparison models the quantitative impact of geographic latency vs colocation.
 type LatencyComparison struct {
-	SanJoseToTokyoRTTMs    float64 `json:"sanjose_to_tokyo_rtt_ms"`       // ~108.0 ms
+	SanJoseToTokyoRTTMs    float64 `json:"sanjose_to_tokyo_rtt_ms"`      // ~108.0 ms
 	ColocationTokyoRTTMs   float64 `json:"colocation_tokyo_rtt_ms"`      // ~1.2 ms
 	LatencyEdgeAdvantage   float64 `json:"latency_edge_advantage_bps"`   // ~2.4 bps less adverse selection
 	MonthlyBreakevenVolUSD float64 `json:"monthly_breakeven_volume_usd"` // Volume needed to offset AWS cost
@@ -158,13 +158,13 @@ type TickSimulator struct {
 	macroGuardian  *macro.MacroGuardian
 
 	// Live portfolio state
-	currentEquity      float64
-	cashUSD            float64
-	inventoryBase      float64
-	avgEntryPrice      float64
-	peakEquity         float64
-	maxDrawdownPct     float64
-	macroEventsEvaded  int
+	currentEquity     float64
+	cashUSD           float64
+	inventoryBase     float64
+	avgEntryPrice     float64
+	peakEquity        float64
+	maxDrawdownPct    float64
+	macroEventsEvaded int
 
 	// Resting quote state
 	hasBidQuote   bool

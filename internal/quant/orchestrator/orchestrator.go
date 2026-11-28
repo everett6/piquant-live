@@ -25,20 +25,20 @@ const (
 
 // StrategyWeights allocates capital and conviction across the fund's quantitative pillars.
 type StrategyWeights struct {
-	PassiveMM      float64 `json:"passive_mm"`       // GLFT + Cartea-Jaimungal
-	OBIMomentum    float64 `json:"obi_momentum"`     // Hawkes + Order Flow Imbalance (30s-15m)
-	FundingCarry   float64 `json:"funding_carry"`    // Delta-neutral Spot-Perp Basis carry
-	TrendFollowing float64 `json:"trend_following"`  // Multi-horizon TSMOM + Kalman
+	PassiveMM      float64 `json:"passive_mm"`      // GLFT + Cartea-Jaimungal
+	OBIMomentum    float64 `json:"obi_momentum"`    // Hawkes + Order Flow Imbalance (30s-15m)
+	FundingCarry   float64 `json:"funding_carry"`   // Delta-neutral Spot-Perp Basis carry
+	TrendFollowing float64 `json:"trend_following"` // Multi-horizon TSMOM + Kalman
 }
 
 // OrchestratorConfig configures latency switching thresholds and smoothing parameters.
 type OrchestratorConfig struct {
-	LowLatencyThresholdMs    float64 // Default: 15.0 ms
-	HighLatencyThresholdMs   float64 // Default: 150.0 ms
-	HighFundingThresholdAPR  float64 // Default: 12.0% APR (triggers carry mode even on low latency)
-	ExitFundingThresholdAPR  float64 // Default: 8.0% APR
-	LatencyAlpha             float64 // EWMA smoothing factor for latency (default: 0.10)
-	HysteresisBandPct        float64 // Default: 0.20 (+/- 20% threshold hysteresis to prevent flapping)
+	LowLatencyThresholdMs   float64 // Default: 15.0 ms
+	HighLatencyThresholdMs  float64 // Default: 150.0 ms
+	HighFundingThresholdAPR float64 // Default: 12.0% APR (triggers carry mode even on low latency)
+	ExitFundingThresholdAPR float64 // Default: 8.0% APR
+	LatencyAlpha            float64 // EWMA smoothing factor for latency (default: 0.10)
+	HysteresisBandPct       float64 // Default: 0.20 (+/- 20% threshold hysteresis to prevent flapping)
 }
 
 // DefaultOrchestratorConfig provides institutional configuration.
@@ -55,15 +55,15 @@ func DefaultOrchestratorConfig() OrchestratorConfig {
 
 // OrchestratorReport summarizes current orchestrator state and model allocations.
 type OrchestratorReport struct {
-	CurrentMode          StrategyMode    `json:"current_mode"`
-	SmoothedLatencyMs    float64         `json:"smoothed_latency_ms"`
-	LastMeasuredLatencyMs float64        `json:"last_measured_latency_ms"`
-	FundingAPR           float64         `json:"funding_apr"`
-	Weights              StrategyWeights `json:"weights"`
-	TargetHorizon        string          `json:"target_horizon"`
-	TransitionsCount     int64           `json:"transitions_count"`
-	TimeInCurrentMode    time.Duration   `json:"time_in_current_mode"`
-	Description          string          `json:"description"`
+	CurrentMode           StrategyMode    `json:"current_mode"`
+	SmoothedLatencyMs     float64         `json:"smoothed_latency_ms"`
+	LastMeasuredLatencyMs float64         `json:"last_measured_latency_ms"`
+	FundingAPR            float64         `json:"funding_apr"`
+	Weights               StrategyWeights `json:"weights"`
+	TargetHorizon         string          `json:"target_horizon"`
+	TransitionsCount      int64           `json:"transitions_count"`
+	TimeInCurrentMode     time.Duration   `json:"time_in_current_mode"`
+	Description           string          `json:"description"`
 }
 
 // LatencyAdaptiveOrchestrator monitors network round-trip latency and funding rates,
@@ -73,13 +73,13 @@ type LatencyAdaptiveOrchestrator struct {
 
 	cfg OrchestratorConfig
 
-	currentMode        StrategyMode
-	smoothedLatencyMs  float64
-	lastMeasuredMs     float64
-	latestFundingAPR   float64
-	modeEnteredAt      time.Time
-	transitionsCount   int64
-	weights            StrategyWeights
+	currentMode       StrategyMode
+	smoothedLatencyMs float64
+	lastMeasuredMs    float64
+	latestFundingAPR  float64
+	modeEnteredAt     time.Time
+	transitionsCount  int64
+	weights           StrategyWeights
 }
 
 // NewLatencyAdaptiveOrchestrator creates a new adaptive orchestrator.

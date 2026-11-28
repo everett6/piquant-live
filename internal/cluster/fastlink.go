@@ -14,11 +14,11 @@ import (
 
 // Protocol constants.
 const (
-	FrameMagic         uint32 = 0x50514C4B // "PQLK" (PiQuant Link)
-	FrameVersion       uint8  = 1
-	FrameSize                 = 64
-	SocketBufferSize          = 256 * 1024 // 256 KiB
-	DefaultKeepAlive          = 5 * time.Second
+	FrameMagic       uint32 = 0x50514C4B // "PQLK" (PiQuant Link)
+	FrameVersion     uint8  = 1
+	FrameSize               = 64
+	SocketBufferSize        = 256 * 1024 // 256 KiB
+	DefaultKeepAlive        = 5 * time.Second
 )
 
 // Frame types for inter-Pi multiplexed communication.

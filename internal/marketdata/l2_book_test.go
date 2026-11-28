@@ -176,4 +176,3 @@ func TestHole43_L2BookNaNProtection(t *testing.T) {
 		t.Fatalf("Hole 43 failed: Spread() returned invalid value: %v", spread)
 	}
 }
-

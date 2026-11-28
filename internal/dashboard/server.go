@@ -233,9 +233,9 @@ type Server struct {
 	mu   sync.Mutex
 	last telemetry.Sample
 
-	modeMu         sync.RWMutex
-	mode           string
-	clusterMode    string // "pi5_only" or "dual_pi"
+	modeMu           sync.RWMutex
+	mode             string
+	clusterMode      string // "pi5_only" or "dual_pi"
 	peerMu           sync.RWMutex
 	lastPeerStatus   *Status
 	lastPeerFetch    time.Time
@@ -294,7 +294,6 @@ type taxCacheEntry struct {
 	size    int64
 	summary *tax.TaxSummary
 }
-
 
 func (s *Server) cachedTrendState(path string) (*trend.State, error) {
 	return s.trendCache.GetTrendState(path)
@@ -386,14 +385,14 @@ func New(opts Options) (*Server, error) {
 		mode = "simple"
 	}
 	s := &Server{
-		opts:       opts,
-		tel:        telemetry.New(opts.DataDirs...),
-		start:      opts.Now(),
-		mux:        http.NewServeMux(),
-		logger:     log.New(os.Stderr, "dashboard: ", log.LstdFlags),
-		sess:       newSessionStore(opts.SessionTTL),
-		lim:        newLoginLimiter(5, 15*time.Minute),
-		mode:       mode,
+		opts:            opts,
+		tel:             telemetry.New(opts.DataDirs...),
+		start:           opts.Now(),
+		mux:             http.NewServeMux(),
+		logger:          log.New(os.Stderr, "dashboard: ", log.LstdFlags),
+		sess:            newSessionStore(opts.SessionTTL),
+		lim:             newLoginLimiter(5, 15*time.Minute),
+		mode:            mode,
 		probeCache:      make(map[string]cachedProbe),
 		delegator:       cluster.NewTaskDelegator(),
 		trendCache:      trendcache.NewTrendCache(),

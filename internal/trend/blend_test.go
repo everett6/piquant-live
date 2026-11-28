@@ -297,7 +297,7 @@ func TestComputeWeightedBlendSingleLegNoCarryFastPath(t *testing.T) {
 
 func TestLoadDTB3RatesMalformedCSV(t *testing.T) {
 	dir := t.TempDir()
-	
+
 	// Empty file
 	emptyPath := filepath.Join(dir, "empty.csv")
 	if err := os.WriteFile(emptyPath, []byte(""), 0o644); err != nil {
@@ -310,7 +310,7 @@ func TestLoadDTB3RatesMalformedCSV(t *testing.T) {
 	if len(rates) != 0 {
 		t.Fatalf("empty file rates = %v, want empty", rates)
 	}
-	
+
 	// Header only
 	headerPath := filepath.Join(dir, "header.csv")
 	if err := os.WriteFile(headerPath, []byte("date,rate\n"), 0o644); err != nil {
@@ -323,7 +323,7 @@ func TestLoadDTB3RatesMalformedCSV(t *testing.T) {
 	if len(rates) != 0 {
 		t.Fatalf("header only rates = %v, want empty", rates)
 	}
-	
+
 	// Malformed rows (empty rate, non-numeric rate)
 	malformedPath := filepath.Join(dir, "malformed.csv")
 	malformedContent := "date,rate\n2024-01-01,5.0\n2024-01-02,not_a_number\n2024-01-03,\n2024-01-04,4.5\n"
@@ -343,7 +343,7 @@ func TestLoadDTB3RatesMalformedCSV(t *testing.T) {
 	if _, ok := rates["2024-01-03"]; ok {
 		t.Fatalf("expected incomplete row 2024-01-03 to be skipped")
 	}
-	
+
 	// Non-existent file
 	rates, err = LoadDTB3Rates(filepath.Join(dir, "nonexistent.csv"))
 	if err != nil {

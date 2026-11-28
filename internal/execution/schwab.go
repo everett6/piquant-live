@@ -583,11 +583,11 @@ func BuildSchwabMultiAssetPlan(
 		} else {
 			plan.Connected = true
 			var (
-				acct     SchwabAccountPositions
-				aerr     error
-				quotes   map[string]SchwabQuote
-				qerr     error
-				wg       sync.WaitGroup
+				acct   SchwabAccountPositions
+				aerr   error
+				quotes map[string]SchwabQuote
+				qerr   error
+				wg     sync.WaitGroup
 			)
 			wg.Add(2)
 			go func() {

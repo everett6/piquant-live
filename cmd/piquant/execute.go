@@ -62,32 +62,32 @@ type ExecuteReport struct {
 }
 
 type executeOptions struct {
-	dryRun            bool
-	venue             string
-	portfolio         string
-	dir               string
-	carryDir          string
-	dtb3Path          string
-	dataDir           string
-	envPath           string
-	journalPath       string
-	maxDailyUSD       float64
-	maxOrderUSD       float64
-	maxQuoteAge       time.Duration
-	navUSD            float64
-	expectedEdgeBps   float64
-	confirmLive       string
-	alertEnv          string
-	coinbaseBaseURL   string
-	httpClient        *http.Client
-	pingProbe         bool
-	maxPingMs         float64
-	orderTTL          time.Duration
-	pingEndpoints     []execution.ExchangeEndpoint
-	hwmPath           string
-	maxDrawdownPct    float64
-	roundTripFeeBps   float64
-	spreadBps         float64
+	dryRun             bool
+	venue              string
+	portfolio          string
+	dir                string
+	carryDir           string
+	dtb3Path           string
+	dataDir            string
+	envPath            string
+	journalPath        string
+	maxDailyUSD        float64
+	maxOrderUSD        float64
+	maxQuoteAge        time.Duration
+	navUSD             float64
+	expectedEdgeBps    float64
+	confirmLive        string
+	alertEnv           string
+	coinbaseBaseURL    string
+	httpClient         *http.Client
+	pingProbe          bool
+	maxPingMs          float64
+	orderTTL           time.Duration
+	pingEndpoints      []execution.ExchangeEndpoint
+	hwmPath            string
+	maxDrawdownPct     float64
+	roundTripFeeBps    float64
+	spreadBps          float64
 	safetyMarginBps    float64
 	taxRatePct         float64
 	rebalanceBufferPct float64
@@ -460,11 +460,11 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 		quoteSyms = append(quoteSyms, "SOL-USD")
 	}
 	var (
-		balances                               map[string]float64
-		balErr, btcErr, ethErr, solErr         error
-		btcQuote, ethQuote, solQuote           execution.Quote
-		hasBTCQuote, hasETHQuote, hasSOLQuote  bool
-		fetchWG                                sync.WaitGroup
+		balances                              map[string]float64
+		balErr, btcErr, ethErr, solErr        error
+		btcQuote, ethQuote, solQuote          execution.Quote
+		hasBTCQuote, hasETHQuote, hasSOLQuote bool
+		fetchWG                               sync.WaitGroup
 	)
 	fetchWG.Add(2)
 	go func() {
@@ -487,15 +487,27 @@ func executeWithOptions(ctx context.Context, opts executeOptions) (ExecuteReport
 		var qwg sync.WaitGroup
 		if !hasBTCQuote {
 			qwg.Add(1)
-			go func() { defer qwg.Done(); btcQuote, btcErr = venueClient.GetQuote(ctx, "BTC-USD"); hasBTCQuote = btcErr == nil }()
+			go func() {
+				defer qwg.Done()
+				btcQuote, btcErr = venueClient.GetQuote(ctx, "BTC-USD")
+				hasBTCQuote = btcErr == nil
+			}()
 		}
 		if !hasETHQuote {
 			qwg.Add(1)
-			go func() { defer qwg.Done(); ethQuote, ethErr = venueClient.GetQuote(ctx, "ETH-USD"); hasETHQuote = ethErr == nil }()
+			go func() {
+				defer qwg.Done()
+				ethQuote, ethErr = venueClient.GetQuote(ctx, "ETH-USD")
+				hasETHQuote = ethErr == nil
+			}()
 		}
 		if blend.TargetSOLPortPct > 0 && !hasSOLQuote {
 			qwg.Add(1)
-			go func() { defer qwg.Done(); solQuote, solErr = venueClient.GetQuote(ctx, "SOL-USD"); hasSOLQuote = solErr == nil }()
+			go func() {
+				defer qwg.Done()
+				solQuote, solErr = venueClient.GetQuote(ctx, "SOL-USD")
+				hasSOLQuote = solErr == nil
+			}()
 		}
 		qwg.Wait()
 	}()

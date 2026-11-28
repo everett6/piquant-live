@@ -128,9 +128,9 @@ func advanceTrend(ctx context.Context, client *http.Client, st *trend.State, pat
 	g0 := now.Add(-299 * 6 * time.Hour)
 
 	var (
-		rows, ethRows, solRows, gb, ge []collect.CandleRow
+		rows, ethRows, solRows, gb, ge    []collect.CandleRow
 		err, ethErr, solErr, gbErr, geErr error
-		wg                             sync.WaitGroup
+		wg                                sync.WaitGroup
 	)
 	wg.Add(5)
 	go func() {

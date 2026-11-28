@@ -143,4 +143,3 @@ func TestHole40_OrchestratorNaNProtection(t *testing.T) {
 		t.Fatalf("Report contained NaN metrics: %+v", rep)
 	}
 }
-

@@ -1177,5 +1177,3 @@ func TestProxyToEngineClientTimeoutAndContext(t *testing.T) {
 		t.Fatal("proxyToEngine returned true on canceled request context")
 	}
 }
-
-

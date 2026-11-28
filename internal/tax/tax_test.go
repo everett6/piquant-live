@@ -249,7 +249,7 @@ func TestFIFOEdgeCases(t *testing.T) {
 	trades := []RawTrade{
 		{Timestamp: tNow, Symbol: "BTCUSDT", Side: "BUY", Price: 50000.0, Size: 0.010, FeeUSDT: 0.075},
 		{Timestamp: tNow.Add(time.Minute), Symbol: "BTCUSDT", Side: "BUY", Price: 51000.0, Size: 0.010, FeeUSDT: 0.0765},
-		{Timestamp: tNow.Add(2*time.Minute), Symbol: "BTCUSDT", Side: "SELL", Price: 52000.0, Size: 0.015, FeeUSDT: 0.117}, // Sell 0.015, spans both lots
+		{Timestamp: tNow.Add(2 * time.Minute), Symbol: "BTCUSDT", Side: "SELL", Price: 52000.0, Size: 0.015, FeeUSDT: 0.117}, // Sell 0.015, spans both lots
 	}
 	summary := calc.CalculateFromTrades(trades, tNow.Year())
 	if summary.TotalDispositions != 2 {

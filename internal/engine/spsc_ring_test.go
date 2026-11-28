@@ -116,7 +116,7 @@ func TestSPSCRingBatchPushPop(t *testing.T) {
 	// Batch push 10 items
 	input := make([]MarketEvent, 10)
 	for i := range input {
-		input[i] = MarketEvent{Sequence: uint64(i + 1), Price: float64(i + 1) * 100}
+		input[i] = MarketEvent{Sequence: uint64(i + 1), Price: float64(i+1) * 100}
 	}
 
 	written := ring.PushBatch(input)

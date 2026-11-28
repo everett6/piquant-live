@@ -36,7 +36,7 @@ func NewOptimizedHTTPClient(timeout time.Duration) *http.Client {
 			}
 			return conn, nil
 		},
-		ForceAttemptHTTP2: true,
+		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          64,
 		MaxIdleConnsPerHost:   16,
 		MaxConnsPerHost:       16,

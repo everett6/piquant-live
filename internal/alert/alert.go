@@ -85,7 +85,7 @@ type Alerter struct {
 
 	send func(addr string, a smtp.Auth, from string, to []string, msg []byte) error
 	now  func() time.Time
-	mu   sync.Mutex       // protects last map and logf serialization
+	mu   sync.Mutex // protects last map and logf serialization
 	last map[string]time.Time
 }
 

@@ -747,16 +747,16 @@ func (c *CoinbaseStreamIngestor) invalidateBooks() {
 }
 
 var (
-	cbTickerTypeKey    = []byte(`"type":"ticker"`)
-	cbErrorTypeKey     = []byte(`"type":"error"`)
-	cbProductIDKey     = []byte(`"product_id":`)
-	cbPriceKey         = []byte(`"price":`)
-	cbBestBidKey       = []byte(`"best_bid":`)
-	cbBestAskKey       = []byte(`"best_ask":`)
-	cbLastSizeKey      = []byte(`"last_size":`)
-	cbSideKey          = []byte(`"side":`)
-	cbBestBidSizeKey   = []byte(`"best_bid_size":`)
-	cbBestAskSizeKey   = []byte(`"best_ask_size":`)
+	cbTickerTypeKey  = []byte(`"type":"ticker"`)
+	cbErrorTypeKey   = []byte(`"type":"error"`)
+	cbProductIDKey   = []byte(`"product_id":`)
+	cbPriceKey       = []byte(`"price":`)
+	cbBestBidKey     = []byte(`"best_bid":`)
+	cbBestAskKey     = []byte(`"best_ask":`)
+	cbLastSizeKey    = []byte(`"last_size":`)
+	cbSideKey        = []byte(`"side":`)
+	cbBestBidSizeKey = []byte(`"best_bid_size":`)
+	cbBestAskSizeKey = []byte(`"best_ask_size":`)
 )
 
 func normalizeUniverseSymbolBytes(b []byte) string {

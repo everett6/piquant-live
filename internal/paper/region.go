@@ -85,6 +85,7 @@ func SupportedVenueProfiles() []VenueLeverageProfile {
 //   - Nano BTC = 0.01 BTC, nano ETH = 0.10 ETH per contract; up to ~10x leverage.
 //   - Fees reported "as low as 0.02%"; we simulate 2 bps maker / 6 bps taker.
 //   - Funding accrues hourly (~0.01%/hr example); charged here to the holder either side.
+//
 // With --feed-venue auto the simulator prices fills on the Coinbase spot feed as a proxy
 // for the futures book (basis and depth differ).
 const (

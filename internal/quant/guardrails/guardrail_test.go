@@ -433,5 +433,3 @@ func TestCheckFeeHurdle(t *testing.T) {
 		t.Fatalf("expected edge clearing fee hurdle to pass, got %v", err)
 	}
 }
-
-

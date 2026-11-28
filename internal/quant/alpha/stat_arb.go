@@ -7,13 +7,13 @@ import (
 
 // ADFResult holds the statistical result of an Augmented Dickey-Fuller test for stationarity.
 type ADFResult struct {
-	TStat       float64 // Augmented Dickey-Fuller t-statistic
-	PValue      float64 // Approximate asymptotic p-value (MacKinnon surface)
-	Crit1Pct    float64 // 1% critical value (e.g. -3.43)
-	Crit5Pct    float64 // 5% critical value (e.g. -2.86)
-	Crit10Pct   float64 // 10% critical value (e.g. -2.57)
+	TStat        float64 // Augmented Dickey-Fuller t-statistic
+	PValue       float64 // Approximate asymptotic p-value (MacKinnon surface)
+	Crit1Pct     float64 // 1% critical value (e.g. -3.43)
+	Crit5Pct     float64 // 5% critical value (e.g. -2.86)
+	Crit10Pct    float64 // 10% critical value (e.g. -2.57)
 	IsStationary bool    // True if TStat < Crit5Pct (reject null of unit root at 5% significance)
-	SampleCount int
+	SampleCount  int
 }
 
 // ComputeADF performs the Augmented Dickey-Fuller test on a 1D time-series slice.
@@ -127,13 +127,13 @@ func ComputeADF(series []float64, lags int) (ADFResult, error) {
 	pValue := approximateADFPValue(tStat)
 
 	return ADFResult{
-		TStat:       tStat,
-		PValue:      pValue,
-		Crit1Pct:    crit1Pct,
-		Crit5Pct:    crit5Pct,
-		Crit10Pct:   crit10Pct,
+		TStat:        tStat,
+		PValue:       pValue,
+		Crit1Pct:     crit1Pct,
+		Crit5Pct:     crit5Pct,
+		Crit10Pct:    crit10Pct,
 		IsStationary: tStat < crit5Pct, // Reject null of unit root at 5% level
-		SampleCount: rows,
+		SampleCount:  rows,
 	}, nil
 }
 

@@ -128,7 +128,7 @@ func TestHandlePaperTrendBlend(t *testing.T) {
 	var swBody struct {
 		Status string `json:"status"`
 		Schwab struct {
-			Portfolio      string `json:"portfolio"`
+			Portfolio      string  `json:"portfolio"`
 			NavUSD         float64 `json:"nav_usd"`
 			CarrySleevePct float64 `json:"carry_sleeve_pct"`
 			Allocations    []struct {

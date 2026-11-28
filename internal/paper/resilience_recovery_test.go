@@ -196,15 +196,15 @@ func TestPowerCutCheckpointAndJournalRecovery(t *testing.T) {
 
 	// 5. Append a new trade record to verify journal append does not fuse onto torn line
 	newTrade := TradeRecord{
-		Timestamp:   time.Now().UTC(),
-		Symbol:      "BTCUSDC",
-		Side:        "BUY",
-		Role:        "MAKER",
-		Price:       68000.0,
-		Size:        0.01,
-		ValueUSDT:   680.0,
-		Strategy:    "Test_Recovery",
-		DataSource:  "live",
+		Timestamp:  time.Now().UTC(),
+		Symbol:     "BTCUSDC",
+		Side:       "BUY",
+		Role:       "MAKER",
+		Price:      68000.0,
+		Size:       0.01,
+		ValueUSDT:  680.0,
+		Strategy:   "Test_Recovery",
+		DataSource: "live",
 	}
 	b, err := json.Marshal(newTrade)
 	if err != nil {

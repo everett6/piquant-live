@@ -250,4 +250,3 @@ func TestHole44_ParseFastFloatInvalidStrings(t *testing.T) {
 		}
 	}
 }
-

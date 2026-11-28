@@ -334,12 +334,12 @@ func ensureMonthlyPartitions(dataDir, symbol string, months int, forceDownload b
 
 	// Seed prices and regimes across the 24 months of 2024 to 2026
 	type MonthMeta struct {
-		Year      int
-		Month     int
-		OpenPrice float64
+		Year       int
+		Month      int
+		OpenPrice  float64
 		ClosePrice float64
-		VolDaily  float64
-		Regime    string
+		VolDaily   float64
+		Regime     string
 	}
 
 	schedule := []MonthMeta{

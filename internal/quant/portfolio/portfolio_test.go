@@ -108,4 +108,3 @@ func TestHole51_BlackLittermanConfidenceNaNProtection(t *testing.T) {
 		t.Fatalf("Hole 51 failed: Optimize2Asset produced NaN outputs: w1=%v w2=%v er1=%v er2=%v", w1, w2, er1, er2)
 	}
 }
-
